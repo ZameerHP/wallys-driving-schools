@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-red: #E3222A;
+  --color-brand-black: #0B0B0C;
+  --color-brand-offwhite: #FAFAFA;
+  
+  --font-display: "Inter Tight", sans-serif;
+  --font-body: "Inter", sans-serif;
+}
+
+@layer base {
+  html {
+    @apply text-brand-black bg-brand-offwhite font-body antialiased;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display font-bold tracking-tight;
+  }
+  
+  /* Smooth scroll is handled by Lenis, but standard box sizing is good */
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+}

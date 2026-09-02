@@ -1,0 +1,6 @@
+{
+  "name": "Wally's Driving School",
+  "description": "Premium cinematic 3D-animated website for Wally's Driving School.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
