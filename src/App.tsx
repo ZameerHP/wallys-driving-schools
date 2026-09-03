@@ -41,22 +41,25 @@ export default function App() {
   const [showPreloader, setShowPreloader] = useState(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Play video with audio unmuted if allowed, or muted autoplay
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.play().catch(() => {
-        // Autoplay policy fallback
-        if (videoRef.current) {
-          videoRef.current.muted = true;
-          videoRef.current.play().catch(() => {});
-        }
-      });
+    const video = videoRef.current;
+    if (video) {
+      video.muted = true;
+      video.defaultMuted = true;
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // Autoplay was prevented, retry muted
+          video.muted = true;
+          video.play().catch(() => {});
+        });
+      }
     }
 
-    // Safety fallback: if video stalls or doesn't exist, transition to website after 5s
+    // Safety fallback: if video doesn't end on its own within 6 seconds
     const fallbackTimer = setTimeout(() => {
       setShowPreloader(false);
-    }, 5000);
+    }, 5500);
 
     return () => clearTimeout(fallbackTimer);
   }, []);
@@ -74,12 +77,12 @@ export default function App() {
             initial={{ opacity: 1 }}
             exit={{ 
               opacity: 0,
-              scale: 1.04,
-              filter: "blur(12px)",
-              transition: { duration: 0.9, ease: [0.76, 0, 0.24, 1] } 
+              scale: 1.05,
+              filter: "blur(14px)",
+              transition: { duration: 0.8, ease: [0.76, 0, 0.24, 1] } 
             }}
             onClick={handleVideoFinish}
-            className="fixed inset-0 z-[999999] bg-[#000000] flex items-center justify-center cursor-pointer select-none overflow-hidden m-0 p-0 border-none outline-none shadow-none"
+            className="fixed inset-0 z-[999999] bg-[#000000] flex items-center justify-center cursor-pointer select-none overflow-hidden m-0 p-0"
             style={{ 
               backgroundColor: '#000000',
               border: 'none',
@@ -94,7 +97,9 @@ export default function App() {
               ref={videoRef}
               autoPlay 
               muted 
+              defaultMuted
               playsInline
+              preload="auto"
               onEnded={handleVideoFinish}
               onError={handleVideoFinish}
               className="w-full h-full object-contain"
@@ -115,12 +120,12 @@ export default function App() {
               <source src="/assets/intro.mp4" type="video/mp4" />
             </video>
 
-            {/* Subtle skip indicator */}
+            {/* Skip indicator */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 1.5, duration: 0.5 }}
-              className="absolute bottom-6 right-8 text-white/40 hover:text-white text-xs font-semibold uppercase tracking-widest px-4 py-2 rounded-full border border-white/10 hover:border-white/30 bg-black/50 backdrop-blur-sm transition-all"
+              transition={{ delay: 1.2, duration: 0.4 }}
+              className="absolute bottom-6 right-8 text-white/50 hover:text-white text-xs font-semibold uppercase tracking-widest px-4 py-2 rounded-full border border-white/10 hover:border-white/30 bg-black/60 backdrop-blur-md transition-all"
             >
               Click anywhere to Skip ✕
             </motion.div>
