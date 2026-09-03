@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useState, useEffect } from 'react';
 import { SmoothScroll } from './components/SmoothScroll';
 import { Nav } from './components/Nav';
 import { Footer } from './components/Footer';
@@ -37,13 +38,50 @@ function AnimatedRoutes() {
 }
 
 export default function App() {
+  const [showPreloader, setShowPreloader] = useState(true);
+
+  // Fallback to ensure users don't get stuck, and to transition after the iframe video finishes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowPreloader(false);
+    }, 3200); // 3.2s wait time for a faster transition
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
-    <Router>
-      <SmoothScroll>
-        <Nav />
-        <AnimatedRoutes />
-        <Footer />
-      </SmoothScroll>
-    </Router>
+    <>
+      <AnimatePresence mode="wait">
+        {showPreloader && (
+          <motion.div
+            key="preloader"
+            initial={{ opacity: 1 }}
+            exit={{ 
+              opacity: 0,
+              scale: 1.05,
+              filter: "blur(10px)",
+              transition: { duration: 1.2, ease: [0.76, 0, 0.24, 1] } 
+            }}
+            className="fixed inset-0 z-[99999] bg-white flex items-center justify-center pointer-events-auto"
+          >
+            <iframe 
+              src="https://player.vdocipher.com/v2/?otp=20160313versASE3232P2rPXLD15qyZrQKqp4kGWeDiIR8MShQ9mZJuVf5bY3CsM&playbackInfo=eyJ2aWRlb0lkIjoiOTU4NjFkOWRmOTlhNDYzODlmZWZmZjJkNzFhZWZlMDIifQ==" 
+              style={{ border: 0, height: '360px', width: '640px', maxWidth: '100%' }}
+              allowFullScreen={true} 
+              allow="encrypted-media; autoplay"
+              className="pointer-events-none mix-blend-multiply"
+            ></iframe>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <Router>
+        <SmoothScroll>
+          <Nav />
+          <AnimatedRoutes />
+          <Footer />
+        </SmoothScroll>
+      </Router>
+    </>
   );
 }
+
