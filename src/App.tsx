@@ -99,9 +99,9 @@ export default function App() {
               transition: { duration: 0.5, ease: [0.25, 1, 0.5, 1] } 
             }}
             onClick={handleVideoFinish}
-            className="fixed inset-0 z-[999999] bg-[#000000] flex items-center justify-center cursor-pointer select-none overflow-hidden m-0 p-0"
+            className="fixed inset-0 z-[999999] bg-[#FFFFFF] flex items-center justify-center cursor-pointer select-none overflow-hidden m-0 p-0"
             style={{ 
-              backgroundColor: '#000000',
+              backgroundColor: '#FFFFFF',
               border: 'none',
               boxShadow: 'none',
               outline: 'none',
@@ -126,7 +126,7 @@ export default function App() {
                 border: 'none',
                 outline: 'none',
                 boxShadow: 'none',
-                backgroundColor: '#000000',
+                backgroundColor: '#FFFFFF',
                 display: 'block',
                 margin: 'auto',
                 width: '100vw',
@@ -142,7 +142,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.8, duration: 0.3 }}
-              className="absolute bottom-6 right-8 text-white/50 hover:text-white text-xs font-semibold uppercase tracking-widest px-4 py-2 rounded-full border border-white/10 hover:border-white/30 bg-black/60 backdrop-blur-md transition-all"
+              className="absolute bottom-6 right-8 text-black/50 hover:text-black text-xs font-semibold uppercase tracking-widest px-4 py-2 rounded-full border border-black/10 hover:border-black/30 bg-white/80 backdrop-blur-md transition-all shadow-sm"
             >
               Skip ✕
             </motion.div>
