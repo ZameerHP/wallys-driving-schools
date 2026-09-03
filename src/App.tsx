@@ -40,11 +40,11 @@ function AnimatedRoutes() {
 export default function App() {
   const [showPreloader, setShowPreloader] = useState(true);
 
-  // Fallback to ensure users don't get stuck, and to transition after the iframe video finishes
+  // Fallback to ensure users don't get stuck if the video fails to load
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowPreloader(false);
-    }, 3200); // 3.2s wait time for a faster transition
+    }, 4000); // Fallback wait time
     return () => clearTimeout(timer);
   }, []);
 
@@ -63,13 +63,15 @@ export default function App() {
             }}
             className="fixed inset-0 z-[99999] bg-white flex items-center justify-center pointer-events-auto"
           >
-            <iframe 
-              src="https://player.vdocipher.com/v2/?otp=20160313versASE3232P2rPXLD15qyZrQKqp4kGWeDiIR8MShQ9mZJuVf5bY3CsM&playbackInfo=eyJ2aWRlb0lkIjoiOTU4NjFkOWRmOTlhNDYzODlmZWZmZjJkNzFhZWZlMDIifQ==" 
-              style={{ border: 0, height: '360px', width: '640px', maxWidth: '100%' }}
-              allowFullScreen={true} 
-              allow="encrypted-media; autoplay"
-              className="pointer-events-none mix-blend-multiply"
-            ></iframe>
+            <motion.video 
+              autoPlay 
+              muted 
+              playsInline
+              onEnded={() => setShowPreloader(false)}
+              onError={() => setShowPreloader(false)}
+              className="w-full max-w-[600px] object-contain p-8 outline-none border-none pointer-events-none mix-blend-multiply"
+              src="/assets/aistudio/intro.mp4"
+            />
           </motion.div>
         )}
       </AnimatePresence>
