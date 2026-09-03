@@ -106,14 +106,95 @@ export const PACKAGES = [
   }
 ];
 
-export const TESTIMONIALS = [
+export interface TestimonialItem {
+  id: number;
+  quote: string;
+  author: string;
+  title: string;
+  rating: number;
+  dpType: 'badge' | 'initial';
+  dpText: string;
+  dpBg: string;
+  dpColor: string;
+}
+
+export const TESTIMONIALS: TestimonialItem[] = [
   {
     id: 1,
-    quote: "Had a great experience with Wally's Driving School! My instructor was calm and explained everything clearly. They were flexible with scheduling and really helped build my confidence behind the wheel. Highly recommend if you are looking for a supportive and professional driving instructor.",
     author: 'Ishan Wickremasinghe',
     title: 'Driving Student',
     rating: 5,
-    avatar: 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&q=80&w=150&h=150'
+    quote: "Had a great experience with Wally's Driving School! My instructor was patient, calm and explained everything clearly. They were flexible with scheduling and really helped build my confidence behind the wheel. Highly recommend if you are looking for a supportive and professional driving instructor",
+    dpType: 'badge',
+    dpText: 'ASPHALT',
+    dpBg: 'bg-zinc-950 border border-amber-500/40',
+    dpColor: 'text-amber-400'
+  },
+  {
+    id: 2,
+    author: 'Micheal Pablo',
+    title: 'Driving Student',
+    rating: 5,
+    quote: "I had an excellent experience learning to drive with Wally. He is a great teacher—very professional, clear with instructions, and patient. From the very first lesson, he made me feel comfortable and confident behind the wheel. His calm approach and clear explanations helped me quickly understand both the basics and more advanced driving techniques. I highly recommend him to anyone looking for a supportive and skilled driving instructor. Thank you.",
+    dpType: 'initial',
+    dpText: 'M',
+    dpBg: 'bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.4)]',
+    dpColor: 'text-white'
+  },
+  {
+    id: 3,
+    author: 'Timaima Koro',
+    title: 'Driving Student',
+    rating: 5,
+    quote: "Amazing instructor! Patient, clear and made learning to drive very easy. Thanks to hes guidance I passed first attempt.",
+    dpType: 'initial',
+    dpText: 'T',
+    dpBg: 'bg-emerald-600 shadow-[0_0_20px_rgba(5,150,105,0.4)]',
+    dpColor: 'text-white'
+  },
+  {
+    id: 4,
+    author: 'Jia',
+    title: 'Driving Student',
+    rating: 5,
+    quote: "Wally is a fantastic supportive. His c... stress-free. Tha... confidence! Highe... 10/10!!",
+    dpType: 'initial',
+    dpText: 'J',
+    dpBg: 'bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.4)]',
+    dpColor: 'text-white'
+  },
+  {
+    id: 5,
+    author: 'Lalit Sharma',
+    title: 'Driving Student',
+    rating: 5,
+    quote: "Was facing problem in parallel parking but the trick which instructor gave me, worked and I passed my test in a one go.",
+    dpType: 'initial',
+    dpText: 'L',
+    dpBg: 'bg-gradient-to-tr from-purple-600 to-pink-500 shadow-[0_0_20px_rgba(168,85,247,0.4)]',
+    dpColor: 'text-white'
+  },
+  {
+    id: 6,
+    author: 'Phat Nguyen',
+    title: 'Driving Student',
+    rating: 5,
+    quote: "Best teacher of the area. I was failed multiple time til I met him. +100 respect",
+    dpType: 'initial',
+    dpText: 'P',
+    dpBg: 'bg-purple-700 shadow-[0_0_20px_rgba(126,34,206,0.4)]',
+    dpColor: 'text-white'
+  },
+  {
+    id: 7,
+    author: 'Shahid Durrani',
+    title: 'Driving Student',
+    rating: 5,
+    quote: "I passed my driving test on the first attempt thanks to their comprehensive lessons and supportive instructors. I highly recommend Wallys Driving School if you're looking to pass your test with confidence. Just make sure to practice as much as you can between lessons!",
+    dpType: 'initial',
+    dpText: 'S',
+    dpBg: 'bg-sky-600 shadow-[0_0_20px_rgba(2,132,199,0.4)]',
+    dpColor: 'text-white'
   }
 ];
 

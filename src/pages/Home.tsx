@@ -1,7 +1,7 @@
-import { motion, useScroll, useTransform, useReducedMotion, useInView } from 'framer-motion';
+import { motion, useScroll, useTransform, useReducedMotion, useInView, AnimatePresence } from 'framer-motion';
 import { useRef, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Star, ArrowRight, ChevronDown, Users, Award, Clock, Shield } from 'lucide-react';
+import { CheckCircle2, Star, ArrowRight, ArrowLeft, ChevronDown, Users, Award, Clock, Shield, Quote } from 'lucide-react';
 import { PACKAGES, TESTIMONIALS, BLOG_POSTS } from '../lib/content';
 import { TiltCard } from '../components/TiltCard';
 import gsap from 'gsap';
@@ -86,6 +86,37 @@ export function Home() {
     { icon: Clock, value: 10, suffix: '+', label: 'Years Experience' },
     { icon: Shield, value: 100, suffix: '%', label: 'Safety Record' },
   ];
+
+  // Testimonials Carousel State
+  const [testimonialIndex, setTestimonialIndex] = useState(0);
+  const [testimonialDirection, setTestimonialDirection] = useState(0);
+  const [isTestimonialPaused, setIsTestimonialPaused] = useState(false);
+
+  const nextTestimonial = () => {
+    setTestimonialDirection(1);
+    setTestimonialIndex((prev) => (prev + 1) % TESTIMONIALS.length);
+  };
+
+  const prevTestimonial = () => {
+    setTestimonialDirection(-1);
+    setTestimonialIndex((prev) => (prev - 1 + TESTIMONIALS.length) % TESTIMONIALS.length);
+  };
+
+  const goToTestimonial = (idx: number) => {
+    setTestimonialDirection(idx > testimonialIndex ? 1 : -1);
+    setTestimonialIndex(idx);
+  };
+
+  useEffect(() => {
+    if (isTestimonialPaused) return;
+    const interval = setInterval(() => {
+      setTestimonialDirection(1);
+      setTestimonialIndex((prev) => (prev + 1) % TESTIMONIALS.length);
+    }, 6500);
+    return () => clearInterval(interval);
+  }, [isTestimonialPaused]);
+
+  const currentTestimonial = TESTIMONIALS[testimonialIndex] || TESTIMONIALS[0];
 
   // Stagger container
   const staggerContainer = {
@@ -488,40 +519,168 @@ export function Home() {
         </div>
       </section>
 
-      {/* TESTIMONIALS */}
+      {/* TESTIMONIALS SECTION - 7 VERIFIED STUDENT REVIEWS CAROUSEL */}
       <section className="py-28 bg-brand-offwhite overflow-hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row gap-12 items-center">
-            <div className="w-full md:w-1/3">
-              <span className="text-brand-red font-bold uppercase tracking-wider mb-3 block">Testimonials</span>
-              <h2 className="text-4xl md:text-5xl font-display font-bold mb-6">What They Say About Us</h2>
+          <div className="flex flex-col lg:flex-row gap-14 items-center">
+            {/* Left Column: Heading, Subtitle & Interactive Navigation */}
+            <div className="w-full lg:w-1/3 flex flex-col items-start">
+              <span className="text-brand-red font-bold uppercase tracking-wider mb-3 block text-xs">
+                Verified Student Reviews
+              </span>
+              <h2 className="text-4xl md:text-5xl font-display font-bold mb-6 tracking-tight text-brand-black">
+                What Our Student are Saying?
+              </h2>
               <p className="text-brand-black/60 mb-8 text-base leading-relaxed">
                 Read genuine reviews from our students who passed their driving tests on their first attempt with our instruction.
               </p>
+
+              {/* Counter & Arrow Controls */}
+              <div className="flex items-center gap-6 mb-8">
+                <div className="flex items-center gap-1.5 font-display text-sm font-bold text-brand-black/60">
+                  <span className="text-3xl font-bold text-brand-black font-display">0{testimonialIndex + 1}</span>
+                  <span className="text-brand-black/30">/</span>
+                  <span className="text-sm font-bold text-brand-black/40">0{TESTIMONIALS.length}</span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div data-magnetic>
+                    <button
+                      onClick={prevTestimonial}
+                      data-cursor-text="PREV"
+                      aria-label="Previous testimonial"
+                      className="w-12 h-12 rounded-full border border-black/15 bg-white flex items-center justify-center hover:border-brand-red hover:text-brand-red hover:shadow-lg transition-all duration-300 active:scale-90 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div data-magnetic>
+                    <button
+                      onClick={nextTestimonial}
+                      data-cursor-text="NEXT"
+                      aria-label="Next testimonial"
+                      className="w-12 h-12 rounded-full bg-brand-black text-white flex items-center justify-center hover:bg-brand-red hover:shadow-[0_0_25px_rgba(227,34,42,0.4)] transition-all duration-300 active:scale-90 cursor-pointer"
+                    >
+                      <ArrowRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pagination Dots */}
+              <div className="flex items-center gap-2">
+                {TESTIMONIALS.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => goToTestimonial(i)}
+                    aria-label={`Go to slide ${i + 1}`}
+                    className={`h-2.5 rounded-full transition-all duration-300 cursor-pointer ${
+                      testimonialIndex === i
+                        ? 'w-8 bg-brand-red shadow-[0_0_10px_rgba(227,34,42,0.5)]'
+                        : 'w-2.5 bg-black/15 hover:bg-black/35'
+                    }`}
+                  />
+                ))}
+              </div>
             </div>
 
-            <div className="w-full md:w-2/3">
-              <TiltCard maxTilt={6} className="bg-white rounded-[40px] p-10 md:p-12 shadow-xl border border-black/5 relative">
-                <div className="flex gap-1 mb-8">
-                  {[...Array(5)].map((_, i) => (
-                    <Star key={i} className="w-6 h-6 text-[#FFB800] fill-[#FFB800]" />
-                  ))}
-                </div>
-                
-                <p className="text-xl md:text-2xl font-medium text-brand-black/85 leading-relaxed mb-10">
-                  "{TESTIMONIALS[0]?.quote || 'An excellent driving school. Wally was so patient and helped me pass first go!'}"
-                </p>
-                
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-full overflow-hidden bg-brand-offwhite ring-4 ring-brand-red/15">
-                    <img src={TESTIMONIALS[0]?.avatar} alt={TESTIMONIALS[0]?.author} className="w-full h-full object-cover" />
-                  </div>
-                  <div>
-                    <div className="font-bold text-lg">{TESTIMONIALS[0]?.author}</div>
-                    <div className="text-brand-red font-medium text-sm">{TESTIMONIALS[0]?.title}</div>
-                  </div>
-                </div>
-              </TiltCard>
+            {/* Right Column: Active Testimonial Card with 3D Tilt & Smooth Transition */}
+            <div 
+              className="w-full lg:w-2/3"
+              onMouseEnter={() => setIsTestimonialPaused(true)}
+              onMouseLeave={() => setIsTestimonialPaused(false)}
+            >
+              <div className="min-h-[420px] flex items-center">
+                <AnimatePresence mode="wait" custom={testimonialDirection}>
+                  <motion.div
+                    key={currentTestimonial.id}
+                    custom={testimonialDirection}
+                    variants={{
+                      enter: (dir: number) => ({
+                        x: dir > 0 ? 50 : -50,
+                        opacity: 0,
+                        scale: 0.98,
+                      }),
+                      center: {
+                        x: 0,
+                        opacity: 1,
+                        scale: 1,
+                        transition: {
+                          x: { type: "spring", stiffness: 320, damping: 28 },
+                          opacity: { duration: 0.3 },
+                        },
+                      },
+                      exit: (dir: number) => ({
+                        x: dir > 0 ? -50 : 50,
+                        opacity: 0,
+                        scale: 0.98,
+                        transition: {
+                          x: { type: "spring", stiffness: 320, damping: 28 },
+                          opacity: { duration: 0.25 },
+                        },
+                      }),
+                    }}
+                    initial="enter"
+                    animate="center"
+                    exit="exit"
+                    className="w-full"
+                  >
+                    <TiltCard maxTilt={5} className="bg-white rounded-[40px] p-8 sm:p-12 shadow-xl border border-black/5 relative overflow-hidden">
+                      {/* Decorative watermark quote mark */}
+                      <div className="absolute top-8 right-8 opacity-[0.06] select-none pointer-events-none">
+                        <Quote className="w-24 h-24 text-brand-black" />
+                      </div>
+
+                      {/* Header with 5 stars & verified badge */}
+                      <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+                        <div className="flex items-center gap-1.5">
+                          {[...Array(5)].map((_, i) => (
+                            <Star key={i} className="w-5 h-5 text-[#FFB800] fill-[#FFB800]" />
+                          ))}
+                          <span className="ml-2 text-xs font-bold text-brand-black/70 bg-black/5 px-2.5 py-1 rounded-full">
+                            5.0 Star Rating
+                          </span>
+                        </div>
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-green-700 bg-green-50 border border-green-200/60 px-3 py-1 rounded-full">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
+                          Verified Student Pass
+                        </span>
+                      </div>
+
+                      {/* Verbatim Student Quote */}
+                      <p className="text-lg sm:text-xl md:text-2xl font-medium text-brand-black/85 leading-relaxed mb-10 min-h-[120px] flex items-center">
+                        "{currentTestimonial.quote}"
+                      </p>
+
+                      {/* Author Info & Styled DP Badge */}
+                      <div className="flex items-center gap-4 pt-6 border-t border-black/5">
+                        {currentTestimonial.dpType === 'badge' ? (
+                          <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex flex-col items-center justify-center font-black ${currentTestimonial.dpBg} ${currentTestimonial.dpColor} shadow-md shrink-0`}>
+                            <span className="text-[11px] sm:text-xs tracking-wider uppercase font-black">{currentTestimonial.dpText}</span>
+                            <span className="text-[7px] tracking-widest text-zinc-400 uppercase font-semibold">STUDENT</span>
+                          </div>
+                        ) : (
+                          <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center font-bold text-2xl ${currentTestimonial.dpBg} ${currentTestimonial.dpColor} shadow-md shrink-0`}>
+                            {currentTestimonial.dpText}
+                          </div>
+                        )}
+
+                        <div>
+                          <h4 className="font-display font-bold text-lg sm:text-xl text-brand-black">
+                            {currentTestimonial.author}
+                          </h4>
+                          <div className="flex items-center gap-2 text-sm text-brand-red font-semibold">
+                            <span>{currentTestimonial.title}</span>
+                            <span className="w-1 h-1 rounded-full bg-brand-red/40" />
+                            <span className="text-xs text-brand-black/50 font-normal">NSW Road Test</span>
+                          </div>
+                        </div>
+                      </div>
+                    </TiltCard>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
             </div>
           </div>
         </div>
