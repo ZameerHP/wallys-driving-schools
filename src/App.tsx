@@ -5,6 +5,8 @@ import { SmoothScroll } from './components/SmoothScroll';
 import { Nav } from './components/Nav';
 import { Footer } from './components/Footer';
 import { PageTransition } from './components/PageTransition';
+import { CustomCursor } from './components/CustomCursor';
+import { NoiseOverlay } from './components/NoiseOverlay';
 import { Home } from './pages/Home';
 import { Packages } from './pages/Packages';
 import { Services } from './pages/Services';
@@ -49,14 +51,13 @@ export default function App() {
       const playPromise = video.play();
       if (playPromise !== undefined) {
         playPromise.catch(() => {
-          // Autoplay was prevented, retry muted
           video.muted = true;
           video.play().catch(() => {});
         });
       }
     }
 
-    // Safety fallback: if video doesn't end on its own within 6 seconds
+    // Safety fallback: if video doesn't end on its own within 5.5s
     const fallbackTimer = setTimeout(() => {
       setShowPreloader(false);
     }, 5500);
@@ -70,6 +71,13 @@ export default function App() {
 
   return (
     <>
+      {/* Luxury Film Grain Overlay */}
+      <NoiseOverlay />
+
+      {/* Lag-Free Magnetic Custom Cursor */}
+      <CustomCursor />
+
+      {/* Immersive Fullscreen Video Intro */}
       <AnimatePresence mode="wait">
         {showPreloader && (
           <motion.div
@@ -79,7 +87,7 @@ export default function App() {
               opacity: 0,
               scale: 1.05,
               filter: "blur(14px)",
-              transition: { duration: 0.8, ease: [0.76, 0, 0.24, 1] } 
+              transition: { duration: 0.9, ease: [0.76, 0, 0.24, 1] } 
             }}
             onClick={handleVideoFinish}
             className="fixed inset-0 z-[999999] bg-[#000000] flex items-center justify-center cursor-pointer select-none overflow-hidden m-0 p-0"
@@ -92,7 +100,6 @@ export default function App() {
               padding: 0
             }}
           >
-            {/* Pure black backdrop with video — NO border, NO shadow, NO other color */}
             <video 
               ref={videoRef}
               autoPlay 

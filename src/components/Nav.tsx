@@ -188,24 +188,30 @@ export function Nav() {
 
             {/* Desktop Actions */}
             <div className="hidden xl:flex items-center gap-3.5 ml-4 pl-4 border-l border-white/20">
-              <motion.a 
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-                href="tel:0406693301" 
-                className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-5 py-2.5 rounded-full text-sm font-bold border border-white/15 backdrop-blur-md hover:border-white/30 transition-all duration-300"
-              >
-                <Phone className="w-4 h-4 text-brand-red" />
-                <span className="whitespace-nowrap tracking-wide">0406 693 301</span>
-              </motion.a>
-              
-              <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                <Link 
-                  to="/book-now" 
-                  className="inline-block bg-brand-red text-white px-6 py-2.5 rounded-full text-sm font-bold shadow-[0_0_20px_rgba(227,34,42,0.4)] hover:shadow-[0_0_35px_rgba(227,34,42,0.7)] hover:bg-white hover:text-brand-black transition-all duration-300 whitespace-nowrap"
+              <div data-magnetic>
+                <motion.a 
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
+                  href="tel:0406693301" 
+                  data-cursor-text="CALL"
+                  className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-5 py-2.5 rounded-full text-sm font-bold border border-white/15 backdrop-blur-md hover:border-white/30 transition-all duration-300"
                 >
-                  Book Now
-                </Link>
-              </motion.div>
+                  <Phone className="w-4 h-4 text-brand-red" />
+                  <span className="whitespace-nowrap tracking-wide">0406 693 301</span>
+                </motion.a>
+              </div>
+              
+              <div data-magnetic>
+                <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                  <Link 
+                    to="/book-now" 
+                    data-cursor-text="BOOK"
+                    className="inline-block bg-brand-red text-white px-6 py-2.5 rounded-full text-sm font-bold shadow-[0_0_20px_rgba(227,34,42,0.4)] hover:shadow-[0_0_35px_rgba(227,34,42,0.7)] hover:bg-white hover:text-brand-black transition-all duration-300 whitespace-nowrap"
+                  >
+                    Book Now
+                  </Link>
+                </motion.div>
+              </div>
             </div>
 
             {/* Mobile Menu Toggle */}

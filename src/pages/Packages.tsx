@@ -1,9 +1,10 @@
 import { motion } from 'framer-motion';
 import { PACKAGES } from '../lib/content';
-import { ArrowRight, Check, Sparkles, Star } from 'lucide-react';
+import { ArrowRight, Check, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { cn } from '../lib/utils';
+import { TiltCard } from '../components/TiltCard';
 
 export function Packages() {
   const [filter, setFilter] = useState('All');
@@ -59,12 +60,9 @@ export function Packages() {
           {filteredPackages.map((pkg, i) => {
             const isPopular = pkg.id === '10-hours-pack-1';
             return (
-              <motion.div
+              <TiltCard
                 key={pkg.id}
-                initial={{ opacity: 0, y: 30 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.08, type: "spring", stiffness: 200, damping: 20 }}
-                whileHover={{ y: -8 }}
+                maxTilt={7}
                 className={cn(
                   "rounded-[36px] p-8 md:p-10 border transition-all duration-500 group flex flex-col h-full relative overflow-hidden",
                   isPopular 
@@ -111,19 +109,22 @@ export function Packages() {
                   </div>
                 </div>
                 
-                <Link 
-                  to="/book-now" 
-                  className={cn(
-                    "w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-300 shadow-md",
-                    isPopular 
-                      ? "bg-brand-red text-white hover:bg-white hover:text-brand-black shadow-[0_0_20px_rgba(227,34,42,0.4)]" 
-                      : "bg-brand-black text-white hover:bg-brand-red hover:text-white"
-                  )}
-                >
-                  <span>Book This Package</span>
-                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                </Link>
-              </motion.div>
+                <div data-magnetic>
+                  <Link 
+                    to="/book-now" 
+                    data-cursor-text="BOOK"
+                    className={cn(
+                      "w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-300 shadow-md",
+                      isPopular 
+                        ? "bg-brand-red text-white hover:bg-white hover:text-brand-black shadow-[0_0_20px_rgba(227,34,42,0.4)]" 
+                        : "bg-brand-black text-white hover:bg-brand-red hover:text-white"
+                    )}
+                  >
+                    <span>Book This Package</span>
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform" />
+                  </Link>
+                </div>
+              </TiltCard>
             );
           })}
         </div>
