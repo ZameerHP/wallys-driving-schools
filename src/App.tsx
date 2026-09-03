@@ -1,6 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { SmoothScroll } from './components/SmoothScroll';
 import { Nav } from './components/Nav';
 import { Footer } from './components/Footer';
@@ -39,39 +39,91 @@ function AnimatedRoutes() {
 
 export default function App() {
   const [showPreloader, setShowPreloader] = useState(true);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Fallback to ensure users don't get stuck if the video fails to load
+  // Play video with audio unmuted if allowed, or muted autoplay
   useEffect(() => {
-    const timer = setTimeout(() => {
+    if (videoRef.current) {
+      videoRef.current.play().catch(() => {
+        // Autoplay policy fallback
+        if (videoRef.current) {
+          videoRef.current.muted = true;
+          videoRef.current.play().catch(() => {});
+        }
+      });
+    }
+
+    // Safety fallback: if video stalls or doesn't exist, transition to website after 5s
+    const fallbackTimer = setTimeout(() => {
       setShowPreloader(false);
-    }, 4000); // Fallback wait time
-    return () => clearTimeout(timer);
+    }, 5000);
+
+    return () => clearTimeout(fallbackTimer);
   }, []);
+
+  const handleVideoFinish = () => {
+    setShowPreloader(false);
+  };
 
   return (
     <>
       <AnimatePresence mode="wait">
         {showPreloader && (
           <motion.div
-            key="preloader"
+            key="intro-video-preloader"
             initial={{ opacity: 1 }}
             exit={{ 
               opacity: 0,
-              scale: 1.05,
-              filter: "blur(10px)",
-              transition: { duration: 1.2, ease: [0.76, 0, 0.24, 1] } 
+              scale: 1.04,
+              filter: "blur(12px)",
+              transition: { duration: 0.9, ease: [0.76, 0, 0.24, 1] } 
             }}
-            className="fixed inset-0 z-[99999] bg-white flex items-center justify-center pointer-events-auto"
+            onClick={handleVideoFinish}
+            className="fixed inset-0 z-[999999] bg-[#000000] flex items-center justify-center cursor-pointer select-none overflow-hidden m-0 p-0 border-none outline-none shadow-none"
+            style={{ 
+              backgroundColor: '#000000',
+              border: 'none',
+              boxShadow: 'none',
+              outline: 'none',
+              margin: 0,
+              padding: 0
+            }}
           >
-            <motion.video 
+            {/* Pure black backdrop with video — NO border, NO shadow, NO other color */}
+            <video 
+              ref={videoRef}
               autoPlay 
               muted 
               playsInline
-              onEnded={() => setShowPreloader(false)}
-              onError={() => setShowPreloader(false)}
-              className="w-full max-w-[600px] object-contain p-8 outline-none border-none pointer-events-none mix-blend-multiply"
-              src="/assets/aistudio/intro.mp4"
-            />
+              onEnded={handleVideoFinish}
+              onError={handleVideoFinish}
+              className="w-full h-full object-contain"
+              style={{ 
+                border: 'none',
+                outline: 'none',
+                boxShadow: 'none',
+                backgroundColor: '#000000',
+                display: 'block',
+                margin: 'auto',
+                width: '100vw',
+                height: '100vh',
+                objectFit: 'contain'
+              }}
+            >
+              <source src="/assets/aistudio/intro.mp4" type="video/mp4" />
+              <source src="/intro.mp4" type="video/mp4" />
+              <source src="/assets/intro.mp4" type="video/mp4" />
+            </video>
+
+            {/* Subtle skip indicator */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 1.5, duration: 0.5 }}
+              className="absolute bottom-6 right-8 text-white/40 hover:text-white text-xs font-semibold uppercase tracking-widest px-4 py-2 rounded-full border border-white/10 hover:border-white/30 bg-black/50 backdrop-blur-sm transition-all"
+            >
+              Click anywhere to Skip ✕
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -86,4 +138,3 @@ export default function App() {
     </>
   );
 }
-

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
-import { Phone, Menu, X, ChevronDown, User } from 'lucide-react';
+import { Phone, Menu, X, ChevronDown, User, ShieldCheck } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const MAIN_LINKS = [
@@ -15,8 +15,8 @@ const MAIN_LINKS = [
 ];
 
 const LOGIN_LINKS = [
-  { name: 'Manage Booking', path: '/manage-booking' },
-  { name: 'Instructor Login', path: '/instructor-login' },
+  { name: 'Manage Booking', path: '/manage-booking', desc: 'View and reschedule lessons' },
+  { name: 'Instructor Login', path: '/instructor-login', desc: 'Instructor schedule & portal' },
 ];
 
 export function Nav() {
@@ -39,6 +39,7 @@ export function Nav() {
   // Close mobile menu on route change
   useEffect(() => {
     setMobileOpen(false);
+    setLoginDropdownOpen(false);
   }, [location.pathname]);
 
   // Lock body scroll when mobile menu is open
@@ -71,24 +72,33 @@ export function Nav() {
         transition={{ delay: shouldReduceMotion ? 0 : 0.15, type: "spring", stiffness: 200, damping: 20 }}
         className={cn(
           'fixed top-0 left-0 right-0 z-50 transition-all duration-500',
-          scrolled ? 'bg-brand-black/90 backdrop-blur-xl shadow-2xl py-3 border-b border-white/10' : 'bg-transparent py-6'
+          scrolled 
+            ? 'bg-brand-black/90 backdrop-blur-2xl shadow-[0_10px_30px_rgba(0,0,0,0.8)] py-3.5 border-b border-white/10' 
+            : 'bg-gradient-to-b from-black/80 via-black/30 to-transparent py-6'
         )}
       >
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 xl:px-8">
           <div className="flex items-center justify-between">
             {/* Logo */}
-            <Link to="/" className="relative z-50 flex items-center gap-3 group">
-              <div className="w-12 h-12 bg-brand-red text-white flex items-center justify-center font-bold text-2xl rounded-2xl shadow-[0_0_15px_rgba(227,34,42,0.5)] group-hover:shadow-[0_0_25px_rgba(227,34,42,0.8)] transition-all duration-300">
-                W
+            <Link to="/" className="relative z-50 flex items-center gap-3.5 group">
+              <div className="relative">
+                <div className="w-12 h-12 bg-brand-red text-white flex items-center justify-center font-bold text-2xl rounded-2xl shadow-[0_0_20px_rgba(227,34,42,0.6)] group-hover:shadow-[0_0_35px_rgba(227,34,42,0.9)] transition-all duration-300 group-hover:scale-105">
+                  W
+                </div>
+                <div className="absolute -inset-1 bg-brand-red/30 rounded-2xl blur-md opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
               </div>
               <div className="flex flex-col">
-                <span className="text-xl font-display font-bold text-white leading-none tracking-tight">Wally's</span>
-                <span className="text-xs font-bold text-brand-red uppercase tracking-widest">Driving School</span>
+                <span className="text-xl font-display font-bold text-white leading-none tracking-tight group-hover:text-white transition-colors">
+                  Wally's
+                </span>
+                <span className="text-[11px] font-bold text-brand-red uppercase tracking-widest mt-0.5">
+                  Driving School
+                </span>
               </div>
             </Link>
 
             {/* Desktop Navigation */}
-            <nav className="hidden xl:flex items-center gap-1" onMouseLeave={() => setHoveredPath(null)}>
+            <nav className="hidden xl:flex items-center gap-1.5" onMouseLeave={() => setHoveredPath(null)}>
               {MAIN_LINKS.map((link) => {
                 const isActive = location.pathname === link.path;
                 const isHovered = hoveredPath === link.path;
@@ -99,15 +109,15 @@ export function Nav() {
                     to={link.path}
                     onMouseEnter={() => setHoveredPath(link.path)}
                     className={cn(
-                      "relative px-4 py-2 text-[13px] font-bold uppercase tracking-wider transition-colors duration-300 whitespace-nowrap",
-                      isActive || isHovered ? "text-brand-black" : "text-white/90 hover:text-white"
+                      "relative px-4 py-2 text-[13px] font-bold uppercase tracking-wider transition-colors duration-300 whitespace-nowrap rounded-full",
+                      isActive || isHovered ? "text-brand-black" : "text-white/85 hover:text-white"
                     )}
                   >
                     {/* Pill Background */}
                     {isHovered && (
                       <motion.div
                         layoutId="nav-pill"
-                        className="absolute inset-0 bg-white rounded-full z-[-1]"
+                        className="absolute inset-0 bg-white rounded-full z-[-1] shadow-lg shadow-white/10"
                         transition={{ type: "spring", stiffness: 400, damping: 30 }}
                       />
                     )}
@@ -115,7 +125,7 @@ export function Nav() {
                     {isActive && !isHovered && (
                       <motion.div
                         layoutId="nav-active"
-                        className="absolute bottom-1 left-4 right-4 h-[2px] bg-brand-red rounded-full"
+                        className="absolute bottom-1 left-4 right-4 h-[2px] bg-brand-red rounded-full shadow-[0_0_8px_rgba(227,34,42,0.8)]"
                       />
                     )}
                     <span className="relative z-10">{link.name}</span>
@@ -129,28 +139,45 @@ export function Nav() {
                 onMouseEnter={() => setLoginDropdownOpen(true)}
                 onMouseLeave={() => setLoginDropdownOpen(false)}
               >
-                <button className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-bold uppercase tracking-wider text-white/90 hover:text-white transition-colors">
-                  <User className="w-4 h-4" />
-                  Login
-                  <ChevronDown className={cn("w-3 h-3 transition-transform duration-300", loginDropdownOpen && "rotate-180")} />
+                <button 
+                  onClick={() => setLoginDropdownOpen(!loginDropdownOpen)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-4 py-2 text-[13px] font-bold uppercase tracking-wider rounded-full transition-all duration-300 border border-transparent",
+                    loginDropdownOpen 
+                      ? "bg-white/15 text-white border-white/20" 
+                      : "text-white/85 hover:text-white hover:bg-white/10"
+                  )}
+                >
+                  <User className="w-4 h-4 text-brand-red" />
+                  <span>Portal</span>
+                  <ChevronDown className={cn("w-3.5 h-3.5 transition-transform duration-300", loginDropdownOpen && "rotate-180")} />
                 </button>
                 
                 <AnimatePresence>
                   {loginDropdownOpen && (
                     <motion.div 
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      initial={{ opacity: 0, y: 8, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      transition={{ duration: 0.2 }}
-                      className="absolute top-full right-0 mt-2 w-48 bg-white rounded-2xl shadow-xl overflow-hidden border border-black/5"
+                      exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      className="absolute top-full right-0 mt-2 w-64 bg-[#111114]/95 backdrop-blur-2xl rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] overflow-hidden border border-white/15 p-2 z-50"
                     >
+                      <div className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white/40">
+                        Select Access Portal
+                      </div>
                       {LOGIN_LINKS.map(link => (
                         <Link 
                           key={link.path} 
                           to={link.path}
-                          className="block px-4 py-3 text-sm font-semibold text-brand-black hover:bg-brand-offwhite hover:text-brand-red transition-colors"
+                          className="flex flex-col px-3 py-2.5 rounded-xl hover:bg-white/10 transition-all duration-200 group"
                         >
-                          {link.name}
+                          <span className="text-sm font-bold text-white group-hover:text-brand-red transition-colors flex items-center justify-between">
+                            {link.name}
+                            <ShieldCheck className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-brand-red transition-opacity" />
+                          </span>
+                          <span className="text-[11px] text-white/50 group-hover:text-white/70 transition-colors">
+                            {link.desc}
+                          </span>
                         </Link>
                       ))}
                     </motion.div>
@@ -160,19 +187,22 @@ export function Nav() {
             </nav>
 
             {/* Desktop Actions */}
-            <div className="hidden xl:flex items-center gap-4 ml-4 pl-4 border-l border-white/20">
+            <div className="hidden xl:flex items-center gap-3.5 ml-4 pl-4 border-l border-white/20">
               <motion.a 
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.96 }}
                 href="tel:0406693301" 
-                className="flex items-center gap-2 bg-brand-red text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-[0_0_15px_rgba(227,34,42,0.4)] hover:shadow-[0_0_25px_rgba(227,34,42,0.6)] hover:bg-white hover:text-brand-black transition-all"
+                className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-5 py-2.5 rounded-full text-sm font-bold border border-white/15 backdrop-blur-md hover:border-white/30 transition-all duration-300"
               >
-                <Phone className="w-4 h-4" />
-                <span className="whitespace-nowrap">0406 693 301</span>
+                <Phone className="w-4 h-4 text-brand-red" />
+                <span className="whitespace-nowrap tracking-wide">0406 693 301</span>
               </motion.a>
               
               <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                <Link to="/book-now" className="bg-white text-brand-black px-6 py-2.5 rounded-full text-sm font-bold shadow-lg hover:bg-brand-red hover:text-white transition-all whitespace-nowrap">
+                <Link 
+                  to="/book-now" 
+                  className="inline-block bg-brand-red text-white px-6 py-2.5 rounded-full text-sm font-bold shadow-[0_0_20px_rgba(227,34,42,0.4)] hover:shadow-[0_0_35px_rgba(227,34,42,0.7)] hover:bg-white hover:text-brand-black transition-all duration-300 whitespace-nowrap"
+                >
                   Book Now
                 </Link>
               </motion.div>
@@ -180,7 +210,7 @@ export function Nav() {
 
             {/* Mobile Menu Toggle */}
             <button
-              className="xl:hidden relative z-50 p-2 text-white hover:bg-white/10 rounded-full transition-colors"
+              className="xl:hidden relative z-50 p-2.5 text-white hover:bg-white/10 rounded-2xl transition-colors border border-white/10 bg-brand-black/50 backdrop-blur-md"
               onClick={() => setMobileOpen(!mobileOpen)}
               aria-label="Toggle menu"
             >
@@ -197,22 +227,24 @@ export function Nav() {
             initial={{ opacity: 0, clipPath: 'circle(0% at 100% 0)' }}
             animate={{ opacity: 1, clipPath: 'circle(150% at 100% 0)' }}
             exit={{ opacity: 0, clipPath: 'circle(0% at 100% 0)' }}
-            transition={{ type: 'spring', stiffness: 20, damping: 10, duration: 0.5 }}
-            className="fixed inset-0 z-40 bg-brand-black/95 backdrop-blur-2xl flex flex-col justify-center px-6 overflow-y-auto"
+            transition={{ type: 'spring', stiffness: 25, damping: 12, duration: 0.4 }}
+            className="fixed inset-0 z-40 bg-brand-black/98 backdrop-blur-3xl flex flex-col justify-center px-6 overflow-y-auto"
           >
             <motion.nav 
               variants={navContainerVariants}
               initial="hidden"
               animate="show"
-              className="flex flex-col gap-6 w-full max-w-md mx-auto pt-24 pb-12"
+              className="flex flex-col gap-5 w-full max-w-md mx-auto pt-24 pb-12"
             >
               {MAIN_LINKS.map((link) => (
                 <motion.div key={link.path} variants={navItemVariants}>
                   <Link
                     to={link.path}
                     className={cn(
-                      "block text-3xl font-display font-bold transition-colors",
-                      location.pathname === link.path ? "text-brand-red" : "text-white hover:text-brand-red"
+                      "block text-2xl sm:text-3xl font-display font-bold transition-all py-1",
+                      location.pathname === link.path 
+                        ? "text-brand-red translate-x-2" 
+                        : "text-white hover:text-brand-red hover:translate-x-2"
                     )}
                   >
                     {link.name}
@@ -220,32 +252,34 @@ export function Nav() {
                 </motion.div>
               ))}
 
-              <motion.div variants={navItemVariants} className="w-full h-px bg-white/10 my-4" />
+              <motion.div variants={navItemVariants} className="w-full h-px bg-white/10 my-3" />
 
-              {LOGIN_LINKS.map((link) => (
-                <motion.div key={link.path} variants={navItemVariants}>
-                  <Link
-                    to={link.path}
-                    className="flex items-center gap-3 text-xl font-bold text-white/80 hover:text-white transition-colors"
-                  >
-                    <User className="w-5 h-5 text-brand-red" />
-                    {link.name}
-                  </Link>
-                </motion.div>
-              ))}
+              <div className="grid grid-cols-2 gap-3">
+                {LOGIN_LINKS.map((link) => (
+                  <motion.div key={link.path} variants={navItemVariants}>
+                    <Link
+                      to={link.path}
+                      className="flex flex-col p-3.5 rounded-2xl bg-white/5 border border-white/10 text-white/90 hover:text-white hover:border-brand-red/40 hover:bg-white/10 transition-all"
+                    >
+                      <User className="w-4 h-4 text-brand-red mb-1.5" />
+                      <span className="text-sm font-bold">{link.name}</span>
+                    </Link>
+                  </motion.div>
+                ))}
+              </div>
 
-              <motion.div variants={navItemVariants} className="mt-8 flex flex-col gap-4">
+              <motion.div variants={navItemVariants} className="mt-6 flex flex-col gap-3.5">
                 <Link 
                   to="/book-now"
-                  className="w-full bg-brand-red text-white py-4 rounded-full text-center text-lg font-bold shadow-[0_0_20px_rgba(227,34,42,0.4)]"
+                  className="w-full bg-brand-red text-white py-4 rounded-full text-center text-lg font-bold shadow-[0_0_25px_rgba(227,34,42,0.5)] active:scale-[0.98] transition-all"
                 >
                   Book Now
                 </Link>
                 <a 
                   href="tel:0406693301"
-                  className="w-full bg-white/10 text-white py-4 rounded-full text-center text-lg font-bold flex items-center justify-center gap-2 border border-white/20"
+                  className="w-full bg-white/10 text-white py-3.5 rounded-full text-center text-base font-bold flex items-center justify-center gap-2 border border-white/20 hover:bg-white/20 transition-all"
                 >
-                  <Phone className="w-5 h-5" />
+                  <Phone className="w-4 h-4 text-brand-red" />
                   0406 693 301
                 </a>
               </motion.div>
