@@ -61,14 +61,9 @@ export function ManageBooking() {
               <div className="absolute inset-0 shimmer pointer-events-none" />
 
               <div className="text-center mb-10 relative z-10">
-                <motion.div 
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: "spring", stiffness: 300, damping: 15, delay: 0.15 }}
-                  className="w-16 h-16 bg-brand-red rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(227,34,42,0.5)]"
-                >
-                  <Calendar className="w-8 h-8 text-white" />
-                </motion.div>
+                <div className="bg-white/95 px-4 py-2 rounded-2xl shadow-[0_0_25px_rgba(227,34,42,0.4)] mx-auto mb-6 flex items-center justify-center w-fit">
+                  <img src="/assets/logo.png" alt="Wally's Driving School" className="h-11 w-auto object-contain max-w-[170px]" />
+                </div>
                 <h1 className="text-3xl sm:text-4xl font-display font-bold text-white mb-2 tracking-tight">Manage Booking</h1>
                 <p className="text-white/60 text-sm sm:text-base">Sign in to view, reschedule or check your lesson status.</p>
               </div>

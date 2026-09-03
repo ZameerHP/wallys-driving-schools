@@ -48,19 +48,29 @@ export default function App() {
     if (video) {
       video.muted = true;
       video.defaultMuted = true;
-      const playPromise = video.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {
-          video.muted = true;
-          video.play().catch(() => {});
-        });
+      video.currentTime = 0;
+      
+      const startPlay = () => {
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(() => {
+            video.muted = true;
+            video.play().catch(() => {});
+          });
+        }
+      };
+
+      if (video.readyState >= 3) {
+        startPlay();
+      } else {
+        video.addEventListener('canplay', startPlay, { once: true });
       }
     }
 
-    // Safety fallback: if video doesn't end on its own within 5.5s
+    // Safety fallback: if video doesn't end on its own within 4.5 seconds
     const fallbackTimer = setTimeout(() => {
       setShowPreloader(false);
-    }, 5500);
+    }, 4500);
 
     return () => clearTimeout(fallbackTimer);
   }, []);
@@ -77,17 +87,16 @@ export default function App() {
       {/* Lag-Free Magnetic Custom Cursor */}
       <CustomCursor />
 
-      {/* Immersive Fullscreen Video Intro */}
+      {/* Zero-Lag Fullscreen Video Intro */}
       <AnimatePresence mode="wait">
-        {showPreloader && (
+        {showPreloader ? (
           <motion.div
             key="intro-video-preloader"
             initial={{ opacity: 1 }}
             exit={{ 
               opacity: 0,
-              scale: 1.05,
-              filter: "blur(14px)",
-              transition: { duration: 0.9, ease: [0.76, 0, 0.24, 1] } 
+              scale: 1.02,
+              transition: { duration: 0.5, ease: [0.25, 1, 0.5, 1] } 
             }}
             onClick={handleVideoFinish}
             className="fixed inset-0 z-[999999] bg-[#000000] flex items-center justify-center cursor-pointer select-none overflow-hidden m-0 p-0"
@@ -102,11 +111,14 @@ export default function App() {
           >
             <video 
               ref={videoRef}
+              src="/assets/aistudio/intro.mp4"
               autoPlay 
               muted 
               defaultMuted
               playsInline
               preload="auto"
+              disablePictureInPicture
+              disableRemotePlayback
               onEnded={handleVideoFinish}
               onError={handleVideoFinish}
               className="w-full h-full object-contain"
@@ -119,34 +131,39 @@ export default function App() {
                 margin: 'auto',
                 width: '100vw',
                 height: '100vh',
-                objectFit: 'contain'
+                objectFit: 'contain',
+                transform: 'translateZ(0)',
+                willChange: 'transform'
               }}
-            >
-              <source src="/assets/aistudio/intro.mp4" type="video/mp4" />
-              <source src="/intro.mp4" type="video/mp4" />
-              <source src="/assets/intro.mp4" type="video/mp4" />
-            </video>
+            />
 
-            {/* Skip indicator */}
+            {/* Minimal Skip Indicator */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 1.2, duration: 0.4 }}
+              transition={{ delay: 0.8, duration: 0.3 }}
               className="absolute bottom-6 right-8 text-white/50 hover:text-white text-xs font-semibold uppercase tracking-widest px-4 py-2 rounded-full border border-white/10 hover:border-white/30 bg-black/60 backdrop-blur-md transition-all"
             >
-              Click anywhere to Skip ✕
+              Skip ✕
             </motion.div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="main-website"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+          >
+            <Router>
+              <SmoothScroll>
+                <Nav />
+                <AnimatedRoutes />
+                <Footer />
+              </SmoothScroll>
+            </Router>
           </motion.div>
         )}
       </AnimatePresence>
-
-      <Router>
-        <SmoothScroll>
-          <Nav />
-          <AnimatedRoutes />
-          <Footer />
-        </SmoothScroll>
-      </Router>
     </>
   );
 }

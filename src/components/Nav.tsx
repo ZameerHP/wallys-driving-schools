@@ -79,23 +79,18 @@ export function Nav() {
       >
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 xl:px-8">
           <div className="flex items-center justify-between">
-            {/* Logo */}
-            <Link to="/" className="relative z-50 flex items-center gap-3.5 group">
-              <div className="relative">
-                <div className="w-12 h-12 bg-brand-red text-white flex items-center justify-center font-bold text-2xl rounded-2xl shadow-[0_0_20px_rgba(227,34,42,0.6)] group-hover:shadow-[0_0_35px_rgba(227,34,42,0.9)] transition-all duration-300 group-hover:scale-105">
-                  W
+            {/* Official Logo */}
+            <div data-magnetic>
+              <Link to="/" className="relative z-50 flex items-center group">
+                <div className="bg-white/95 backdrop-blur-md px-3.5 py-1.5 rounded-2xl shadow-[0_0_20px_rgba(227,34,42,0.25)] border border-white/20 group-hover:shadow-[0_0_30px_rgba(227,34,42,0.6)] group-hover:scale-105 transition-all duration-300 flex items-center h-12">
+                  <img 
+                    src="/assets/logo.png" 
+                    alt="Wally's Driving School" 
+                    className="h-9 w-auto object-contain max-w-[160px]" 
+                  />
                 </div>
-                <div className="absolute -inset-1 bg-brand-red/30 rounded-2xl blur-md opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xl font-display font-bold text-white leading-none tracking-tight group-hover:text-white transition-colors">
-                  Wally's
-                </span>
-                <span className="text-[11px] font-bold text-brand-red uppercase tracking-widest mt-0.5">
-                  Driving School
-                </span>
-              </div>
-            </Link>
+              </Link>
+            </div>
 
             {/* Desktop Navigation */}
             <nav className="hidden xl:flex items-center gap-1.5" onMouseLeave={() => setHoveredPath(null)}>

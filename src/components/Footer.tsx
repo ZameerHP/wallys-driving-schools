@@ -13,13 +13,13 @@ export function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-16">
           {/* Brand Info */}
           <div>
-            <Link to="/" className="flex items-center gap-3 mb-6 group">
-              <div className="w-11 h-11 rounded-2xl bg-brand-red flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(227,34,42,0.4)] group-hover:scale-105 transition-transform duration-300">
-                <span className="text-white font-display font-bold text-xl">W</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="font-display font-bold text-xl leading-none tracking-tight uppercase">Wally's</span>
-                <span className="text-[10px] uppercase tracking-wider text-brand-red font-bold mt-0.5">Learn • Drive • Succeed</span>
+            <Link to="/" className="flex items-center gap-3 mb-6 group inline-block">
+              <div className="bg-white/95 backdrop-blur-md px-3.5 py-2 rounded-2xl shadow-[0_0_20px_rgba(227,34,42,0.3)] border border-white/20 group-hover:scale-105 transition-transform duration-300 flex items-center h-14 w-fit">
+                <img 
+                  src="/assets/logo.png" 
+                  alt="Wally's Driving School" 
+                  className="h-10 w-auto object-contain max-w-[180px]" 
+                />
               </div>
             </Link>
             <p className="text-white/70 mb-6 text-sm leading-relaxed">
