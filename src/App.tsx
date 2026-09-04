@@ -13,6 +13,7 @@ import { Services } from './pages/Services';
 import { About } from './pages/About';
 import { Faqs } from './pages/Faqs';
 import { Blog } from './pages/Blog';
+import { BlogPost } from './pages/BlogPost';
 import { BookNow } from './pages/BookNow';
 import { CoverageArea } from './pages/CoverageArea';
 import { ManageBooking } from './pages/ManageBooking';
@@ -30,6 +31,7 @@ function AnimatedRoutes() {
         <Route path="/about" element={<PageTransition><About /></PageTransition>} />
         <Route path="/faqs" element={<PageTransition><Faqs /></PageTransition>} />
         <Route path="/blog" element={<PageTransition><Blog /></PageTransition>} />
+        <Route path="/blog/:id" element={<PageTransition><BlogPost /></PageTransition>} />
         <Route path="/book-now" element={<PageTransition><BookNow /></PageTransition>} />
         <Route path="/coverage-area" element={<PageTransition><CoverageArea /></PageTransition>} />
         <Route path="/manage-booking" element={<PageTransition><ManageBooking /></PageTransition>} />
@@ -111,10 +113,9 @@ export default function App() {
           >
             <video 
               ref={videoRef}
-              src="/assets/aistudio/intro.mp4"
+              src="/assets/intro.mp4"
               autoPlay 
               muted 
-              defaultMuted
               playsInline
               preload="auto"
               disablePictureInPicture

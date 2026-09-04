@@ -25,9 +25,18 @@ export function Footer() {
             <p className="text-white/70 mb-6 text-sm leading-relaxed">
               Wally's Driving School is Sydney's trusted, high-performance driving academy. Patient trainers, modern dual-controlled cars, and 99% test pass rate.
             </p>
-            <div className="flex items-center gap-2 text-xs font-semibold text-white/60 bg-white/5 border border-white/10 px-3.5 py-2 rounded-xl w-fit">
+            <div className="flex items-center gap-2 text-xs font-semibold text-white/60 bg-white/5 border border-white/10 px-3.5 py-2 rounded-xl w-fit mb-6">
               <ShieldCheck className="w-4 h-4 text-brand-red" />
               RMS Certified Driver Trainers
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <a href="https://www.facebook.com/people/Wallys-Driving-School/61575863566186/?mibextid=wwXIfr&rdid=ldWQaR7pVQgqrG2o&share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2F1Cmms1RUhY%2F%3Fmibextid%3DwwXIfr" target="_blank" rel="noopener noreferrer" className="bg-white/10 p-2.5 rounded-full hover:bg-brand-red hover:scale-110 transition-all duration-300 group text-white/80 hover:text-white">
+                <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
+              </a>
+              <a href="https://www.instagram.com/wallysdrivingschools?igsh=aGsyNDR1Zmlvd2Ft" target="_blank" rel="noopener noreferrer" className="bg-white/10 p-2.5 rounded-full hover:bg-brand-red hover:scale-110 transition-all duration-300 group text-white/80 hover:text-white">
+                <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+              </a>
             </div>
           </div>
           

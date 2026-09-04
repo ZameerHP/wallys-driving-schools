@@ -183,6 +183,15 @@ export function Nav() {
 
             {/* Desktop Actions */}
             <div className="hidden xl:flex items-center gap-3.5 ml-4 pl-4 border-l border-white/20">
+              <div className="flex items-center gap-2 mr-1">
+                <a href="https://www.facebook.com/people/Wallys-Driving-School/61575863566186/?mibextid=wwXIfr&rdid=ldWQaR7pVQgqrG2o&share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2F1Cmms1RUhY%2F%3Fmibextid%3DwwXIfr" target="_blank" rel="noopener noreferrer" className="p-2 rounded-full hover:bg-white/10 hover:text-brand-red text-white transition-colors">
+                  <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
+                </a>
+                <a href="https://www.instagram.com/wallysdrivingschools?igsh=aGsyNDR1Zmlvd2Ft" target="_blank" rel="noopener noreferrer" className="p-2 rounded-full hover:bg-white/10 hover:text-brand-red text-white transition-colors">
+                  <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+                </a>
+              </div>
+              
               <div data-magnetic>
                 <motion.a 
                   whileHover={{ scale: 1.04 }}
@@ -283,6 +292,15 @@ export function Nav() {
                   <Phone className="w-4 h-4 text-brand-red" />
                   0406 693 301
                 </a>
+                
+                <div className="flex items-center justify-center gap-4 mt-2">
+                  <a href="https://www.facebook.com/people/Wallys-Driving-School/61575863566186/?mibextid=wwXIfr&rdid=ldWQaR7pVQgqrG2o&share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2F1Cmms1RUhY%2F%3Fmibextid%3DwwXIfr" target="_blank" rel="noopener noreferrer" className="p-3 bg-white/5 rounded-full hover:bg-brand-red text-white transition-colors border border-white/10">
+                    <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
+                  </a>
+                  <a href="https://www.instagram.com/wallysdrivingschools?igsh=aGsyNDR1Zmlvd2Ft" target="_blank" rel="noopener noreferrer" className="p-3 bg-white/5 rounded-full hover:bg-brand-red text-white transition-colors border border-white/10">
+                    <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+                  </a>
+                </div>
               </motion.div>
             </motion.nav>
           </motion.div>

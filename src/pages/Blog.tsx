@@ -69,10 +69,10 @@ export function Blog() {
                 </p>
                 
                 <div className="pt-4 border-t border-black/5">
-                  <span className="inline-flex items-center gap-2 font-bold text-sm text-brand-black group-hover:text-brand-red transition-colors">
+                  <Link to={`/blog/${post.id}`} className="inline-flex items-center gap-2 font-bold text-sm text-brand-black group-hover:text-brand-red transition-colors">
                     <span>Read Article</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform" />
-                  </span>
+                  </Link>
                 </div>
               </div>
             </motion.article>

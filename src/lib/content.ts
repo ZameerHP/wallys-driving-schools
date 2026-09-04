@@ -42,39 +42,12 @@ export const ADDITIONAL_SERVICES = [
 
 export const PACKAGES = [
   {
-    id: '5-hours-pack',
-    price: 320,
-    hours: 15,
-    title: '15 log book hours',
-    label: '5 Hours Pack',
-    description: 'This course duration is 6/Hr single driving lessons. This package is best for someone who has done between 50 to 100 hours driving. This course assesses students driving skills and weaknesses.',
-    category: 'Hour Packs'
-  },
-  {
-    id: '10-hours-pack-1',
-    price: 630,
-    hours: 30,
-    title: '30 log book hours',
-    label: '10 Hours Pack',
-    description: 'Duration for this course is 10 lessons. Best for new learners. New learners usually lose control over the vehicle and fail to respond in a sudden situation which is highly unsafe.',
-    category: 'Hour Packs'
-  },
-  {
-    id: '10-hours-pack-2',
-    price: 620,
-    hours: 30,
-    title: '30 Log Book Hours',
-    label: '10 Hours Pack',
-    description: 'This course includes 10 lessons and is specially designed for new learners. Beginners often struggle with vehicle control and may find it difficult to respond safely in sudden or unexpected situations. Through guided training, this course helps improvement, and strengthen weaknesses. Throughout the lessons, students will continue to develop the techniques and confidence needed to become safe, capable drivers.',
-    category: 'Hour Packs'
-  },
-  {
-    id: '1-hour-lesson',
+    id: '60-min-lesson',
     price: 65,
     hours: 3,
     title: '60 Minutes Lesson',
     label: '3 Log Book Hours',
-    description: '',
+    description: 'Focused one-hour guided lesson targeting specific logbook skills for learners or test prep.',
     category: 'Lessons'
   },
   {
@@ -83,8 +56,26 @@ export const PACKAGES = [
     hours: 6,
     title: '2 Hours Lesson',
     label: '6 Log Book Hours',
-    description: '',
+    description: 'Two-hour intensive session refining skills and building test readiness on local routes.',
     category: 'Lessons'
+  },
+  {
+    id: '5-hours-pack',
+    price: 315,
+    hours: 15,
+    title: '5 Hours Pack',
+    label: '15 Log Book Hours',
+    description: 'Five hours of training to assess skills and target weaknesses for intermediate learners.',
+    category: 'Hour Packs'
+  },
+  {
+    id: '10-hours-pack',
+    price: 620,
+    hours: 30,
+    title: '10 Hours Pack',
+    label: '30 Log Book Hours',
+    description: 'Comprehensive 10-lesson course building essential vehicle control for absolute beginners.',
+    category: 'Hour Packs'
   },
   {
     id: 'test-1-lesson',
@@ -92,7 +83,7 @@ export const PACKAGES = [
     hours: null,
     title: 'Driving Test Package',
     label: 'Car Hire & 1 Lesson',
-    description: 'This package is ideal for students who need to use the school\'s car for their driving test. It includes pick-up and drop-off, along with a one-hour practice session before the test. Practice is conducted around the RMS test location, focusing on common routes...',
+    description: 'School car hire for the RMS test plus a 1-hour pre-test practice session.',
     category: 'Test Packages'
   },
   {
@@ -101,7 +92,7 @@ export const PACKAGES = [
     hours: null,
     title: 'Driving Test Package',
     label: 'Car Hire & 2 Lessons',
-    description: 'This package is ideal for students who need to use the school\'s car for their driving test. It includes pick-up and drop-off, along with a two-hour practice session before the test. Practice is conducted around the RMS test location, focusing on common routes...',
+    description: 'School car hire for the RMS test plus a 2-hour pre-test practice session.',
     category: 'Test Packages'
   }
 ];
@@ -204,24 +195,72 @@ export const BLOG_POSTS = [
     title: '5 Ways That Can Develop Your Driving Skill',
     author: 'waleed_khurram',
     role: 'Teacher',
-    date: '18 Dec 2023',
-    image: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=600'
+    date: '18 DEC 2023',
+    image: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=600',
+    content: `
+      <p>Driving is much more than just operating a vehicle; it is a vital life skill that requires continuous refinement, spatial awareness, and situational judgment. Whether you are a brand-new learner or looking to sharpen your abilities behind the wheel, here are five proven ways to rapidly develop your driving skills:</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">1. Master Your Mirror and Blind Spot Checks</h3>
+      <p>Habitual checking of your rearview and side mirrors every 5 to 8 seconds builds a complete 360-degree mental map of your surroundings. Always combine your mirror checks with a quick shoulder glance to eliminate blind spots before changing lanes or merging.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">2. Practice Defensive Driving</h3>
+      <p>Anticipate the mistakes of other motorists rather than reacting to them at the last second. Keep a safe following distance (at least a 3-second gap in dry conditions) to give yourself adequate stopping time if traffic halts unexpectedly.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">3. Focus on Smooth Acceleration and Braking</h3>
+      <p>Jerky movements indicate poor vehicle control. Practice easing onto the accelerator and applying progressive, smooth pressure to the brake pedal. Not only does this protect your vehicle's brakes, but it also creates a much more comfortable experience for your passengers.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">4. Expose Yourself to Diverse Conditions</h3>
+      <p>Don't just practice on sunny days on quiet suburban streets. Gradually challenge yourself by driving during peak rush hours, at night, and in wet weather conditions. Gaining experience across varied environments builds unshakable confidence.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">5. Seek Regular Professional Feedback</h3>
+      <p>It is very easy to pick up bad habits over time without realizing it. Booking a professional refresher lesson with an expert instructor helps correct minor errors before they become unsafe driving habits.</p>
+    `
   },
   {
     id: 'post-2',
     title: 'Why Do You Need Driving Lessons?',
     author: 'waleed_khurram',
     role: 'Teacher',
-    date: '18 Dec 2023',
-    image: 'https://images.unsplash.com/photo-1516224364402-4b2169c73335?auto=format&fit=crop&q=80&w=600'
+    date: '18 DEC 2023',
+    image: 'https://images.unsplash.com/photo-1516224364402-4b2169c73335?auto=format&fit=crop&q=80&w=600',
+    content: `
+      <p>Learning to drive from friends or family members might seem like an easy way to save money, but it often comes with hidden risks—namely, passing down bad driving habits and uncertified instruction. Investing in structured professional driving lessons is essential for long-term safety and success on the road.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Structured Curriculum and Progression</h3>
+      <p>Professional instructors follow a tested, step-by-step curriculum. They ensure you master fundamental vehicle controls and basic road rules before moving on to complex traffic situations, multi-lane roundabouts, and high-speed motorways.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Dual-Control Safety Vehicles</h3>
+      <p>Driving school vehicles are equipped with dual controls (extra brake and clutch pedals on the instructor's side). This provides absolute peace of mind, allowing you to learn safely while knowing your instructor can intervene instantly if an emergency arises.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Local Test Route Familiarity</h3>
+      <p>Professional instructors know the exact testing routes and tricky intersections used by license examiners in your local area. They prepare you specifically for the conditions and maneuvers you will face on test day.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Building Genuine Road Confidence</h3>
+      <p>Driving anxiety is completely normal. A professional instructor provides a calm, patient, and stress-free environment that transforms nervous beginners into confident, defensive drivers capable of passing their test on the first attempt.</p>
+    `
   },
   {
     id: 'post-3',
-    title: 'What Are The Benefits Of Driving Instructor',
+    title: 'What Are The Benefits of Driving Instructor',
     author: 'waleed_khurram',
     role: 'Teacher',
-    date: '18 Dec 2023',
-    image: 'https://images.unsplash.com/photo-1580273916550-e323be2ae537?auto=format&fit=crop&q=80&w=600'
+    date: '18 DEC 2023',
+    image: 'https://images.unsplash.com/photo-1580273916550-e323be2ae537?auto=format&fit=crop&q=80&w=600',
+    content: `
+      <p>When preparing for your driving test, having the right mentor makes all the difference. A certified driving instructor brings a unique set of professional tools, psychology, and technical expertise that informal teachers simply cannot match.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Unshakable Patience and Calmness</h3>
+      <p>Learning to drive can be stressful. Professional instructors are trained to remain completely calm under pressure, turning mistakes into positive, stress-free learning opportunities rather than moments of frustration.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Personalized Teaching Paces</h3>
+      <p>Every student learns differently. While one student might pick up parallel parking instantly, another might need extra time mastering clutch control. A skilled instructor customizes every lesson to fit your exact learning speed and weak points.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Tricks for Complex Maneuvers</h3>
+      <p>Difficult maneuvers like parallel parking, reverse parking, and three-point turns become simple when taught using structured spatial reference points and proven instructor formulas.</p>
+      
+      <h3 class="text-xl font-bold mt-8 mb-3 text-brand-black">Higher First-Time Pass Rates</h3>
+      <p>Ultimately, hiring a professional driving instructor drastically increases your chances of passing your driving test on the first try, saving you time, repeat test fees, and the stress of failure.</p>
+    `
   }
 ];
 
