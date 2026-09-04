@@ -32,31 +32,31 @@ export function BookNow() {
   };
 
   return (
-    <div className="pt-32 pb-24 bg-brand-offwhite min-h-screen relative overflow-hidden">
+    <div className="pt-28 pb-12 bg-brand-offwhite min-h-screen lg:h-screen lg:overflow-hidden relative flex flex-col justify-between">
       <div className="absolute top-20 right-0 w-96 h-96 bg-brand-red/5 rounded-full filter blur-[120px] pointer-events-none" />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 w-full flex-grow flex flex-col justify-center">
         <motion.div 
-          initial={{ opacity: 0, y: 30 }}
+          initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ type: "spring", stiffness: 200, damping: 20 }}
-          className="mb-12"
+          className="mb-6 lg:mb-8"
         >
-          <div className="flex items-center gap-2 text-xs font-bold text-brand-black/50 mb-3 uppercase tracking-widest">
+          <div className="flex items-center gap-2 text-xs font-bold text-brand-black/50 mb-2 uppercase tracking-widest">
             <Link to="/" className="hover:text-brand-red transition-colors">Wally's Driving School</Link>
             <span>/</span>
             <span className="text-brand-red font-semibold">Online Booking</span>
           </div>
-          <h1 className="text-5xl md:text-7xl font-display font-bold tracking-tight text-brand-black">BOOK NOW</h1>
+          <h1 className="text-4xl md:text-6xl font-display font-bold tracking-tight text-brand-black">BOOK NOW</h1>
         </motion.div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-10 items-start">
-          {/* Stepper Sidebar */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 lg:gap-10 items-stretch h-full lg:max-h-[calc(100vh-230px)]">
+          {/* Stepper Sidebar - Fixed / Non-scrolling */}
           <motion.div 
             initial={{ opacity: 0, x: -30 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.1, type: "spring", stiffness: 200, damping: 20 }}
-            className="lg:col-span-1 bg-brand-black text-white rounded-[36px] p-8 shadow-2xl sticky top-32"
+            className="lg:col-span-1 bg-brand-black text-white rounded-[36px] p-6 sm:p-8 shadow-2xl flex flex-col justify-between"
           >
             <div className="mb-6 pb-6 border-b border-white/10">
               <span className="text-xs uppercase tracking-wider text-brand-red font-bold">Step {currentStep + 1} of {STEPS.length}</span>
@@ -106,7 +106,7 @@ export function BookNow() {
 
           {/* Wizard Form Area */}
           <motion.div 
-            className="lg:col-span-3 bg-white rounded-[36px] p-8 md:p-12 shadow-xl border border-black/5 min-h-[500px] lg:h-[calc(100vh-180px)] lg:overflow-y-auto hide-scrollbar flex flex-col justify-between"
+            className="lg:col-span-3 bg-white rounded-[36px] p-6 sm:p-10 shadow-xl border border-black/5 min-h-[500px] lg:h-full lg:max-h-[calc(100vh-230px)] lg:overflow-y-auto hide-scrollbar flex flex-col justify-between"
             initial={{ opacity: 0, x: 30 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
