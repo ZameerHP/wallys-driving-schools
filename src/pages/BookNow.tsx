@@ -106,7 +106,7 @@ export function BookNow() {
 
           {/* Wizard Form Area */}
           <motion.div 
-            className="lg:col-span-3 bg-white rounded-[36px] p-8 md:p-12 shadow-xl border border-black/5 min-h-[500px] lg:h-[calc(100vh-250px)] lg:max-h-[800px] lg:overflow-y-auto flex flex-col justify-between"
+            className="lg:col-span-3 bg-white rounded-[36px] p-8 md:p-12 shadow-xl border border-black/5 min-h-[500px] lg:h-[calc(100vh-180px)] lg:overflow-y-auto hide-scrollbar flex flex-col justify-between"
             initial={{ opacity: 0, x: 30 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
@@ -160,7 +160,7 @@ export function BookNow() {
               </motion.div>
             ) : (
               <>
-                <div className="flex-grow overflow-y-auto pr-2 sm:pr-4 custom-scrollbar mb-6 lg:min-h-0">
+                <div className="flex-grow overflow-y-auto hide-scrollbar mb-6 lg:min-h-0">
                   <AnimatePresence mode="wait">
                     {currentStep === 0 && (
                   <motion.div
