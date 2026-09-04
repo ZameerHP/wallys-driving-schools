@@ -330,7 +330,7 @@ export function Home() {
       </section>
 
       {/* STATS BANNER */}
-      <section className="relative z-10 -mt-16 mb-8 px-4">
+      <section className="relative z-10 mt-12 md:mt-20 mb-10 md:mb-16 px-4">
         <div className="max-w-6xl mx-auto">
           <TiltCard maxTilt={8} glareEffect={true} className="rounded-[32px]">
             <motion.div
@@ -364,34 +364,34 @@ export function Home() {
       </section>
 
       {/* ABOUT SECTION */}
-      <section className="py-32 bg-brand-offwhite text-brand-black overflow-hidden relative">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+      <section className="min-h-screen lg:h-screen lg:max-h-[920px] flex items-center justify-center py-10 lg:py-4 bg-brand-offwhite text-brand-black overflow-hidden relative">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-center">
             {/* 3D Tilt Image Stack */}
-            <TiltCard maxTilt={10} className="relative h-[600px] rounded-[40px]">
-              <div className="absolute inset-0 rounded-[40px] overflow-hidden shadow-2xl">
+            <TiltCard maxTilt={8} className="relative h-[360px] sm:h-[400px] lg:h-[440px] xl:h-[480px] rounded-[32px]">
+              <div className="absolute inset-0 rounded-[32px] overflow-hidden shadow-xl">
                 <img src="https://images.unsplash.com/photo-1595054173872-3580455c11f7?auto=format&fit=crop&q=80&w=800" className="w-full h-full object-cover" alt="Driving Lesson" />
                 <div className="absolute inset-0 bg-gradient-to-t from-brand-black/35 to-transparent" />
               </div>
-              <div className="absolute -bottom-8 -right-8 w-2/3 h-2/3 rounded-[36px] border-[8px] border-brand-offwhite overflow-hidden shadow-2xl">
+              <div className="absolute -bottom-4 -right-4 w-3/5 h-3/5 rounded-[24px] border-[6px] border-brand-offwhite overflow-hidden shadow-xl">
                 <img src="https://images.unsplash.com/photo-1606821812822-7cd60e5eb3e8?auto=format&fit=crop&q=80&w=800" className="w-full h-full object-cover" alt="Instructor" />
               </div>
               
               {/* Experience badge */}
-              <div className="absolute top-6 -right-2 bg-brand-red text-white rounded-2xl px-5 py-4 shadow-xl z-20">
-                <div className="text-2xl font-bold">10+</div>
-                <div className="text-xs font-medium opacity-85">Years Exp</div>
+              <div className="absolute top-4 -right-2 bg-brand-red text-white rounded-2xl px-4 py-3 shadow-xl z-20">
+                <div className="text-xl font-bold">10+</div>
+                <div className="text-[11px] font-medium opacity-85">Years Exp</div>
               </div>
             </TiltCard>
 
             <motion.div
-              initial={{ opacity: 0, y: 50 }}
+              initial={{ opacity: 0, y: 30 }}
               whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-100px" }}
+              viewport={{ once: true, margin: "-50px" }}
               transition={{ type: "spring", stiffness: 100, damping: 20 }}
               className="flex flex-col items-start"
             >
-              <span className="text-brand-red font-bold uppercase tracking-wider mb-4 flex items-center gap-2">
+              <span className="text-brand-red font-bold uppercase tracking-wider text-xs mb-1.5 flex items-center gap-1.5">
                 <motion.div 
                   animate={{ scale: [1, 1.4, 1] }}
                   transition={{ duration: 2, repeat: Infinity }}
@@ -399,46 +399,46 @@ export function Home() {
                 />
                 Get To Know Us
               </span>
-              <h2 className="text-4xl md:text-5xl font-display font-bold mb-6 tracking-tight">
+              <h2 className="text-2xl sm:text-3xl lg:text-4xl font-display font-bold mb-2.5 tracking-tight leading-tight">
                 Ready to Learn Driving in Our Latest Models Vehicles
               </h2>
-              <p className="text-lg text-brand-black/70 mb-8 leading-relaxed">
-                Wally's Driving School is proud to be one of Sydney's fastest-growing driving schools. Our team is made up of highly qualified, professional, and patient Driver Trainers who are friendly and supportive, ensuring every student feels at ease behind the wheel.
+              <p className="text-xs sm:text-sm text-brand-black/70 mb-3 leading-relaxed">
+                Wally's Driving School is proud to be one of Sydney's fastest-growing driving schools with patient, RMS-accredited trainers ensuring every student feels at ease behind the wheel.
               </p>
               
-              <TiltCard maxTilt={6} className="bg-white p-8 rounded-3xl shadow-sm border border-black/5 mb-8 w-full">
-                <p className="text-brand-black/85 font-medium italic relative z-10">
-                  "Our mission is to create safe, confident, and capable drivers, while making the learning process both enjoyable and stress-free. We provide Class C licence training in dual-controlled automatic vehicles, offering a safe and reliable environment for learners."
+              <div className="bg-white p-3.5 sm:p-4 rounded-2xl shadow-sm border border-black/5 mb-3.5 w-full">
+                <p className="text-brand-black/85 text-xs sm:text-[13px] font-medium italic relative z-10 leading-relaxed">
+                  "Our mission is to create safe, confident, and capable drivers through dual-controlled automatic vehicles, offering an enjoyable and stress-free learning journey."
                 </p>
-              </TiltCard>
+              </div>
 
               <motion.div 
                 variants={staggerContainer}
                 initial="hidden"
                 whileInView="show"
                 viewport={{ once: true }}
-                className="grid grid-cols-2 gap-6 w-full mb-10"
+                className="grid grid-cols-2 gap-3 w-full mb-3.5"
               >
-                <motion.div variants={staggerItem} className="flex items-center gap-4 group">
-                  <div className="w-12 h-12 rounded-2xl bg-brand-red/10 flex items-center justify-center text-brand-red group-hover:bg-brand-red group-hover:text-white transition-all duration-300">
-                    <CheckCircle2 />
+                <motion.div variants={staggerItem} className="flex items-center gap-2.5 group bg-white/70 p-2 rounded-xl border border-black/5">
+                  <div className="w-8 h-8 rounded-lg bg-brand-red/10 flex items-center justify-center text-brand-red group-hover:bg-brand-red group-hover:text-white transition-all duration-300">
+                    <CheckCircle2 className="w-4 h-4" />
                   </div>
-                  <span className="font-bold">Online Traffic School</span>
+                  <span className="font-bold text-xs sm:text-sm">Online Traffic School</span>
                 </motion.div>
-                <motion.div variants={staggerItem} className="flex items-center gap-4 group">
-                  <div className="w-12 h-12 rounded-2xl bg-brand-red/10 flex items-center justify-center text-brand-red group-hover:bg-brand-red group-hover:text-white transition-all duration-300">
-                    <Star />
+                <motion.div variants={staggerItem} className="flex items-center gap-2.5 group bg-white/70 p-2 rounded-xl border border-black/5">
+                  <div className="w-8 h-8 rounded-lg bg-brand-red/10 flex items-center justify-center text-brand-red group-hover:bg-brand-red group-hover:text-white transition-all duration-300">
+                    <Star className="w-4 h-4" />
                   </div>
-                  <span className="font-bold">Expert Instructor</span>
+                  <span className="font-bold text-xs sm:text-sm">Expert Instructor</span>
                 </motion.div>
               </motion.div>
 
-              <div className="w-full mb-10">
-                <div className="flex justify-between font-bold mb-2 text-sm">
+              <div className="w-full mb-4">
+                <div className="flex justify-between font-bold mb-1 text-xs">
                   <span>Driving Skill Mastery</span>
                   <span className="text-brand-red">100%</span>
                 </div>
-                <div className="w-full h-2.5 bg-black/10 rounded-full overflow-hidden">
+                <div className="w-full h-2 bg-black/10 rounded-full overflow-hidden">
                   <motion.div 
                     initial={{ width: 0 }}
                     whileInView={{ width: "100%" }}
@@ -455,10 +455,10 @@ export function Home() {
                 <Link 
                   to="/about" 
                   data-cursor-text="MORE"
-                  className="inline-flex items-center gap-2 bg-brand-black text-white px-8 py-4 rounded-full font-bold text-lg hover:bg-brand-red transition-all duration-300 shadow-lg hover:shadow-xl"
+                  className="inline-flex items-center gap-2 bg-brand-black text-white px-6 py-2.5 rounded-full font-bold text-xs sm:text-sm hover:bg-brand-red transition-all duration-300 shadow-md hover:shadow-lg"
                 >
                   <span>Discover More</span>
-                  <ArrowRight className="w-4 h-4" />
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </Link>
               </div>
             </motion.div>
