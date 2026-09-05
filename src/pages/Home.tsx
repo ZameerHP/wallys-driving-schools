@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { CheckCircle2, Star, ArrowRight, ArrowLeft, ChevronDown, Users, Award, Clock, Shield, Quote } from 'lucide-react';
 import { PACKAGES, TESTIMONIALS, BLOG_POSTS } from '../lib/content';
 import { TiltCard } from '../components/TiltCard';
+import { ContactSection } from '../components/ContactSection';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
@@ -81,9 +82,9 @@ export function Home() {
   const headlineLines = ["Are You Looking for a", "Car for the", "Driving Test?"];
 
   const STATS = [
-    { icon: Users, value: 500, suffix: '+', label: 'Happy Students' },
-    { icon: Award, value: 99, suffix: '%', label: 'Pass Rate' },
-    { icon: Clock, value: 10, suffix: '+', label: 'Years Experience' },
+    { icon: Clock, value: 5, suffix: '+', label: 'Years of Experience' },
+    { icon: Award, value: 99, suffix: '%', label: 'Happy Customer Rate' },
+    { icon: Users, value: 100, suffix: '+', label: 'Happy Customers' },
     { icon: Shield, value: 100, suffix: '%', label: 'Safety Record' },
   ];
 
@@ -305,7 +306,7 @@ export function Home() {
                   transition={{ duration: 4.2, repeat: Infinity, ease: "easeInOut" }}
                   className="absolute -bottom-12 -left-8 bg-white/10 backdrop-blur-md rounded-2xl px-4 py-3 border border-white/10 shadow-xl"
                 >
-                  <span className="text-white font-bold text-sm">500+ Students</span>
+                  <span className="text-white font-bold text-sm">100+ Customers</span>
                 </motion.div>
               </motion.div>
             </div>
@@ -379,7 +380,7 @@ export function Home() {
               
               {/* Experience badge */}
               <div className="absolute top-4 -right-2 bg-brand-red text-white rounded-2xl px-4 py-3 shadow-xl z-20">
-                <div className="text-xl font-bold">10+</div>
+                <div className="text-xl font-bold">5+</div>
                 <div className="text-[11px] font-medium opacity-85">Years Exp</div>
               </div>
             </TiltCard>
@@ -726,6 +727,9 @@ export function Home() {
           </div>
         </div>
       </section>
+
+      {/* CONTACT FORM SECTION */}
+      <ContactSection />
 
       {/* CLOSING BANNER */}
       <section className="py-20 bg-brand-offwhite px-4">

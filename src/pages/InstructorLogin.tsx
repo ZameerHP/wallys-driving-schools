@@ -1,24 +1,34 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { Calendar, Clock, ChevronDown, User, CheckCircle2, Eye, EyeOff, Shield, ArrowLeft, KeyRound, LogOut } from 'lucide-react';
-import { useState } from 'react';
+import { 
+  Calendar, 
+  Clock, 
+  ChevronDown, 
+  User, 
+  CheckCircle2, 
+  Eye, 
+  EyeOff, 
+  Shield, 
+  ArrowLeft, 
+  LogOut, 
+  Lock, 
+  AlertCircle, 
+  MapPin, 
+  Phone, 
+  Layers, 
+  FileText 
+} from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { cn } from '../lib/utils';
-
-const APPOINTMENTS = [
-  {
-    date: 'Today, 24 Oct',
-    items: [
-      { id: 1, time: '09:00 AM', type: '1 Hour Driving Lesson', client: 'Sarah Jenkins', status: 'Approved' },
-      { id: 2, time: '11:30 AM', type: 'Driving Test Package', client: 'Michael Chen', status: 'Pending' }
-    ]
-  },
-  {
-    date: 'Tomorrow, 25 Oct',
-    items: [
-      { id: 3, time: '10:00 AM', type: '2 Hours Lesson', client: 'Emma Wilson', status: 'Approved' }
-    ]
-  }
-];
+import { 
+  checkOwnerAuth, 
+  isOwnerLoggedIn, 
+  setOwnerLoggedIn, 
+  logoutOwner, 
+  getStoredBookings,
+  updateBookingStatus,
+  BookingItem
+} from '../lib/bookings';
 
 function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
   const [showPassword, setShowPassword] = useState(false);
@@ -27,29 +37,20 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const fillDemo = () => {
-    setEmail('instructor@wallys.com');
-    setPassword('wallys2024');
-    setError('');
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
 
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPassword = password.trim();
-
     setTimeout(() => {
-      const isEmailValid = cleanEmail === 'instructor@wallys.com' || cleanEmail === 'instructor' || cleanEmail === 'admin' || cleanEmail === 'wally';
-      const isPasswordValid = cleanPassword === 'wallys2024' || cleanPassword === 'admin' || cleanPassword === '123456';
+      setIsLoading(false);
+      const isValid = checkOwnerAuth(email, password);
 
-      if (isEmailValid && isPasswordValid) {
+      if (isValid) {
+        setOwnerLoggedIn(true);
         onLogin();
       } else {
-        setError('Invalid credentials. Use demo: instructor@wallys.com / wallys2024');
-        setIsLoading(false);
+        setError('Access Denied: Only the owner (Wally) is authorized to access the instructor portal. Please check your username and password.');
       }
     }, 600);
   };
@@ -86,54 +87,45 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
           <div className="absolute inset-0 shimmer pointer-events-none" />
 
           <div className="text-center mb-8 relative z-10">
-            <div className="bg-white/95 px-4 py-2 rounded-2xl shadow-[0_0_25px_rgba(227,34,42,0.4)] mx-auto mb-6 flex items-center justify-center w-fit">
+            <div className="bg-white/95 px-4 py-2 rounded-2xl shadow-[0_0_25px_rgba(227,34,42,0.4)] mx-auto mb-5 flex items-center justify-center w-fit">
               <img src="/assets/logo.png" alt="Wally's Driving School" className="h-11 w-auto object-contain max-w-[170px]" />
             </div>
-            <h1 className="text-3xl sm:text-4xl font-display font-bold text-white mb-2 tracking-tight">
+
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-red/20 border border-brand-red/30 text-brand-red text-xs font-bold uppercase tracking-wider mb-2">
+              <Lock className="w-3 h-3" />
+              <span>Owner Access Only</span>
+            </div>
+
+            <h1 className="text-2xl sm:text-3xl font-display font-bold text-white mb-2 tracking-tight">
               Instructor Portal
             </h1>
-            <p className="text-white/60 text-sm sm:text-base">
-              Authorized personnel only. Access your driving lessons & schedule.
+            <p className="text-white/60 text-xs sm:text-sm">
+              Restricted to Wally (Owner). Access instructor driving schedules, student roster, and daily timetable.
             </p>
           </div>
 
-          {/* Quick Demo Fill Helper */}
-          <div className="mb-6 p-3 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-between relative z-10">
-            <div className="flex items-center gap-2 text-xs text-white/70">
-              <KeyRound className="w-4 h-4 text-brand-red shrink-0" />
-              <span>Demo: <strong className="text-white">instructor@wallys.com</strong> / <strong className="text-white">wallys2024</strong></span>
-            </div>
-            <button
-              type="button"
-              onClick={fillDemo}
-              className="text-xs bg-brand-red/80 hover:bg-brand-red text-white px-2.5 py-1 rounded-lg font-bold transition-all"
-            >
-              Auto-fill
-            </button>
-          </div>
-
-          <form className="flex flex-col gap-5 relative z-10" onSubmit={handleSubmit}>
+          <form className="flex flex-col gap-4 relative z-10" onSubmit={handleSubmit}>
             <div>
-              <label className="block text-xs font-bold text-white/80 uppercase tracking-wider mb-2">Instructor Email / Username</label>
+              <label className="block text-xs font-bold text-white/80 uppercase tracking-wider mb-1.5">Owner Username / Email</label>
               <input 
                 type="text"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300"
-                placeholder="instructor@wallys.com"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300 text-sm"
+                placeholder="Enter owner email"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-white/80 uppercase tracking-wider mb-2">Password</label>
+              <label className="block text-xs font-bold text-white/80 uppercase tracking-wider mb-1.5">Password</label>
               <div className="relative">
                 <input 
                   type={showPassword ? "text" : "password"}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300 text-sm"
                   placeholder="••••••••"
                 />
                 <button 
@@ -152,9 +144,10 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-red-400 text-xs font-medium"
+                  className="bg-red-500/15 border border-red-500/30 rounded-xl px-4 py-3 text-red-300 text-xs font-medium flex items-center gap-2"
                 >
-                  {error}
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+                  <span>{error}</span>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -162,9 +155,9 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
             <motion.button 
               type="submit" 
               disabled={isLoading}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="w-full bg-brand-red text-white font-bold rounded-2xl py-4 hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_25px_rgba(227,34,42,0.4)] mt-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-base"
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              className="w-full bg-brand-red text-white font-bold rounded-2xl py-3.5 hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_25px_rgba(227,34,42,0.4)] mt-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm sm:text-base cursor-pointer"
             >
               {isLoading ? (
                 <motion.div 
@@ -173,15 +166,16 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
                   className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full mx-auto"
                 />
               ) : (
-                'Sign In to Dashboard'
+                'Sign In to Instructor Schedule'
               )}
             </motion.button>
           </form>
 
-          <div className="mt-8 text-center relative z-10">
-            <a href="tel:0406693301" className="text-sm font-medium text-white/60 hover:text-white transition-colors">
-              Need access or lost password? <span className="text-brand-red underline decoration-brand-red/30 underline-offset-4">Contact Admin</span>
-            </a>
+          <div className="mt-6 pt-5 border-t border-white/10 text-center relative z-10 flex flex-col gap-2">
+            <span className="text-xs text-white/40">Only the owner has authorized credentials to access instructor portals.</span>
+            <Link to="/" className="text-xs font-medium text-brand-red hover:underline">
+              ← Return to Home Page
+            </Link>
           </div>
         </motion.div>
         
@@ -197,7 +191,18 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
 }
 
 function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
-  const [activeStatusDropdown, setActiveStatusDropdown] = useState<number | null>(null);
+  const [activeStatusDropdown, setActiveStatusDropdown] = useState<string | null>(null);
+  const [bookingsList, setBookingsList] = useState<BookingItem[]>([]);
+
+  useEffect(() => {
+    setBookingsList(getStoredBookings());
+  }, []);
+
+  const handleUpdateStatus = (id: string, newStatus: BookingItem['status']) => {
+    const updated = updateBookingStatus(id, newStatus);
+    setBookingsList(updated);
+    setActiveStatusDropdown(null);
+  };
 
   return (
     <div className="pt-24 bg-brand-offwhite min-h-screen flex flex-col md:flex-row">
@@ -206,36 +211,52 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
         initial={{ x: -100, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ type: "spring", stiffness: 200, damping: 20 }}
-        className="w-full md:w-64 bg-brand-black text-white shrink-0 min-h-screen p-6 sticky top-0 md:h-screen overflow-y-auto z-20 border-r border-white/10"
+        className="w-full md:w-64 bg-brand-black text-white shrink-0 min-h-screen p-6 sticky top-0 md:h-screen overflow-y-auto z-20 border-r border-white/10 flex flex-col justify-between"
       >
-        <div className="flex items-center gap-3 mb-12">
-          <div className="w-9 h-9 rounded-2xl bg-brand-red flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(227,34,42,0.5)]">
-            <span className="text-white font-display font-bold text-sm">W</span>
+        <div>
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-9 h-9 rounded-2xl bg-brand-red flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(227,34,42,0.5)]">
+              <span className="text-white font-display font-bold text-sm">W</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="font-display font-bold text-base leading-none tracking-tight">Wally (Owner)</span>
+              <span className="text-[10px] text-brand-red font-semibold uppercase mt-0.5">Verified Instructor</span>
+            </div>
           </div>
-          <div className="flex flex-col">
-            <span className="font-display font-bold text-base leading-none tracking-tight">Instructor Panel</span>
-            <span className="text-[10px] text-brand-red font-semibold uppercase mt-0.5">Verified Session</span>
-          </div>
+
+          <nav className="flex flex-col gap-2">
+            <div className="flex items-center gap-3 px-4 py-3 bg-brand-red rounded-xl font-bold text-sm shadow-[0_0_15px_rgba(227,34,42,0.3)]">
+              <Calendar className="w-4 h-4" />
+              Instructor Schedule
+            </div>
+            
+            <Link 
+              to="/manage-booking"
+              className="flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-xl font-bold text-sm transition-all"
+            >
+              <FileText className="w-4 h-4 text-brand-red" />
+              <span>Manage All Bookings</span>
+            </Link>
+
+            <Link
+              to="/book-now"
+              className="flex items-center gap-3 px-4 py-3 text-white/60 hover:text-white hover:bg-white/5 rounded-xl font-medium text-sm transition-all"
+            >
+              <Layers className="w-4 h-4" />
+              Book New Lesson
+            </Link>
+          </nav>
         </div>
 
-        <nav className="flex flex-col gap-2">
-          <a href="#" className="flex items-center gap-3 px-4 py-3 bg-brand-red rounded-xl font-bold text-sm shadow-[0_0_15px_rgba(227,34,42,0.3)]">
-            <Calendar className="w-4 h-4" />
-            Appointments
-          </a>
-          <a href="#" className="flex items-center gap-3 px-4 py-3 text-white/60 hover:text-white hover:bg-white/5 rounded-xl font-medium text-sm transition-all duration-300">
-            <Clock className="w-4 h-4" />
-            Schedule & Events
-          </a>
-          <div className="my-4 h-px bg-white/10" />
+        <div className="pt-6 border-t border-white/10">
           <button 
             onClick={onLogout}
-            className="flex items-center gap-3 px-4 py-3 text-red-400 hover:text-white hover:bg-red-500/20 rounded-xl font-medium text-sm transition-all duration-300 mt-auto text-left w-full"
+            className="flex items-center gap-3 px-4 py-3 text-red-400 hover:text-white hover:bg-red-500/20 rounded-xl font-medium text-sm transition-all duration-300 w-full cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
             Sign Out
           </button>
-        </nav>
+        </div>
       </motion.div>
 
       {/* Main Content */}
@@ -244,92 +265,118 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
-          className="max-w-4xl"
+          className="max-w-5xl"
         >
           <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-brand-red">Active Roster</span>
-              <h1 className="text-3xl font-display font-bold mb-1">Instructor Lessons</h1>
-              <p className="text-brand-black/60 text-sm">Manage scheduled driving lessons, test bookings and client attendances.</p>
+              <span className="text-xs font-bold uppercase tracking-wider text-brand-red">Active Driving Roster</span>
+              <h1 className="text-2xl sm:text-3xl font-display font-bold mb-1 text-brand-black">Wally's Instructor Schedule</h1>
+              <p className="text-brand-black/60 text-xs sm:text-sm">Manage scheduled driving lessons, test bookings and client attendances across Western Sydney.</p>
             </div>
-            <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 text-green-700 px-3.5 py-2 rounded-xl text-xs font-bold w-fit">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              Online & Receiving Bookings
+            
+            <div className="flex items-center gap-2">
+              <Link 
+                to="/manage-booking"
+                className="bg-brand-red text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-[#c41a21] shadow-md shadow-brand-red/20 transition-all"
+              >
+                Go to Bookings Center →
+              </Link>
+              <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 px-3 py-2 rounded-xl text-xs font-bold">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                Dual-Control Fleet Active
+              </div>
             </div>
           </div>
 
-          <div className="space-y-12">
-            {APPOINTMENTS.map((group, i) => (
-              <div key={i} className="relative">
-                <div className="sticky top-24 z-10 bg-brand-offwhite/90 backdrop-blur-md py-4 mb-4">
-                  <h2 className="text-xl font-bold flex items-center gap-2">
-                    <motion.div 
-                      animate={{ scale: [1, 1.3, 1] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                      className="w-2.5 h-2.5 rounded-full bg-brand-red" 
-                    />
-                    {group.date}
-                  </h2>
-                </div>
-                
-                <div className="space-y-4 pl-4 border-l-2 border-black/10 relative">
-                  {group.items.map((apt, j) => (
-                    <motion.div 
-                      key={apt.id}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.2 + j * 0.1 }}
-                      className="bg-white rounded-2xl p-6 shadow-sm border border-black/5 relative hover:border-brand-red/30 hover:shadow-xl transition-all duration-300"
-                    >
-                      <div className="absolute top-1/2 -left-[21px] w-4 h-4 rounded-full bg-white border-2 border-brand-red -translate-y-1/2" />
-                      
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div>
-                          <div className="flex items-center gap-2 font-bold text-brand-red text-sm mb-1">
-                            <Clock className="w-4 h-4" />
-                            {apt.time}
-                          </div>
-                          <h3 className="text-lg font-bold mb-1">{apt.type}</h3>
-                          <div className="flex items-center gap-2 text-sm text-brand-black/60">
-                            <User className="w-4 h-4" />
-                            {apt.client}
-                          </div>
-                        </div>
-
-                        <div className="relative">
-                          <button 
-                            onClick={() => setActiveStatusDropdown(activeStatusDropdown === apt.id ? null : apt.id)}
-                            className={cn(
-                              "flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all duration-300",
-                              apt.status === 'Approved' ? "bg-green-50 text-green-700 border-green-200 hover:bg-green-100" : "bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100"
-                            )}
-                          >
-                            {apt.status === 'Approved' && <CheckCircle2 className="w-4 h-4" />}
-                            {apt.status}
-                            <ChevronDown className="w-4 h-4 ml-1 opacity-50" />
-                          </button>
-                          
-                          <AnimatePresence>
-                            {activeStatusDropdown === apt.id && (
-                              <motion.div 
-                                initial={{ opacity: 0, y: 5, scale: 0.95 }}
-                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                exit={{ opacity: 0, y: 5, scale: 0.95 }}
-                                transition={{ duration: 0.15 }}
-                                className="absolute right-0 top-full mt-2 w-40 bg-white rounded-xl shadow-xl border border-black/5 overflow-hidden z-20"
-                              >
-                                <button onClick={() => setActiveStatusDropdown(null)} className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-black/5 transition-colors">Approved</button>
-                                <button onClick={() => setActiveStatusDropdown(null)} className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-black/5 transition-colors">Pending</button>
-                                <button onClick={() => setActiveStatusDropdown(null)} className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-black/5 text-red-600 transition-colors">Cancel</button>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
+          <div className="space-y-4">
+            {bookingsList.map((apt) => (
+              <motion.div 
+                key={apt.id}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="bg-white rounded-2xl p-5 sm:p-6 shadow-sm border border-black/5 relative hover:border-brand-red/30 hover:shadow-xl transition-all duration-300"
+              >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-xs font-bold text-brand-black/50 bg-brand-offwhite px-2 py-0.5 rounded">
+                        #{apt.ref}
+                      </span>
+                      <div className="flex items-center gap-1.5 font-bold text-brand-red text-xs sm:text-sm">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>{apt.date} · {apt.time}</span>
                       </div>
-                    </motion.div>
-                  ))}
+                    </div>
+
+                    <h3 className="text-base sm:text-lg font-bold text-brand-black">{apt.packageTitle}</h3>
+                    
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-brand-black/70">
+                      <div className="flex items-center gap-1.5 font-semibold text-brand-black">
+                        <User className="w-3.5 h-3.5 text-brand-red" />
+                        <span>{apt.studentName}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{apt.phone}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-brand-red" />
+                        <span>{apt.suburb}, NSW</span>
+                      </div>
+                    </div>
+
+                    {apt.notes && (
+                      <div className="text-xs text-brand-black/60 bg-brand-offwhite p-2 rounded-lg mt-1 border border-black/5">
+                        <strong>Student Note:</strong> {apt.notes}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="relative">
+                      <button 
+                        onClick={() => setActiveStatusDropdown(activeStatusDropdown === apt.id ? null : apt.id)}
+                        className={cn(
+                          "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-all duration-300 cursor-pointer",
+                          apt.status === 'Confirmed' ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100" :
+                          apt.status === 'Pending' ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100" :
+                          apt.status === 'Completed' ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" :
+                          "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                        )}
+                      >
+                        {apt.status === 'Confirmed' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                        <span>{apt.status}</span>
+                        <ChevronDown className="w-3.5 h-3.5 opacity-50" />
+                      </button>
+                      
+                      <AnimatePresence>
+                        {activeStatusDropdown === apt.id && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: 5, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 5, scale: 0.95 }}
+                            transition={{ duration: 0.15 }}
+                            className="absolute right-0 top-full mt-2 w-36 bg-white rounded-xl shadow-xl border border-black/10 overflow-hidden z-30"
+                          >
+                            <button onClick={() => handleUpdateStatus(apt.id, 'Confirmed')} className="w-full text-left px-3.5 py-2 text-xs font-bold hover:bg-black/5 text-emerald-700 transition-colors">Confirm</button>
+                            <button onClick={() => handleUpdateStatus(apt.id, 'Pending')} className="w-full text-left px-3.5 py-2 text-xs font-bold hover:bg-black/5 text-amber-700 transition-colors">Pending</button>
+                            <button onClick={() => handleUpdateStatus(apt.id, 'Completed')} className="w-full text-left px-3.5 py-2 text-xs font-bold hover:bg-black/5 text-blue-700 transition-colors">Completed</button>
+                            <button onClick={() => handleUpdateStatus(apt.id, 'Cancelled')} className="w-full text-left px-3.5 py-2 text-xs font-bold hover:bg-black/5 text-red-600 transition-colors">Cancel</button>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    <a 
+                      href={`tel:${apt.phone.replace(/\s+/g, '')}`} 
+                      className="p-2 bg-brand-offwhite hover:bg-emerald-50 text-emerald-600 rounded-lg border border-black/5 transition-all"
+                      title="Call Student"
+                    >
+                      <Phone className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
                 </div>
-              </div>
+              </motion.div>
             ))}
           </div>
         </motion.div>
@@ -341,6 +388,17 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
 export function InstructorLogin() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
+  useEffect(() => {
+    if (isOwnerLoggedIn()) {
+      setIsLoggedIn(true);
+    }
+  }, []);
+
+  const handleLogout = () => {
+    logoutOwner();
+    setIsLoggedIn(false);
+  };
+
   return (
     <AnimatePresence mode="wait">
       {isLoggedIn ? (
@@ -351,7 +409,7 @@ export function InstructorLogin() {
           exit={{ opacity: 0, x: -30 }}
           transition={{ duration: 0.4, ease: [0.76, 0, 0.24, 1] }}
         >
-          <InstructorDashboard onLogout={() => setIsLoggedIn(false)} />
+          <InstructorDashboard onLogout={handleLogout} />
         </motion.div>
       ) : (
         <motion.div

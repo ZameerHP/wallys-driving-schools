@@ -18,6 +18,7 @@ import { BookNow } from './pages/BookNow';
 import { CoverageArea } from './pages/CoverageArea';
 import { ManageBooking } from './pages/ManageBooking';
 import { InstructorLogin } from './pages/InstructorLogin';
+import { Contact } from './pages/Contact';
 
 function AnimatedRoutes() {
   const location = useLocation();
@@ -29,6 +30,7 @@ function AnimatedRoutes() {
         <Route path="/packages" element={<PageTransition><Packages /></PageTransition>} />
         <Route path="/services" element={<PageTransition><Services /></PageTransition>} />
         <Route path="/about" element={<PageTransition><About /></PageTransition>} />
+        <Route path="/contact" element={<PageTransition><Contact /></PageTransition>} />
         <Route path="/faqs" element={<PageTransition><Faqs /></PageTransition>} />
         <Route path="/blog" element={<PageTransition><Blog /></PageTransition>} />
         <Route path="/blog/:id" element={<PageTransition><BlogPost /></PageTransition>} />
@@ -38,6 +40,19 @@ function AnimatedRoutes() {
         <Route path="/instructor-login" element={<PageTransition><InstructorLogin /></PageTransition>} />
       </Routes>
     </AnimatePresence>
+  );
+}
+
+function MainLayout() {
+  const location = useLocation();
+  const isBookNow = location.pathname === '/book-now';
+
+  return (
+    <SmoothScroll>
+      <Nav />
+      <AnimatedRoutes />
+      {!isBookNow && <Footer />}
+    </SmoothScroll>
   );
 }
 
@@ -156,11 +171,7 @@ export default function App() {
             transition={{ duration: 0.5, ease: "easeOut" }}
           >
             <Router>
-              <SmoothScroll>
-                <Nav />
-                <AnimatedRoutes />
-                <Footer />
-              </SmoothScroll>
+              <MainLayout />
             </Router>
           </motion.div>
         )}

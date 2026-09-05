@@ -115,7 +115,7 @@ export function About() {
                 name: 'Alvert Tine',
                 role: 'Senior Driving Instructor',
                 image: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=600',
-                exp: '10+ Years Experience'
+                exp: '5+ Years Experience'
               },
               {
                 id: 'sara-liner',

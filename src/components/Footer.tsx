@@ -51,6 +51,7 @@ export function Footer() {
               <li><Link to="/packages" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Packages & Pricing</Link></li>
               <li><Link to="/services" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Our Services</Link></li>
               <li><Link to="/coverage-area" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Coverage Area</Link></li>
+              <li><Link to="/contact" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Contact Us</Link></li>
               <li><Link to="/faqs" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Frequently Asked Questions</Link></li>
               <li><Link to="/blog" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Driving Guides & Blog</Link></li>
             </ul>

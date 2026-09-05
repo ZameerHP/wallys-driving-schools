@@ -12,6 +12,7 @@ const MAIN_LINKS = [
   { name: 'Blog', path: '/blog' },
   { name: 'FAQs', path: '/faqs' },
   { name: 'Coverage Area', path: '/coverage-area' },
+  { name: 'Contact', path: '/contact' },
 ];
 
 const LOGIN_LINKS = [
@@ -27,6 +28,7 @@ export function Nav() {
   
   const location = useLocation();
   const shouldReduceMotion = useReducedMotion();
+  const isBookNow = location.pathname === '/book-now';
 
   useEffect(() => {
     const handleScroll = () => {
@@ -72,8 +74,8 @@ export function Nav() {
         transition={{ delay: shouldReduceMotion ? 0 : 0.15, type: "spring", stiffness: 200, damping: 20 }}
         className={cn(
           'fixed top-0 left-0 right-0 z-50 transition-all duration-500',
-          scrolled 
-            ? 'bg-brand-black/90 backdrop-blur-2xl shadow-[0_10px_30px_rgba(0,0,0,0.8)] py-3.5 border-b border-white/10' 
+          scrolled || isBookNow
+            ? 'bg-brand-black/95 backdrop-blur-2xl shadow-[0_10px_30px_rgba(0,0,0,0.15)] py-3.5 border-b border-white/10' 
             : 'bg-gradient-to-b from-black/80 via-black/30 to-transparent py-6'
         )}
       >
