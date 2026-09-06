@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
+import PaymentsStep from '../components/booking/PaymentsStep';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -346,22 +347,16 @@ export function BookNow() {
     }
   }, [searchParams]);
 
-  // Dynamic Stepper Configuration
+  // 5 Canonical Wizard Steps (Service Selection -> Date & Time -> Cart -> Your Information -> Payments)
   const steps = useMemo(() => {
-    const list = [
+    return [
       { id: 'service', label: 'Service Selection', icon: Layers },
-    ];
-    if (selectedPackage) {
-      list.push({ id: 'package', label: 'Package', icon: PackageIcon });
-    }
-    list.push(
       { id: 'datetime', label: 'Date & Time', icon: CalendarIcon },
       { id: 'cart', label: 'Cart', icon: ShoppingCart },
       { id: 'info', label: 'Your Information', icon: User },
       { id: 'payment', label: 'Payments', icon: CreditCard }
-    );
-    return list;
-  }, [selectedPackage]);
+    ];
+  }, []);
 
   const currentStepIndex = steps.findIndex(s => s.id === activeStepId);
 
@@ -372,12 +367,6 @@ export function BookNow() {
         setShowPackageUpsell(true);
         return;
       }
-      if (selectedPackage) {
-        setActiveStepId('package');
-      } else {
-        setActiveStepId('datetime');
-      }
-    } else if (activeStepId === 'package') {
       setActiveStepId('datetime');
     } else if (activeStepId === 'datetime') {
       // Sync or update cart item
@@ -758,8 +747,8 @@ export function BookNow() {
                         {/* Status Indicator Icon with vertical white connecting line */}
                         <div className="pt-0.5 shrink-0 relative flex flex-col items-center">
                           {isCompleted ? (
-                            <div className="w-6 h-6 rounded-full bg-white text-brand-red flex items-center justify-center shadow-md relative z-10 font-bold">
-                              <Check className="w-3.5 h-3.5 stroke-[3]" />
+                            <div className="w-6 h-6 rounded-full bg-white text-emerald-600 flex items-center justify-center shadow-md relative z-10 font-bold">
+                              <Check className="w-3.5 h-3.5 stroke-[3] text-emerald-600" />
                             </div>
                           ) : isCurrent ? (
                             <div className="w-6 h-6 rounded-full border-2 border-white ring-2 ring-white/60 bg-white/30 flex items-center justify-center relative z-10">
@@ -1537,223 +1526,64 @@ export function BookNow() {
                     </motion.div>
                   )}
 
-                  {/* ================= STEP 6: PAYMENTS ================= */}
+                  {/* ================= STEP 5: PAYMENTS ================= */}
                   {activeStepId === 'payment' && (
                     <motion.div 
                       key="step-payment"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="space-y-6"
                     >
-                      {/* Order Summary */}
-                      <div className="bg-brand-offwhite rounded-2xl p-5 border border-black/10 space-y-2.5">
-                        <span className="text-xs font-bold uppercase tracking-wider text-brand-black/70 block">Order Summary</span>
-                        
-                        {cartItems.map((item, idx) => (
-                          <div key={idx} className="flex justify-between items-center text-xs sm:text-sm">
-                            <span className="font-semibold text-brand-black">{item.title}</span>
-                            <span className="font-bold text-brand-black">${item.price.toFixed(2)}</span>
-                          </div>
-                        ))}
-
-                        <div className="flex justify-between items-center text-xs text-brand-black/60 pt-2 border-t border-black/5">
-                          <span>Pickup Area:</span>
-                          <span className="font-medium">{suburbSearch}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-xs text-brand-black/60">
-                          <span>Scheduled Date & Time:</span>
-                          <span className="font-medium">{selectedDate} ({selectedTimeSlot})</span>
-                        </div>
-                        <div className="flex justify-between items-center text-xs text-brand-black/60">
-                          <span>Test Centre:</span>
-                          <span className="font-medium">{selectedTestCentre}</span>
-                        </div>
-
-                        <div className="flex justify-between items-center pt-3 border-t border-black/10 text-base sm:text-lg font-bold">
-                          <span>Total Amount to Pay:</span>
-                          <span className="text-brand-red font-display font-black text-xl sm:text-2xl">${cartSubtotal.toFixed(2)} AUD</span>
-                        </div>
-                      </div>
-
-                      {/* Stripe Notice / Return Alerts */}
-                      {stripeNotice && (
-                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-3 text-xs text-amber-800">
-                          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div className="flex-1">
-                            <span className="font-bold block">Payment Notice</span>
-                            <span>{stripeNotice}</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {stripeError && stripeError !== 'STRIPE_NOT_CONFIGURED' && (
-                        <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 flex items-start gap-3 text-xs text-rose-800">
-                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                          <div className="flex-1">
-                            <span className="font-bold block">Payment Error</span>
-                            <span>{stripeError}</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Payment Method Selection */}
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-brand-black/80 block">
-                            Select Payment Method
-                          </span>
-                          {stripeStatus?.configured && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                              Stripe {stripeStatus.mode.toUpperCase()} Connected
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div 
-                            onClick={() => {
-                              setPaymentMethod('card');
-                              setStripeError(null);
-                            }}
-                            className={cn(
-                              "p-4 rounded-xl border-2 transition-all cursor-pointer flex items-center justify-between",
-                              paymentMethod === 'card' 
-                                ? "border-brand-red bg-brand-red/5 shadow-sm" 
-                                : "border-black/10 hover:border-black/20"
-                            )}
-                          >
-                            <div className="flex items-center gap-3">
-                              <CreditCard className="w-5 h-5 text-brand-red" />
-                              <div>
-                                <span className="font-bold text-sm block">Credit / Debit / Apple Pay</span>
-                                <span className="text-[11px] text-brand-black/60">Official Stripe Checkout</span>
-                              </div>
-                            </div>
-                            <div className={cn(
-                              "w-4 h-4 rounded-full border-2 flex items-center justify-center",
-                              paymentMethod === 'card' ? "border-brand-red bg-brand-red" : "border-black/30"
-                            )}>
-                              {paymentMethod === 'card' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                            </div>
-                          </div>
-
-                          <div 
-                            onClick={() => {
-                              setPaymentMethod('cash');
-                              setStripeError(null);
-                            }}
-                            className={cn(
-                              "p-4 rounded-xl border-2 transition-all cursor-pointer flex items-center justify-between",
-                              paymentMethod === 'cash' 
-                                ? "border-brand-red bg-brand-red/5 shadow-sm" 
-                                : "border-black/10 hover:border-black/20"
-                            )}
-                          >
-                            <div className="flex items-center gap-3">
-                              <User className="w-5 h-5 text-brand-red" />
-                              <div>
-                                <span className="font-bold text-sm block">Pay In Car</span>
-                                <span className="text-[11px] text-brand-black/60">Pay cash on lesson day</span>
-                              </div>
-                            </div>
-                            <div className={cn(
-                              "w-4 h-4 rounded-full border-2 flex items-center justify-center",
-                              paymentMethod === 'cash' ? "border-brand-red bg-brand-red" : "border-black/30"
-                            )}>
-                              {paymentMethod === 'cash' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Details / Stripe Checkout Notice */}
-                      {paymentMethod === 'card' && (
-                        <div className="bg-brand-offwhite p-4 rounded-2xl border border-black/10 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Lock className="w-4 h-4 text-emerald-600" />
-                              <span className="font-bold text-xs text-brand-black">Stripe Hosted Checkout</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-black/5 text-brand-black/60">Visa</span>
-                              <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-black/5 text-brand-black/60">Mastercard</span>
-                              <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-black/5 text-brand-black/60">Apple Pay</span>
-                              <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-black/5 text-brand-black/60">Google Pay</span>
-                            </div>
-                          </div>
-
-                          <p className="text-xs text-brand-black/70 leading-relaxed">
-                            Clicking <strong>"Pay with Stripe"</strong> will securely open the Stripe payment gateway where you or your customer can pay by card, Apple Pay, or Google Pay. Once completed, your lesson is automatically confirmed and deposited into your Stripe account balance.
-                          </p>
-
-                          {stripeError === 'STRIPE_NOT_CONFIGURED' && (
-                            <div className="mt-3 p-3 bg-white border border-amber-300 rounded-xl space-y-2">
-                              <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
-                                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                                <span>Stripe Secret Key Required for Live Transactions</span>
-                              </div>
-                              <p className="text-[11px] text-brand-black/70">
-                                To receive customer payments into your real Stripe account, add your <code className="bg-black/5 px-1.5 py-0.5 rounded text-brand-red font-mono font-bold">STRIPE_SECRET_KEY</code> in project <strong>Settings &gt; Secrets</strong>.
-                              </p>
-                              <div className="pt-1 flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleConfirmAndPay(true)}
-                                  className="text-[11px] bg-brand-black text-white hover:bg-black/80 font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer"
-                                >
-                                  Test Booking (Simulate Payment)
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setPaymentMethod('cash')}
-                                  className="text-[11px] text-brand-black/70 hover:text-brand-black underline font-semibold px-2 cursor-pointer"
-                                >
-                                  Switch to Pay in Car
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      <div className="flex items-center gap-2 text-xs text-brand-black/60">
-                        <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        <span>256-bit encrypted checkout. No advance cancellation penalty.</span>
-                      </div>
+                      <PaymentsStep
+                        items={cartItems.length > 0 ? cartItems.map(it => ({
+                          id: it.id,
+                          name: it.title,
+                          unitPrice: it.price,
+                          quantity: 1,
+                          lineTotal: it.price
+                        })) : [{
+                          id: 'default-lesson',
+                          name: selectedPackage ? selectedPackage.name : (selectedService?.name || '1 Hour Driving Lesson'),
+                          unitPrice: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00),
+                          quantity: 1,
+                          lineTotal: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00)
+                        }]}
+                        customerInfo={{
+                          name: `${firstName || 'Learner'} ${lastName || 'Driver'}`.trim(),
+                          firstName,
+                          lastName,
+                          email,
+                          phone: `${countryCode} ${phone}`,
+                          address,
+                          pickupAddress: `${address}, ${suburbSearch}`.trim(),
+                          suburb: suburbSearch,
+                          date: selectedDate,
+                          time: selectedTimeSlot,
+                          bookingDate: selectedDate,
+                          bookingTime: selectedTimeSlot,
+                          notes: `Pickup: ${address}. Test Centre: ${selectedTestCentre}. Test Time: ${testTime || 'Not set'}.`,
+                          packageTitle: cartItems[0]?.title || selectedPackage?.name || selectedService?.name || 'Driving Lesson',
+                          packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedService?.price || 65.00)
+                        }}
+                        onBack={() => setActiveStepId('info')}
+                        onPaymentSuccess={(booking) => {
+                          setConfirmedBooking(booking);
+                        }}
+                      />
                     </motion.div>
                   )}
 
                 </AnimatePresence>
               </div>
 
-              {/* Card Footer: Red Continue / Confirm Button */}
-              <div className="shrink-0 pt-3 mt-2 border-t border-black/5 flex items-center justify-between">
-                <div className="text-xs text-brand-black/50 font-medium">
-                  {activeStepId !== 'payment' && (
+              {/* Card Footer: Only shown on steps 1-4, Payments has its own action buttons */}
+              {activeStepId !== 'payment' && (
+                <div className="shrink-0 pt-3 mt-2 border-t border-black/5 flex items-center justify-between">
+                  <div className="text-xs text-brand-black/50 font-medium">
                     <span>Step {currentStepIndex + 1} of {steps.length}</span>
-                  )}
-                </div>
+                  </div>
 
-                <div>
-                  {activeStepId === 'payment' ? (
-                    <button
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={handleConfirmAndPay}
-                      className="bg-brand-red hover:bg-[#c41a21] text-white font-bold px-7 py-2.5 rounded-xl shadow-lg shadow-brand-red/30 transition-all text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                    >
-                      {isProcessing ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          <span>Confirming Booking...</span>
-                        </>
-                      ) : (
-                        <span>Confirm & Pay (${cartSubtotal.toFixed(2)})</span>
-                      )}
-                    </button>
-                  ) : (
+                  <div>
                     <button
                       type="button"
                       onClick={goToNextStep}
@@ -1762,9 +1592,9 @@ export function BookNow() {
                       <span>Continue</span>
                       <ChevronRight className="w-4 h-4" />
                     </button>
-                  )}
+                  </div>
                 </div>
-              </div>
+              )}
 
             </div>
           </div>

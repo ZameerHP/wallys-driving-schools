@@ -19,6 +19,8 @@ export interface BookingItem {
   notes?: string;
   createdAt: string;
   isRescheduled?: boolean;
+  paymentStatus?: 'paid' | 'unpaid' | string;
+  stripeSessionId?: string | null;
 }
 
 const STORAGE_KEY = 'wallys_bookings_v3';
@@ -130,6 +132,8 @@ export function mapDbToBookingItem(row: any): BookingItem {
       ? new Date(row.created_at || row.createdAt).toISOString().split('T')[0] 
       : new Date().toISOString().split('T')[0],
     isRescheduled: Boolean(row.is_rescheduled || row.isRescheduled || (row.notes && row.notes.includes('[RESCHEDULED]'))),
+    paymentStatus: row.payment_status || row.paymentStatus || 'unpaid',
+    stripeSessionId: row.stripe_session_id || row.stripeSessionId || null,
   };
 }
 

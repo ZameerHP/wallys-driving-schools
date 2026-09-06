@@ -22,7 +22,8 @@ import {
   Edit3, 
   RefreshCw,
   Lock,
-  ChevronRight
+  ChevronRight,
+  CreditCard
 } from 'lucide-react';
 import { 
   searchCustomerBookings, 
@@ -31,6 +32,7 @@ import {
   getStoredBookings
 } from '../lib/bookings';
 import { cn } from '../lib/utils';
+import PaymentsStep from '../components/booking/PaymentsStep';
 
 const AVAILABLE_TIMES = [
   '08:30 AM - 09:30 AM',
@@ -64,6 +66,9 @@ export function ManageBooking() {
   const [newAddress, setNewAddress] = useState('');
   const [isSavingAddress, setIsSavingAddress] = useState(false);
   const [addressSuccess, setAddressSuccess] = useState<string | null>(null);
+
+  // Online Payment Modal
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   // Search logic
   const handleSearch = async (queryToSearch: string) => {
@@ -351,6 +356,26 @@ export function ManageBooking() {
                   {selectedBooking.status === 'Confirmed' && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
                   <span>{selectedBooking.status === 'Pending' ? 'Pending Confirmation' : selectedBooking.status}</span>
                 </span>
+
+                {/* Payment Status Badge */}
+                <span className={cn(
+                  "text-xs font-black px-3.5 py-1 rounded-full uppercase tracking-wider border flex items-center gap-1.5",
+                  selectedBooking.paymentStatus === 'paid'
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : "bg-neutral-100 text-neutral-700 border-neutral-300"
+                )}>
+                  {selectedBooking.paymentStatus === 'paid' ? (
+                    <>
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      <span>Paid Online</span>
+                    </>
+                  ) : (
+                    <>
+                      <CreditCard className="w-3 h-3 text-neutral-500" />
+                      <span>Pay In Car / Unpaid</span>
+                    </>
+                  )}
+                </span>
               </div>
             </div>
 
@@ -474,6 +499,18 @@ export function ManageBooking() {
 
             {/* Action Buttons */}
             <div className="pt-6 border-t border-black/5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              {/* Pay Online Button (if not already paid) */}
+              {selectedBooking.paymentStatus !== 'paid' && (
+                <button
+                  type="button"
+                  onClick={() => setShowPaymentModal(true)}
+                  className="flex-1 bg-neutral-950 hover:bg-black text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+                >
+                  <CreditCard className="w-4 h-4 text-[#FFC439]" />
+                  <span>Pay Online (Stripe / PayPal)</span>
+                </button>
+              )}
+
               {/* Reschedule Button */}
               <button
                 type="button"
@@ -699,6 +736,61 @@ export function ManageBooking() {
                   </button>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Online Payment Modal using shared PaymentsStep */}
+        {showPaymentModal && selectedBooking && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-black/10 relative my-8 max-h-[90vh] overflow-y-auto"
+            >
+              <button
+                type="button"
+                onClick={() => setShowPaymentModal(false)}
+                className="absolute top-4 right-4 p-2 rounded-full hover:bg-black/5 text-black/50 hover:text-black transition-colors z-10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <PaymentsStep
+                bookingRef={selectedBooking.ref}
+                items={[{
+                  id: `item-${selectedBooking.ref}`,
+                  name: selectedBooking.packageTitle,
+                  unitPrice: selectedBooking.packagePrice,
+                  quantity: 1,
+                  lineTotal: selectedBooking.packagePrice
+                }]}
+                customerInfo={{
+                  name: selectedBooking.studentName,
+                  email: selectedBooking.email,
+                  phone: selectedBooking.phone,
+                  address: selectedBooking.pickupAddress || selectedBooking.suburb,
+                  pickupAddress: selectedBooking.pickupAddress || selectedBooking.suburb,
+                  suburb: selectedBooking.suburb,
+                  date: selectedBooking.date,
+                  time: selectedBooking.time,
+                  bookingDate: selectedBooking.date,
+                  bookingTime: selectedBooking.time,
+                  packageTitle: selectedBooking.packageTitle,
+                  packagePrice: selectedBooking.packagePrice
+                }}
+                onBack={() => setShowPaymentModal(false)}
+                onPaymentSuccess={(verifiedBooking) => {
+                  setSelectedBooking({
+                    ...selectedBooking,
+                    ...verifiedBooking,
+                    paymentStatus: 'paid',
+                    status: 'Confirmed'
+                  });
+                  setShowPaymentModal(false);
+                }}
+              />
             </motion.div>
           </div>
         )}
