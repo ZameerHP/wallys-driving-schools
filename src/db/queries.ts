@@ -1,6 +1,6 @@
 import { db, isSqlConfigured } from './index.ts';
 import { users, bookings, contactMessages } from './schema.ts';
-import { eq, desc, or } from 'drizzle-orm';
+import { eq, desc, or, and, ne } from 'drizzle-orm';
 
 // In-memory fallback stores for offline/sandbox environments
 const inMemoryUsers: Map<string, any> = new Map();
@@ -186,6 +186,47 @@ export async function getBookingByRef(bookingRef: string) {
   const cleanRef = bookingRef.trim().toUpperCase();
   const found = inMemoryBookings.find(b => b.bookingRef.toUpperCase() === cleanRef);
   return found || null;
+}
+
+// Check if a time slot on a specific date is already taken by an active booking (prevent double-booking)
+export async function checkSlotBooked(date: string, time: string, excludeRef?: string): Promise<boolean> {
+  const normalizedDate = date.trim();
+  const normalizedTime = time.trim();
+
+  // 1. Check PostgreSQL database if configured
+  if (isSqlConfigured && db) {
+    try {
+      const rows = await db
+        .select()
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.date, normalizedDate),
+            eq(bookings.time, normalizedTime),
+            ne(bookings.status, 'Cancelled')
+          )
+        );
+
+      const activeRows = rows.filter(r => !excludeRef || r.bookingRef !== excludeRef);
+      if (activeRows.length > 0) {
+        return true;
+      }
+    } catch (error: any) {
+      console.warn('[AI Studio] checkSlotBooked SQL query fallback:', error?.message);
+    }
+  }
+
+  // 2. Check in-memory store
+  const inMemoryConflict = inMemoryBookings.some(b => {
+    if (excludeRef && b.bookingRef === excludeRef) return false;
+    return (
+      b.date === normalizedDate &&
+      b.time === normalizedTime &&
+      b.status !== 'Cancelled'
+    );
+  });
+
+  return inMemoryConflict;
 }
 
 // Insert new driving lesson booking

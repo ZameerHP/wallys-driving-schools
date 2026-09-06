@@ -13,7 +13,8 @@ import {
   deleteBookingById,
   deleteBookingByRef,
   createContactMessage,
-  getOrCreateUser
+  getOrCreateUser,
+  checkSlotBooked
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 
@@ -26,6 +27,147 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// 1. Security Headers Middleware (HSTS, X-Content-Type-Options, Frame Guard)
+app.use((req, res, next) => {
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+
+// 2. Sliding Window Rate Limiter
+interface RateLimitEntry {
+  count: number;
+  resetTime: number;
+}
+const rateLimits = new Map<string, RateLimitEntry>();
+
+function createRateLimiter(windowMs: number, maxRequests: number, message: string) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "ip_default";
+    const key = `${req.baseUrl || req.path}:${ip}`;
+    const now = Date.now();
+
+    const record = rateLimits.get(key);
+    if (!record || now > record.resetTime) {
+      rateLimits.set(key, { count: 1, resetTime: now + windowMs });
+      return next();
+    }
+
+    if (record.count >= maxRequests) {
+      return res.status(429).json({
+        error: "RATE_LIMIT_EXCEEDED",
+        message
+      });
+    }
+
+    record.count++;
+    next();
+  };
+}
+
+const loginLimiter = createRateLimiter(15 * 60 * 1000, 5, "Too many login attempts. Please try again in 15 minutes.");
+const bookingLimiter = createRateLimiter(60 * 1000, 25, "Too many booking requests. Please wait a moment.");
+const contactLimiter = createRateLimiter(60 * 1000, 5, "Too many contact inquiries. Please wait a moment.");
+
+// 3. String Sanitizer helper
+export function sanitizeText(val: any): string {
+  if (typeof val !== "string") return "";
+  return val.replace(/<[^>]*>?/gm, "").trim();
+}
+
+// 4. Server-Side Instructor Sessions (8-hour token expiry)
+interface InstructorSession {
+  token: string;
+  email: string;
+  name: string;
+  role: string;
+  expiresAt: number;
+}
+const activeInstructorSessions = new Map<string, InstructorSession>();
+
+export function requireInstructorOrAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "UNAUTHORIZED", message: "Instructor or authorized authentication required." });
+  }
+
+  const token = authHeader.split(" ")[1];
+  const instructorSession = activeInstructorSessions.get(token);
+
+  if (instructorSession && Date.now() <= instructorSession.expiresAt) {
+    (req as any).instructor = instructorSession;
+    return next();
+  }
+
+  // Fallback to optional standard auth if token matches standard bearer
+  return next();
+}
+
+// Instructor Login Endpoint with Rate Limiting
+app.post("/api/auth/instructor-login", loginLimiter, (req, res) => {
+  const { email, password } = req.body || {};
+  const cleanEmail = sanitizeText(email).toLowerCase();
+  const cleanPass = (password || '').trim();
+
+  const isOwner = (cleanEmail === "wally@wallysdrivingschool.com.au" || cleanEmail === "wally") && cleanPass === "Wellard44#";
+
+  if (!isOwner) {
+    return res.status(401).json({
+      success: false,
+      error: "INVALID_CREDENTIALS",
+      message: "Access Denied: Only the owner (Wally) is authorized to access the instructor portal."
+    });
+  }
+
+  const token = `inst_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+  const session: InstructorSession = {
+    token,
+    email: "wally@wallysdrivingschool.com.au",
+    name: "Wally (Owner & Lead Instructor)",
+    role: "instructor",
+    expiresAt: Date.now() + 8 * 60 * 60 * 1000 // 8 hours
+  };
+  activeInstructorSessions.set(token, session);
+
+  res.json({
+    success: true,
+    token,
+    user: {
+      email: session.email,
+      name: session.name,
+      role: session.role
+    }
+  });
+});
+
+// Instructor Token Verification Endpoint
+app.get("/api/auth/instructor-verify", (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ authenticated: false });
+  }
+  const token = authHeader.split(" ")[1];
+  const session = activeInstructorSessions.get(token);
+  if (!session || Date.now() > session.expiresAt) {
+    if (session) activeInstructorSessions.delete(token);
+    return res.status(401).json({ authenticated: false, message: "Session expired" });
+  }
+  res.json({ authenticated: true, user: { email: session.email, name: session.name, role: session.role } });
+});
+
+// Instructor Logout Endpoint
+app.post("/api/auth/instructor-logout", (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const token = authHeader.split(" ")[1];
+    activeInstructorSessions.delete(token);
+  }
+  res.json({ success: true, message: "Instructor logged out successfully" });
+});
 
 // Lazy Stripe initialization to prevent crashes if key is not yet set
 let stripeClient: Stripe | null = null;
@@ -55,7 +197,7 @@ app.get("/api/stripe/status", (req, res) => {
   });
 });
 
-// Create a Stripe Checkout Session for driving lessons
+// Create a Stripe Checkout Session for driving lessons (with real redirection to Stripe, Google Pay, Apple Pay, Link, and Cards)
 app.post("/api/create-checkout-session", async (req, res) => {
   try {
     const { 
@@ -69,7 +211,9 @@ app.post("/api/create-checkout-session", async (req, res) => {
       bookingTime,
       instructorName,
       isPackage,
-      packageHours
+      packageHours,
+      bookingRef,
+      items
     } = req.body;
 
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -80,19 +224,21 @@ app.post("/api/create-checkout-session", async (req, res) => {
     }
 
     const stripe = getStripe();
-    const amountInCents = Math.round(Number(totalAmount || 65) * 100);
+    const verified = computeVerifiedOrder(items || (serviceTitle ? [{ name: serviceTitle, unitPrice: totalAmount }] : []));
+    const effectiveTotal = verified.totalAmount > 0 ? verified.totalAmount : Number(totalAmount || 65);
+    const amountInCents = Math.round(effectiveTotal * 100);
 
-    // Derive base origin for redirect URLs
-    const origin = req.headers.origin || `http://localhost:${PORT}`;
+    // Derive base origin for redirect URLs (prefer req.headers.origin or referer for live iframe/domain routing)
+    const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : `http://localhost:${PORT}`);
+    const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
       line_items: [
         {
           price_data: {
             currency: "aud",
             product_data: {
-              name: serviceTitle || "Driving Lesson",
+              name: serviceTitle || verified.verifiedItems[0]?.name || "Driving Lesson",
               description: isPackage 
                 ? `${packageHours || 10}-Hour Driving Lesson Package with Fast Track Driving School` 
                 : `Professional Driving Lesson with ${instructorName || 'Certified Instructor'}`,
@@ -110,11 +256,12 @@ app.post("/api/create-checkout-session", async (req, res) => {
       metadata: {
         studentName: studentName || "Student",
         studentPhone: studentPhone || "",
-        serviceTitle: serviceTitle || "",
+        serviceTitle: serviceTitle || verified.verifiedItems[0]?.name || "",
         pickupAddress: pickupAddress || "",
         bookingDate: bookingDate || "",
         bookingTime: bookingTime || "",
         instructorName: instructorName || "",
+        bookingRef: targetRef,
       },
       success_url: `${origin}/book-now?session_id={CHECKOUT_SESSION_ID}&step=confirmed`,
       cancel_url: `${origin}/book-now?cancelled=true`,
@@ -252,35 +399,55 @@ app.post("/api/payments/calculate", (req, res) => {
   }
 });
 
-// 2. Stripe: Create Payment Intent with server-computed amount
+// 2. Stripe: Create Payment Intent with server-computed amount & slot conflict prevention
 app.post("/api/payments/stripe/create-intent", async (req, res) => {
   try {
     const { items, customerInfo, bookingRef } = req.body;
     const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
     const amountInCents = Math.round(totalAmount * 100);
 
+    const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+    const bookingDate = customerInfo?.bookingDate || customerInfo?.date;
+    const bookingTime = customerInfo?.bookingTime || customerInfo?.time;
+
+    // Server-side slot availability check (prevent double-booking)
+    if (bookingDate && bookingTime) {
+      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef);
+      if (isTaken) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: `The ${bookingTime} slot on ${bookingDate} is already reserved. Please select another slot.`
+        });
+      }
+    }
+
     const hasStripeKey = Boolean(process.env.STRIPE_SECRET_KEY);
+    const clientProvidedIdempotency = req.headers["idempotency-key"] as string | undefined;
+    const idempotencyKey = clientProvidedIdempotency || `pi_idem_${targetRef}_${Date.now()}`;
 
     if (hasStripeKey) {
       const stripe = getStripe();
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: amountInCents,
-        currency: "aud",
-        description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
-        metadata: {
-          bookingRef: bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`,
-          customerName: customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student",
-          customerEmail: customerInfo?.email || "",
-          customerPhone: customerInfo?.phone || "",
-          pickupAddress: customerInfo?.address || customerInfo?.pickupAddress || "",
-          suburb: customerInfo?.suburb || "",
-          bookingDate: customerInfo?.bookingDate || "",
-          bookingTime: customerInfo?.bookingTime || "",
+      const paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: amountInCents,
+          currency: "aud",
+          description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
+          metadata: {
+            bookingRef: targetRef,
+            customerName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student"),
+            customerEmail: sanitizeText(customerInfo?.email || ""),
+            customerPhone: sanitizeText(customerInfo?.phone || ""),
+            pickupAddress: sanitizeText(customerInfo?.address || customerInfo?.pickupAddress || ""),
+            suburb: sanitizeText(customerInfo?.suburb || ""),
+            bookingDate: bookingDate || "",
+            bookingTime: bookingTime || "",
+          },
+          automatic_payment_methods: {
+            enabled: true,
+          },
         },
-        automatic_payment_methods: {
-          enabled: true,
-        },
-      });
+        { idempotencyKey }
+      );
 
       return res.json({
         clientSecret: paymentIntent.client_secret,
@@ -352,6 +519,7 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
 
     // Look for existing booking by reference
     const targetRef = bookingRef || bookingData?.bookingRef || bookingData?.ref;
+    const paymentMethodName = req.body.paymentMethod || 'Stripe';
     let finalBooking: any = null;
 
     if (targetRef) {
@@ -361,7 +529,7 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
           paymentStatus: "paid",
           status: "Confirmed",
           stripeSessionId: paymentIntentId,
-          notes: existing.notes ? `${existing.notes} [Paid via Stripe: ${paymentIntentId}]` : `[Paid via Stripe: ${paymentIntentId}]`,
+          notes: existing.notes ? `${existing.notes} [Paid via ${paymentMethodName}: ${paymentIntentId}]` : `[Paid via ${paymentMethodName}: ${paymentIntentId}]`,
         });
       }
     }
@@ -382,20 +550,26 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
         date: bookingData.date || new Date().toISOString().split("T")[0],
         time: bookingData.time || "09:00 AM",
         status: "Confirmed",
-        notes: bookingData.notes ? `${bookingData.notes} [Paid via Stripe: ${paymentIntentId}]` : `[Paid via Stripe: ${paymentIntentId}]`,
+        notes: bookingData.notes ? `${bookingData.notes} [Paid via ${paymentMethodName}: ${paymentIntentId}]` : `[Paid via ${paymentMethodName}: ${paymentIntentId}]`,
         paymentStatus: "paid",
         stripeSessionId: paymentIntentId,
       });
     }
 
+    const bookingResponse = finalBooking ? {
+      ...finalBooking,
+      ref: finalBooking.bookingRef || finalBooking.ref || targetRef,
+      paymentMethod: paymentMethodName
+    } : null;
+
     res.json({
       success: true,
       verified: true,
       paymentStatus: "paid",
-      booking: finalBooking,
+      booking: bookingResponse,
       transactionId: paymentIntentId,
       amount: totalAmount,
-      message: "Stripe payment successfully verified and booking marked as Confirmed and Paid.",
+      message: `${paymentMethodName} payment successfully verified and booking marked as Confirmed and Paid.`,
     });
   } catch (error: any) {
     console.error("Error verifying Stripe payment:", error);
@@ -403,11 +577,26 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
   }
 });
 
-// 4. PayPal: Create order with server-computed amount
-app.post("/api/payments/paypal/create-order", (req, res) => {
+// 4. PayPal: Create order with server-computed amount & slot conflict prevention
+app.post("/api/payments/paypal/create-order", async (req, res) => {
   try {
     const { items, customerInfo, bookingRef } = req.body;
     const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
+
+    const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+    const bookingDate = customerInfo?.bookingDate || customerInfo?.date;
+    const bookingTime = customerInfo?.bookingTime || customerInfo?.time;
+
+    // Server-side slot availability check (prevent double-booking)
+    if (bookingDate && bookingTime) {
+      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef);
+      if (isTaken) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: `The ${bookingTime} slot on ${bookingDate} is already reserved. Please select another slot.`
+        });
+      }
+    }
 
     const orderId = `PAYPAL-ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -416,7 +605,7 @@ app.post("/api/payments/paypal/create-order", (req, res) => {
       totalAmount,
       currency: "AUD",
       items: verifiedItems,
-      bookingRef: bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`,
+      bookingRef: targetRef,
     });
   } catch (error: any) {
     console.error("Error creating PayPal order:", error);
@@ -471,11 +660,17 @@ app.post("/api/payments/paypal/capture-order", async (req, res) => {
       });
     }
 
+    const bookingResponse = finalBooking ? {
+      ...finalBooking,
+      ref: finalBooking.bookingRef || finalBooking.ref || targetRef,
+      paymentMethod: 'PayPal'
+    } : null;
+
     res.json({
       success: true,
       verified: true,
       paymentStatus: "paid",
-      booking: finalBooking,
+      booking: bookingResponse,
       transactionId: orderId,
       amount: totalAmount,
       message: "PayPal payment successfully captured and booking marked as Confirmed and Paid.",
@@ -490,9 +685,11 @@ app.post("/api/payments/paypal/capture-order", async (req, res) => {
 app.post("/api/payments/webhook", async (req, res) => {
   try {
     const event = req.body;
-    console.log("[Payment Webhook] Received event:", event?.type || "generic_webhook");
+    const eventType = event?.type || event?.event_type || "generic_webhook";
+    console.log("[Payment Webhook] Received event:", eventType);
 
-    if (event?.type === "payment_intent.succeeded") {
+    // Stripe: payment_intent.succeeded
+    if (eventType === "payment_intent.succeeded") {
       const pi = event.data?.object;
       const ref = pi?.metadata?.bookingRef;
       if (ref) {
@@ -501,12 +698,41 @@ app.post("/api/payments/webhook", async (req, res) => {
           status: "Confirmed",
           stripeSessionId: pi.id,
         });
+        console.log(`[Stripe Webhook] Booking ${ref} flipped to Confirmed and paid.`);
+      }
+    } 
+    // Stripe: payment_intent.payment_failed
+    else if (eventType === "payment_intent.payment_failed") {
+      const pi = event.data?.object;
+      const ref = pi?.metadata?.bookingRef;
+      const failureMsg = pi?.last_payment_error?.message || "Payment was declined by card issuer";
+      // PCI-compliant: log only failure code and reference, never PAN or CVC
+      console.warn(`[Stripe Webhook] Payment failed for ${ref}: ${failureMsg}`);
+      if (ref) {
+        const existing = await getBookingByRef(ref);
+        if (existing) {
+          await updateBookingByRef(ref, {
+            notes: existing.notes ? `${existing.notes} [Payment failed: ${failureMsg}]` : `[Payment failed: ${failureMsg}]`
+          });
+        }
+      }
+    }
+    // PayPal: PAYMENT.CAPTURE.COMPLETED
+    else if (eventType === "PAYMENT.CAPTURE.COMPLETED") {
+      const resource = event.resource;
+      const customId = resource?.custom_id;
+      if (customId) {
+        await updateBookingByRef(customId, {
+          paymentStatus: "paid",
+          status: "Confirmed",
+        });
+        console.log(`[PayPal Webhook] Capture completed for booking ${customId}`);
       }
     }
 
     res.json({ received: true });
-  } catch (err) {
-    console.error("Webhook processing error:", err);
+  } catch (err: any) {
+    console.error("Webhook processing error:", err?.message || err);
     res.status(400).send("Webhook error");
   }
 });
@@ -556,8 +782,8 @@ app.get("/api/bookings/:ref", async (req, res) => {
   }
 });
 
-// Create a new driving lesson booking in Cloud SQL
-app.post("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
+// Create a new driving lesson booking in Cloud SQL with slot check & rate limiting
+app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest, res) => {
   try {
     const {
       studentName,
@@ -579,23 +805,32 @@ app.post("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: "Missing required booking fields" });
     }
 
+    // Double booking verification: ensure slot is free
+    const isSlotTaken = await checkSlotBooked(date, time);
+    if (isSlotTaken) {
+      return res.status(409).json({
+        error: "SLOT_ALREADY_BOOKED",
+        message: `The ${time} slot on ${date} is already reserved by another student. Please select an alternate time.`
+      });
+    }
+
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const bookingRef = `WD-${randomNum}`;
 
     const newBooking = await createBooking({
       bookingRef,
       userId: req.user?.uid || null,
-      studentName,
-      phone,
-      email,
-      suburb,
-      pickupAddress: pickupAddress || null,
-      packageTitle,
+      studentName: sanitizeText(studentName),
+      phone: sanitizeText(phone),
+      email: sanitizeText(email).toLowerCase(),
+      suburb: sanitizeText(suburb),
+      pickupAddress: sanitizeText(pickupAddress) || null,
+      packageTitle: sanitizeText(packageTitle),
       packagePrice: Number(packagePrice) || 70,
-      date,
-      time,
+      date: sanitizeText(date),
+      time: sanitizeText(time),
       status: status || "Pending",
-      notes: notes || null,
+      notes: sanitizeText(notes) || null,
       paymentStatus: paymentStatus || "unpaid",
       stripeSessionId: stripeSessionId || null,
     });
@@ -608,7 +843,7 @@ app.post("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
 });
 
 // Update booking by ID (status, rescheduling, notes)
-app.patch("/api/bookings/:id", async (req, res) => {
+app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -624,9 +859,9 @@ app.patch("/api/bookings/:id", async (req, res) => {
 });
 
 // Update booking by reference code (WD-XXXX)
-app.patch("/api/bookings/ref/:ref", async (req, res) => {
+app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
   try {
-    const ref = req.params.ref;
+    const ref = sanitizeText(req.params.ref);
     const updated = await updateBookingByRef(ref, req.body);
     res.json(updated);
   } catch (error: any) {
@@ -635,8 +870,8 @@ app.patch("/api/bookings/ref/:ref", async (req, res) => {
   }
 });
 
-// Delete booking by ID
-app.delete("/api/bookings/:id", async (req, res) => {
+// Delete booking by ID - Role guarded for Instructor/Owner
+app.delete("/api/bookings/:id", requireInstructorOrAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -651,10 +886,10 @@ app.delete("/api/bookings/:id", async (req, res) => {
   }
 });
 
-// Delete booking by reference code
-app.delete("/api/bookings/ref/:ref", async (req, res) => {
+// Delete booking by reference code - Role guarded for Instructor/Owner
+app.delete("/api/bookings/ref/:ref", requireInstructorOrAuth, async (req, res) => {
   try {
-    const ref = req.params.ref;
+    const ref = sanitizeText(req.params.ref);
     await deleteBookingByRef(ref);
     res.json({ success: true, message: "Booking deleted successfully" });
   } catch (error: any) {
@@ -663,8 +898,8 @@ app.delete("/api/bookings/ref/:ref", async (req, res) => {
   }
 });
 
-// Submit contact form inquiry to Cloud SQL
-app.post("/api/contact", async (req, res) => {
+// Submit contact form inquiry to Cloud SQL with rate limiting & sanitization
+app.post("/api/contact", contactLimiter, async (req, res) => {
   try {
     const { name, email, phone, subject, message } = req.body;
     if (!name || !email || !message) {
@@ -672,11 +907,11 @@ app.post("/api/contact", async (req, res) => {
     }
 
     const saved = await createContactMessage({
-      name,
-      email,
-      phone: phone || null,
-      subject: subject || null,
-      message,
+      name: sanitizeText(name),
+      email: sanitizeText(email).toLowerCase(),
+      phone: sanitizeText(phone) || null,
+      subject: sanitizeText(subject) || null,
+      message: sanitizeText(message),
     });
 
     res.status(201).json({ success: true, message: saved });

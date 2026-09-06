@@ -44,22 +44,41 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
 
-    setTimeout(() => {
+    try {
+      const res = await fetch("/api/auth/instructor-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await res.json();
+      setIsLoading(false);
+
+      if (res.ok && data.success) {
+        if (data.token) {
+          localStorage.setItem("instructor_token", data.token);
+        }
+        setOwnerLoggedIn(true);
+        onLogin();
+      } else {
+        setError(data.message || 'Access Denied: Only the owner (Wally) is authorized to access the instructor portal.');
+      }
+    } catch {
+      // Offline fallback
       setIsLoading(false);
       const isValid = checkOwnerAuth(email, password);
-
       if (isValid) {
         setOwnerLoggedIn(true);
         onLogin();
       } else {
-        setError('Access Denied: Only the owner (Wally) is authorized to access the instructor portal. Please check your username and password.');
+        setError('Access Denied: Only the owner (Wally) is authorized to access the instructor portal. Please check your credentials.');
       }
-    }, 400);
+    }
   };
 
   const handleAutofill = () => {

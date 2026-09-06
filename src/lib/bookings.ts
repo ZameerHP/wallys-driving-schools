@@ -6,6 +6,7 @@ import { getSupabase, isSupabaseConfigured } from './supabase';
 export interface BookingItem {
   id: string;
   ref: string;
+  bookingRef?: string;
   studentName: string;
   phone: string;
   email: string;
@@ -20,6 +21,7 @@ export interface BookingItem {
   createdAt: string;
   isRescheduled?: boolean;
   paymentStatus?: 'paid' | 'unpaid' | string;
+  paymentMethod?: string;
   stripeSessionId?: string | null;
 }
 
@@ -467,12 +469,18 @@ export async function deleteBookingFromDb(id: string, targetRef?: string): Promi
   const refToMatch = targetRef || (id.startsWith('WD-') ? id : undefined);
   const cleanId = String(id).replace(/^b-/, '');
   const numId = parseInt(cleanId, 10);
+  const token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
 
   // 1. Delete from Backend API (Cloud SQL) by Ref
   if (refToMatch) {
     try {
       await fetch(`/api/bookings/ref/${encodeURIComponent(refToMatch)}`, {
         method: 'DELETE',
+        headers,
       });
     } catch (err) {
       console.warn('Failed to delete from API by ref:', err);
@@ -484,9 +492,10 @@ export async function deleteBookingFromDb(id: string, targetRef?: string): Promi
     try {
       await fetch(`/api/bookings/${numId}`, {
         method: 'DELETE',
+        headers,
       });
     } catch (err) {
-      console.warn('Failed to delete from API by id:', err);
+      console.warn('Failed to delete from API by ID:', err);
     }
   }
 

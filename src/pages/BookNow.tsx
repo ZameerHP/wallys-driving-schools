@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useSearchParams } from 'react-router-dom';
 import { 
@@ -228,6 +228,40 @@ export function BookNow() {
     document.documentElement.style.backgroundColor = '#ffffff';
     return () => {
       document.documentElement.style.backgroundColor = prevBg;
+    };
+  }, []);
+
+  // Isolated Booking Section Scroll & Chaining Prevention
+  const bookingScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = bookingScrollRef.current;
+    if (!el) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      const { deltaY } = e;
+      if (!deltaY) return;
+
+      const scrollTop = el.scrollTop;
+      const scrollHeight = el.scrollHeight;
+      const clientHeight = el.clientHeight;
+
+      const isScrollingUp = deltaY < 0;
+      const isScrollingDown = deltaY > 0;
+
+      const atTop = scrollTop <= 0;
+      const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
+
+      // Intercept only when at boundaries so internal scrolling is completely smooth
+      // and prevent wheel event from falling through and scrolling the parent page
+      if ((atTop && isScrollingUp) || (atBottom && isScrollingDown)) {
+        e.preventDefault();
+      }
+    };
+
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', handleWheel);
     };
   }, []);
 
@@ -636,28 +670,44 @@ export function BookNow() {
                 <CheckCircle2 className="w-8 h-8" />
               </div>
               
-              <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold uppercase tracking-wider mb-2">
-                <Clock className="w-3.5 h-3.5 text-amber-700" />
-                Status: Pending Instructor Confirmation
-              </span>
+              {confirmedBooking.paymentStatus === 'paid' ? (
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold uppercase tracking-wider mb-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                  Status: Booking Confirmed & Paid
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold uppercase tracking-wider mb-2">
+                  <Clock className="w-3.5 h-3.5 text-amber-700" />
+                  Status: Pending Instructor Confirmation
+                </span>
+              )}
               <h2 className="text-2xl sm:text-3xl font-display font-bold text-brand-black mb-1.5">
                 Thank You, {confirmedBooking.studentName}!
               </h2>
               <p className="text-brand-black/70 text-xs sm:text-sm mb-5 max-w-md mx-auto">
-                Your driving lesson booking has been received. Wally (Owner & Instructor) will review your appointment and mark it <strong>Confirmed</strong> in the instructor portal.
+                {confirmedBooking.paymentStatus === 'paid' 
+                  ? "Your driving lesson booking is confirmed and payment has been processed. A receipt has been issued and Wally's team has reserved your slot."
+                  : "Your driving lesson booking has been received. Wally (Owner & Instructor) will review your appointment and mark it Confirmed in the instructor portal."}
               </p>
 
               <div className="bg-brand-offwhite rounded-2xl p-4 text-left text-xs sm:text-sm space-y-2 mb-6 border border-black/5">
                 <div className="flex justify-between items-center pb-2 border-b border-black/5">
                   <span className="text-brand-black/60">Booking Reference:</span>
-                  <span className="font-mono font-bold text-brand-red text-base">#{confirmedBooking.ref}</span>
+                  <span className="font-mono font-bold text-brand-red text-base">#{confirmedBooking.ref || confirmedBooking.bookingRef || 'WD-BOOKING'}</span>
                 </div>
                 <div className="flex justify-between items-center pb-2 border-b border-black/5">
-                  <span className="text-brand-black/60">Current Status:</span>
-                  <span className="font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-200 text-xs uppercase flex items-center gap-1">
-                    <Clock className="w-3 h-3 text-amber-600" />
-                    Pending Confirmation
-                  </span>
+                  <span className="text-brand-black/60">Payment Status:</span>
+                  {confirmedBooking.paymentStatus === 'paid' ? (
+                    <span className="font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-lg border border-emerald-200 text-xs uppercase flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      Paid Online ({confirmedBooking.paymentMethod || 'Card / PayPal'})
+                    </span>
+                  ) : (
+                    <span className="font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-200 text-xs uppercase flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-amber-600" />
+                      Pending / Pay in Car
+                    </span>
+                  )}
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-brand-black/60">Selected Package:</span>
@@ -679,13 +729,13 @@ export function BookNow() {
                 )}
                 <div className="flex justify-between items-center pt-2 border-t border-black/5">
                   <span className="text-brand-black/60">Total Amount:</span>
-                  <span className="font-display font-black text-brand-red text-base sm:text-lg">${confirmedBooking.packagePrice.toFixed(2)} AUD</span>
+                  <span className="font-display font-black text-brand-red text-base sm:text-lg">${Number(confirmedBooking.packagePrice || 0).toFixed(2)} AUD</span>
                 </div>
               </div>
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
                 <Link 
-                  to={`/manage-booking?ref=${encodeURIComponent(confirmedBooking.ref)}`}
+                  to={`/manage-booking?ref=${encodeURIComponent(confirmedBooking.ref || confirmedBooking.bookingRef || '')}`}
                   className="w-full sm:w-auto bg-brand-red text-white px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm hover:bg-[#c41a21] transition-all duration-300 shadow-md shadow-brand-red/30 flex items-center justify-center gap-2"
                 >
                   <span>Manage / Reschedule My Booking</span>
@@ -723,7 +773,11 @@ export function BookNow() {
                 )}
 
                 {/* Step List */}
-                <nav className="space-y-3 sm:space-y-3.5 flex-1 overflow-y-auto pr-1">
+                <nav 
+                  data-lenis-prevent
+                  className="space-y-3 sm:space-y-3.5 flex-1 overflow-y-auto pr-1 overscroll-contain"
+                  style={{ overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}
+                >
                   {steps.map((step, idx) => {
                     const isCompleted = idx < currentStepIndex;
                     const isCurrent = idx === currentStepIndex;
@@ -860,7 +914,16 @@ export function BookNow() {
               </div>
 
               {/* CARD BODY: STEP BY STEP CONTENT */}
-              <div className="flex-1 overflow-y-auto pr-1.5 min-h-0">
+              <div 
+                ref={bookingScrollRef}
+                data-lenis-prevent
+                className="flex-1 overflow-y-auto pr-1.5 min-h-0 overscroll-contain"
+                style={{ 
+                  overscrollBehavior: 'contain', 
+                  WebkitOverflowScrolling: 'touch', 
+                  scrollBehavior: 'smooth' 
+                }}
+              >
                 <AnimatePresence mode="wait">
 
                   {/* ================= STEP 1: SERVICE SELECTION ================= */}
