@@ -4,6 +4,18 @@ import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import Stripe from "stripe";
+import { 
+  getBookings, 
+  getBookingByRef, 
+  createBooking, 
+  updateBooking, 
+  updateBookingByRef,
+  deleteBookingById,
+  deleteBookingByRef,
+  createContactMessage,
+  getOrCreateUser
+} from "./src/db/queries.ts";
+import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 
 dotenv.config();
 
@@ -149,6 +161,181 @@ app.get("/api/verify-checkout-session", async (req, res) => {
       error: "VERIFY_ERROR",
       message: error?.message || "Failed to verify session"
     });
+  }
+});
+
+// Sync authenticated user to PostgreSQL users table
+app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const user = req.user!;
+    const dbUser = await getOrCreateUser(
+      user.uid,
+      user.email || '',
+      user.name || undefined,
+      user.picture || undefined
+    );
+    res.json({ success: true, user: dbUser });
+  } catch (error: any) {
+    console.error("Error syncing user:", error);
+    res.status(500).json({ error: error.message || "Failed to sync user" });
+  }
+});
+
+// Fetch bookings (all, or filtered by email/user)
+app.get("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
+  try {
+    const email = (req.query.email as string) || undefined;
+    const userId = req.user?.uid;
+    const list = await getBookings({ email, userId });
+    res.json(list);
+  } catch (error: any) {
+    console.error("Error fetching bookings:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch bookings" });
+  }
+});
+
+// Lookup booking by reference code (WD-XXXX)
+app.get("/api/bookings/:ref", async (req, res) => {
+  try {
+    const ref = req.params.ref;
+    const booking = await getBookingByRef(ref);
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+    res.json(booking);
+  } catch (error: any) {
+    console.error("Error fetching booking by ref:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch booking" });
+  }
+});
+
+// Create a new driving lesson booking in Cloud SQL
+app.post("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
+  try {
+    const {
+      studentName,
+      phone,
+      email,
+      suburb,
+      pickupAddress,
+      packageTitle,
+      packagePrice,
+      date,
+      time,
+      status,
+      notes,
+      paymentStatus,
+      stripeSessionId
+    } = req.body;
+
+    if (!studentName || !phone || !email || !suburb || !packageTitle || !date || !time) {
+      return res.status(400).json({ error: "Missing required booking fields" });
+    }
+
+    const randomNum = Math.floor(1000 + Math.random() * 9000);
+    const bookingRef = `WD-${randomNum}`;
+
+    const newBooking = await createBooking({
+      bookingRef,
+      userId: req.user?.uid || null,
+      studentName,
+      phone,
+      email,
+      suburb,
+      pickupAddress: pickupAddress || null,
+      packageTitle,
+      packagePrice: Number(packagePrice) || 70,
+      date,
+      time,
+      status: status || "Pending",
+      notes: notes || null,
+      paymentStatus: paymentStatus || "unpaid",
+      stripeSessionId: stripeSessionId || null,
+    });
+
+    res.status(201).json(newBooking);
+  } catch (error: any) {
+    console.error("Error creating booking:", error);
+    res.status(500).json({ error: error.message || "Failed to create booking" });
+  }
+});
+
+// Update booking by ID (status, rescheduling, notes)
+app.patch("/api/bookings/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid booking ID" });
+    }
+
+    const updated = await updateBooking(id, req.body);
+    res.json(updated);
+  } catch (error: any) {
+    console.error("Error updating booking:", error);
+    res.status(500).json({ error: error.message || "Failed to update booking" });
+  }
+});
+
+// Update booking by reference code (WD-XXXX)
+app.patch("/api/bookings/ref/:ref", async (req, res) => {
+  try {
+    const ref = req.params.ref;
+    const updated = await updateBookingByRef(ref, req.body);
+    res.json(updated);
+  } catch (error: any) {
+    console.error("Error updating booking by ref:", error);
+    res.status(500).json({ error: error.message || "Failed to update booking" });
+  }
+});
+
+// Delete booking by ID
+app.delete("/api/bookings/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid booking ID" });
+    }
+
+    await deleteBookingById(id);
+    res.json({ success: true, message: "Booking deleted successfully" });
+  } catch (error: any) {
+    console.error("Error deleting booking:", error);
+    res.status(500).json({ error: error.message || "Failed to delete booking" });
+  }
+});
+
+// Delete booking by reference code
+app.delete("/api/bookings/ref/:ref", async (req, res) => {
+  try {
+    const ref = req.params.ref;
+    await deleteBookingByRef(ref);
+    res.json({ success: true, message: "Booking deleted successfully" });
+  } catch (error: any) {
+    console.error("Error deleting booking by ref:", error);
+    res.status(500).json({ error: error.message || "Failed to delete booking" });
+  }
+});
+
+// Submit contact form inquiry to Cloud SQL
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { name, email, phone, subject, message } = req.body;
+    if (!name || !email || !message) {
+      return res.status(400).json({ error: "Name, email, and message are required" });
+    }
+
+    const saved = await createContactMessage({
+      name,
+      email,
+      phone: phone || null,
+      subject: subject || null,
+      message,
+    });
+
+    res.status(201).json({ success: true, message: saved });
+  } catch (error: any) {
+    console.error("Error saving contact message:", error);
+    res.status(500).json({ error: error.message || "Failed to save contact message" });
   }
 });
 

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { 
-  Phone, 
+  Smartphone, 
   Mail, 
   MapPin, 
   Clock, 
@@ -13,6 +13,7 @@ import {
   Send
 } from 'lucide-react';
 import { TiltCard } from './TiltCard';
+import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface ContactSectionProps {
   showBreadcrumbs?: boolean;
@@ -82,6 +83,38 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
     const waUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(msg)}`;
     setGeneratedWaLink(waUrl);
     setIsSubmitted(true);
+
+    // Save to Supabase table if configured
+    if (isSupabaseConfigured) {
+      const sb = getSupabase();
+      if (sb) {
+        sb.from('contact_messages').insert({
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          phone: formData.phone.trim() || null,
+          message: formData.message.trim(),
+        }).then(
+          ({ error }) => {
+            if (error) console.warn('Supabase contact insert warning:', error);
+          },
+          (err) => {
+            console.warn('Supabase contact error:', err);
+          }
+        );
+      }
+    }
+
+    // Save to PostgreSQL database API
+    fetch('/api/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: formData.name.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        message: formData.message.trim(),
+      }),
+    }).catch(err => console.warn('Could not record contact inquiry in database:', err));
 
     // Directly open WhatsApp
     try {
@@ -171,21 +204,8 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
                     </a>
                   </div>
 
-                  {/* Phone Call & Email links */}
+                  {/* Email link */}
                   <div className="space-y-2.5">
-                    <a 
-                      href={`tel:${DISPLAY_PHONE.replace(/\s/g, '')}`}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:border-brand-red/50 hover:bg-white/[0.08] transition-all"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-brand-red/15 text-brand-red flex items-center justify-center shrink-0">
-                        <Phone className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-bold text-white/45 uppercase tracking-wider">Call or SMS</div>
-                        <div className="text-sm font-bold text-white">{DISPLAY_PHONE}</div>
-                      </div>
-                    </a>
-
                     <a 
                       href="mailto:wally@wallysdrivingschool.com.au"
                       className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:border-brand-red/50 hover:bg-white/[0.08] transition-all"
@@ -267,7 +287,7 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
                             Phone Number <span className="text-brand-red">*</span>
                           </label>
                           <div className="relative">
-                            <Phone className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-brand-black/40 pointer-events-none" />
+                            <Smartphone className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-brand-black/40 pointer-events-none" />
                             <input 
                               type="tel" 
                               placeholder="e.g. 0400 123 456"

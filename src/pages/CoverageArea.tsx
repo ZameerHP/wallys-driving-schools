@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { MapPin, Navigation, CheckCircle2, Phone, Car } from 'lucide-react';
+import { MapPin, Navigation, CheckCircle2, MessageCircle, Car } from 'lucide-react';
 
 const PRIMARY_SUBURBS = [
   'Rooty Hill',
@@ -60,7 +60,7 @@ export function CoverageArea() {
               </div>
 
               <p className="text-sm text-white/70 leading-relaxed mb-6">
-                Free door-to-door pick up and drop off in all serviced postcodes. Don't see your suburb? Call us to check instructor availability in your area.
+                Free door-to-door pick up and drop off in all serviced postcodes. Don't see your suburb? Message Wally on WhatsApp to check instructor availability in your area.
               </p>
 
               <div className="space-y-2.5 mb-8">
@@ -73,11 +73,13 @@ export function CoverageArea() {
               </div>
 
               <a 
-                href="tel:0406693301" 
-                className="w-full bg-brand-red py-3.5 rounded-2xl font-bold text-sm text-center flex items-center justify-center gap-2 hover:bg-white hover:text-brand-black transition-all shadow-[0_0_20px_rgba(227,34,42,0.4)]"
+                href="https://wa.me/61406693301?text=Hi%20Wally,%20I'd%20like%20to%20check%20if%20you%20cover%20my%20suburb."
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full bg-[#25D366] hover:bg-[#20bd5a] text-black py-3.5 rounded-2xl font-bold text-sm text-center flex items-center justify-center gap-2 transition-all shadow-md"
               >
-                <Phone className="w-4 h-4" />
-                <span>Call to Inquire: 0406 693 301</span>
+                <MessageCircle className="w-4 h-4" />
+                <span>Enquire via WhatsApp: 0406 693 301</span>
               </a>
             </div>
 

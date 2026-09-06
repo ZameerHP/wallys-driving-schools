@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
+import { AuthProvider } from './context/AuthContext.tsx';
 import { SmoothScroll } from './components/SmoothScroll';
 import { Nav } from './components/Nav';
 import { Footer } from './components/Footer';
@@ -170,9 +171,11 @@ export default function App() {
             animate={{ opacity: 1 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
           >
-            <Router>
-              <MainLayout />
-            </Router>
+            <AuthProvider>
+              <Router>
+                <MainLayout />
+              </Router>
+            </AuthProvider>
           </motion.div>
         )}
       </AnimatePresence>

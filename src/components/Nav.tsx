@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
-import { Phone, Menu, X, ChevronDown, User, ShieldCheck } from 'lucide-react';
+import { Menu, X, ChevronDown, User, ShieldCheck } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const MAIN_LINKS = [
@@ -195,19 +195,6 @@ export function Nav() {
               </div>
               
               <div data-magnetic>
-                <motion.a 
-                  whileHover={{ scale: 1.04 }}
-                  whileTap={{ scale: 0.96 }}
-                  href="tel:0406693301" 
-                  data-cursor-text="CALL"
-                  className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-5 py-2.5 rounded-full text-sm font-bold border border-white/15 backdrop-blur-md hover:border-white/30 transition-all duration-300"
-                >
-                  <Phone className="w-4 h-4 text-brand-red" />
-                  <span className="whitespace-nowrap tracking-wide">0406 693 301</span>
-                </motion.a>
-              </div>
-              
-              <div data-magnetic>
                 <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
                   <Link 
                     to="/book-now" 
@@ -287,13 +274,6 @@ export function Nav() {
                 >
                   Book Now
                 </Link>
-                <a 
-                  href="tel:0406693301"
-                  className="w-full bg-white/10 text-white py-3.5 rounded-full text-center text-base font-bold flex items-center justify-center gap-2 border border-white/20 hover:bg-white/20 transition-all"
-                >
-                  <Phone className="w-4 h-4 text-brand-red" />
-                  0406 693 301
-                </a>
                 
                 <div className="flex items-center justify-center gap-4 mt-2">
                   <a href="https://www.facebook.com/people/Wallys-Driving-School/61575863566186/?mibextid=wwXIfr&rdid=ldWQaR7pVQgqrG2o&share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2F1Cmms1RUhY%2F%3Fmibextid%3DwwXIfr" target="_blank" rel="noopener noreferrer" className="p-3 bg-white/5 rounded-full hover:bg-brand-red text-white transition-colors border border-white/10">

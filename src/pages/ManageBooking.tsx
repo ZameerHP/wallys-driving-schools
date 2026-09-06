@@ -1,9 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { 
-  Eye, 
-  EyeOff, 
   Calendar, 
   Clock, 
   MapPin, 
@@ -11,784 +9,701 @@ import {
   ShieldCheck, 
   ArrowLeft, 
   CheckCircle2, 
-  Lock, 
-  LogOut, 
   Search, 
-  Phone, 
+  Smartphone, 
   Mail, 
-  Filter, 
-  Plus, 
-  Trash2, 
-  Edit3, 
+  Check, 
+  Copy, 
+  MessageCircle, 
+  X, 
+  User, 
+  Sparkles, 
   AlertCircle, 
-  UserCheck, 
-  DollarSign, 
-  ExternalLink,
+  Edit3, 
+  RefreshCw,
+  Lock,
   ChevronRight
 } from 'lucide-react';
 import { 
-  getStoredBookings, 
-  updateBookingStatus, 
-  updateBookingDetails, 
-  deleteBooking, 
-  addBooking, 
-  checkOwnerAuth, 
-  isOwnerLoggedIn, 
-  setOwnerLoggedIn, 
-  logoutOwner, 
-  BookingItem 
+  searchCustomerBookings, 
+  updateBookingInDb, 
+  BookingItem,
+  getStoredBookings
 } from '../lib/bookings';
 import { cn } from '../lib/utils';
 
+const AVAILABLE_TIMES = [
+  '08:30 AM - 09:30 AM',
+  '10:00 AM - 11:00 AM',
+  '11:30 AM - 12:30 PM',
+  '01:30 PM - 02:30 PM',
+  '03:00 PM - 04:00 PM',
+  '04:30 PM - 05:30 PM'
+];
+
 export function ManageBooking() {
-  const [showPassword, setShowPassword] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
-  
-  // Bookings state
-  const [bookings, setBookings] = useState<BookingItem[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'All' | 'Confirmed' | 'Pending' | 'Completed' | 'Cancelled'>('All');
-  const [editingBooking, setEditingBooking] = useState<BookingItem | null>(null);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialQuery = searchParams.get('ref') || searchParams.get('code') || searchParams.get('number') || '';
 
-  // New booking form state
-  const [newStudentName, setNewStudentName] = useState('');
-  const [newPhone, setNewPhone] = useState('');
-  const [newEmail, setNewEmail] = useState('');
-  const [newSuburb, setNewSuburb] = useState('Rooty Hill');
-  const [newPackageTitle, setNewPackageTitle] = useState('1 Hour Driving Lesson');
-  const [newPrice, setNewPrice] = useState(70);
-  const [newDate, setNewDate] = useState('2026-10-28');
-  const [newTime, setNewTime] = useState('10:00 AM - 11:00 AM');
-  const [newNotes, setNewNotes] = useState('');
+  const [bookingCode, setBookingCode] = useState(initialQuery);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [foundBookings, setFoundBookings] = useState<BookingItem[]>([]);
+  const [selectedBooking, setSelectedBooking] = useState<BookingItem | null>(null);
+  const [copiedRef, setCopiedRef] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isOwnerLoggedIn()) {
-      setIsLoggedIn(true);
-      setBookings(getStoredBookings());
-    }
-  }, []);
+  // Reschedule Modal
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [newDate, setNewDate] = useState('');
+  const [newTime, setNewTime] = useState(AVAILABLE_TIMES[1]);
+  const [isSavingReschedule, setIsSavingReschedule] = useState(false);
+  const [rescheduleSuccess, setRescheduleSuccess] = useState<string | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setIsLoading(true);
+  // Edit Address Modal
+  const [showAddressModal, setShowAddressModal] = useState(false);
+  const [newAddress, setNewAddress] = useState('');
+  const [isSavingAddress, setIsSavingAddress] = useState(false);
+  const [addressSuccess, setAddressSuccess] = useState<string | null>(null);
 
-    setTimeout(() => {
-      setIsLoading(false);
-      const isValid = checkOwnerAuth(username, password);
+  // Search logic
+  const handleSearch = async (queryToSearch: string) => {
+    const q = queryToSearch.trim();
+    if (!q) return;
 
-      if (isValid) {
-        setOwnerLoggedIn(true);
-        setIsLoggedIn(true);
-        setBookings(getStoredBookings());
+    setIsSearching(true);
+    setHasSearched(true);
+    setRescheduleSuccess(null);
+    setAddressSuccess(null);
+
+    try {
+      const results = await searchCustomerBookings(q);
+      setFoundBookings(results);
+      if (results.length > 0) {
+        setSelectedBooking(results[0]);
       } else {
-        setError('Access Denied: Only the owner (Wally) is authorized to log in. Please enter valid owner credentials.');
+        setSelectedBooking(null);
       }
-    }, 600);
-  };
-
-  const handleLogout = () => {
-    logoutOwner();
-    setIsLoggedIn(false);
-    setUsername('');
-    setPassword('');
-  };
-
-  const handleStatusChange = (id: string, newStatus: BookingItem['status']) => {
-    const updated = updateBookingStatus(id, newStatus);
-    setBookings(updated);
-  };
-
-  const handleDelete = (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to remove the booking for ${name}?`)) {
-      const updated = deleteBooking(id);
-      setBookings(updated);
+    } catch (err) {
+      console.error('Failed to search bookings:', err);
+      setFoundBookings([]);
+      setSelectedBooking(null);
+    } finally {
+      setIsSearching(false);
     }
   };
 
-  const handleSaveEdit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingBooking) return;
-    const updated = updateBookingDetails(editingBooking.id, editingBooking);
-    setBookings(updated);
-    setEditingBooking(null);
+  // Auto-search if URL has code or ref
+  useEffect(() => {
+    if (initialQuery) {
+      handleSearch(initialQuery);
+    }
+  }, [initialQuery]);
+
+  const handleCopyRef = (refText: string) => {
+    navigator.clipboard.writeText(refText);
+    setCopiedRef(refText);
+    setTimeout(() => setCopiedRef(null), 2000);
   };
 
-  const handleCreateBooking = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newStudentName.trim()) return;
+  // Save Reschedule
+  const handleSaveReschedule = async () => {
+    if (!selectedBooking || !newDate || !newTime) return;
 
-    const created = addBooking({
-      studentName: newStudentName,
-      phone: newPhone || '0400 000 000',
-      email: newEmail || 'student@example.com',
-      suburb: newSuburb || 'Rooty Hill',
-      packageTitle: newPackageTitle,
-      packagePrice: Number(newPrice) || 70,
+    setIsSavingReschedule(true);
+    const updatedFields: Partial<BookingItem> = {
       date: newDate,
       time: newTime,
       status: 'Confirmed',
-      notes: newNotes
-    });
+      isRescheduled: true,
+      notes: selectedBooking.notes 
+        ? `${selectedBooking.notes} [RESCHEDULED to ${newDate} ${newTime}]`
+        : `[RESCHEDULED to ${newDate} ${newTime}]`
+    };
 
-    setBookings(getStoredBookings());
-    setIsAddModalOpen(false);
-    // Reset form
-    setNewStudentName('');
-    setNewPhone('');
-    setNewEmail('');
-    setNewNotes('');
+    try {
+      await updateBookingInDb(selectedBooking.id, updatedFields, selectedBooking.ref);
+      
+      const updatedBooking: BookingItem = {
+        ...selectedBooking,
+        ...updatedFields,
+        isRescheduled: true
+      };
+
+      setSelectedBooking(updatedBooking);
+      setFoundBookings(prev => prev.map(b => b.id === updatedBooking.id ? updatedBooking : b));
+      setShowRescheduleModal(false);
+      setRescheduleSuccess(`Lesson successfully rescheduled to ${newDate} at ${newTime}! Wally has been notified.`);
+    } catch (err) {
+      console.error('Failed to reschedule:', err);
+    } finally {
+      setIsSavingReschedule(false);
+    }
   };
 
-  // Filtered bookings
-  const filteredBookings = bookings.filter((b) => {
-    const matchesFilter = statusFilter === 'All' || b.status === statusFilter;
-    const q = searchQuery.toLowerCase();
-    const matchesSearch = 
-      b.studentName.toLowerCase().includes(q) ||
-      b.phone.toLowerCase().includes(q) ||
-      b.ref.toLowerCase().includes(q) ||
-      b.suburb.toLowerCase().includes(q) ||
-      b.packageTitle.toLowerCase().includes(q);
-    return matchesFilter && matchesSearch;
-  });
+  // Save Address
+  const handleSaveAddress = async () => {
+    if (!selectedBooking || !newAddress.trim()) return;
 
-  const totalRevenue = bookings.reduce((sum, b) => b.status !== 'Cancelled' ? sum + b.packagePrice : sum, 0);
-  const confirmedCount = bookings.filter(b => b.status === 'Confirmed').length;
-  const pendingCount = bookings.filter(b => b.status === 'Pending').length;
+    setIsSavingAddress(true);
+    const updatedFields: Partial<BookingItem> = {
+      pickupAddress: newAddress.trim(),
+      notes: selectedBooking.notes 
+        ? `${selectedBooking.notes}. Updated Pickup: ${newAddress.trim()}`
+        : `Pickup: ${newAddress.trim()}`
+    };
+
+    try {
+      await updateBookingInDb(selectedBooking.id, updatedFields, selectedBooking.ref);
+
+      const updatedBooking: BookingItem = {
+        ...selectedBooking,
+        ...updatedFields
+      };
+
+      setSelectedBooking(updatedBooking);
+      setFoundBookings(prev => prev.map(b => b.id === updatedBooking.id ? updatedBooking : b));
+      setShowAddressModal(false);
+      setAddressSuccess(`Pickup address updated to: ${newAddress.trim()}`);
+    } catch (err) {
+      console.error('Failed to update address:', err);
+    } finally {
+      setIsSavingAddress(false);
+    }
+  };
 
   return (
-    <div className="pt-28 pb-20 bg-brand-black min-h-screen relative overflow-hidden">
-      {/* Ambient background glows */}
-      <div className="absolute inset-0 z-0 opacity-15 pointer-events-none">
-        <div className="absolute -left-40 top-20 w-96 h-96 border-[40px] border-brand-red rounded-full mix-blend-screen" />
-        <div className="absolute right-0 bottom-0 w-[800px] h-[800px] bg-brand-red rounded-full mix-blend-screen filter blur-[120px]" />
-      </div>
+    <div className="pt-28 pb-20 bg-brand-offwhite min-h-screen">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6">
+        
+        {/* Navigation Bar / Quick Links */}
+        <div className="flex items-center justify-between mb-8">
+          <Link 
+            to="/" 
+            className="inline-flex items-center gap-2 text-xs font-bold text-black/60 hover:text-brand-red transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back to Home</span>
+          </Link>
 
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <AnimatePresence mode="wait">
-          {!isLoggedIn ? (
-            /* OWNER LOGIN GATE */
-            <div className="min-h-[70vh] flex items-center justify-center">
-              <motion.div 
-                key="login-card"
-                initial={{ opacity: 0, y: 30, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95, filter: "blur(8px)" }}
-                transition={{ type: "spring", stiffness: 200, damping: 20 }}
-                className="w-full max-w-lg bg-white/5 backdrop-blur-2xl border border-white/10 rounded-[36px] p-8 md:p-12 shadow-[0_25px_60px_rgba(0,0,0,0.8)] relative overflow-hidden"
-              >
-                <div className="absolute inset-0 shimmer pointer-events-none" />
+          <Link
+            to="/instructor-login"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black/5 hover:bg-black/10 text-brand-black text-xs font-bold border border-black/10 transition-all"
+          >
+            <Lock className="w-3.5 h-3.5 text-brand-red" />
+            <span>Instructor Login (Wally)</span>
+          </Link>
+        </div>
 
-                <div className="text-center mb-8 relative z-10">
-                  <div className="bg-white/95 px-4 py-2 rounded-2xl shadow-[0_0_25px_rgba(227,34,42,0.4)] mx-auto mb-5 flex items-center justify-center w-fit">
-                    <img src="/assets/logo.png" alt="Wally's Driving School" className="h-11 w-auto object-contain max-w-[170px]" />
-                  </div>
-                  
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-red/20 border border-brand-red/30 text-brand-red text-xs font-bold uppercase tracking-wider mb-2">
-                    <Lock className="w-3 h-3" />
-                    <span>Owner Portal · Restricted</span>
-                  </div>
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-red/10 text-brand-red text-xs font-bold uppercase tracking-wider mb-2">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Customer Self-Service</span>
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-display font-bold text-brand-black tracking-tight mb-2">
+            Manage Your Booking
+          </h1>
+          <p className="text-sm text-black/60 max-w-md mx-auto">
+            Enter your booking code or number to view your lesson, reschedule dates, or update your pickup address.
+          </p>
+        </div>
 
-                  <h1 className="text-2xl sm:text-3xl font-display font-bold text-white mb-2 tracking-tight">
-                    Manage Bookings
-                  </h1>
-                  <p className="text-white/60 text-xs sm:text-sm">
-                    Only the business owner (Wally) can sign in to view all bookings, reschedule lessons, and manage learner drivers.
-                  </p>
-                </div>
-
-                <form onSubmit={handleLogin} className="flex flex-col gap-4 relative z-10">
-                  <div>
-                    <label className="block text-xs font-bold text-white/80 uppercase tracking-wider mb-1.5">Owner Username / Email</label>
-                    <input 
-                      type="text" 
-                      required
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300 text-sm"
-                      placeholder="Enter owner email"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-white/80 uppercase tracking-wider mb-1.5">Password</label>
-                    <div className="relative">
-                      <input 
-                        type={showPassword ? "text" : "password"} 
-                        required
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300 text-sm"
-                        placeholder="••••••••"
-                      />
-                      <button 
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-white/50 hover:text-white transition-colors"
-                      >
-                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {error && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: -5 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="p-3 bg-red-500/15 border border-red-500/30 rounded-xl text-red-300 text-xs font-medium flex items-center gap-2"
-                    >
-                      <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
-                      <span>{error}</span>
-                    </motion.div>
-                  )}
-
-                  <motion.button 
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    type="submit" 
-                    disabled={isLoading}
-                    className="w-full bg-brand-red text-white font-bold rounded-2xl py-3.5 hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_25px_rgba(227,34,42,0.4)] mt-2 flex items-center justify-center gap-2 text-sm sm:text-base cursor-pointer disabled:opacity-50"
-                  >
-                    {isLoading ? (
-                      <motion.div 
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
-                      />
-                    ) : (
-                      <>
-                        <span>Sign In to Owner Portal</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </motion.button>
-                </form>
-
-                <div className="mt-6 pt-5 border-t border-white/10 text-center relative z-10 flex flex-col gap-2">
-                  <span className="text-xs text-white/40">Only the owner has authorized credentials to access customer bookings.</span>
-                  <Link to="/" className="text-xs font-medium text-brand-red hover:underline">
-                    ← Return to Home Page
-                  </Link>
-                </div>
-              </motion.div>
+        {/* Search Card */}
+        <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-black/5 mb-8">
+          <form 
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSearch(bookingCode);
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label className="block text-xs font-bold text-brand-black uppercase tracking-wider mb-2">
+                Booking Code, Reference or Phone Number
+              </label>
+              <div className="relative">
+                <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-black/40" />
+                <input
+                  type="text"
+                  value={bookingCode}
+                  onChange={(e) => setBookingCode(e.target.value)}
+                  placeholder="e.g. WD-8492 or simply 8492 or 0412 345 678"
+                  className="w-full bg-brand-offwhite border border-black/10 rounded-2xl pl-12 pr-4 py-3.5 text-sm sm:text-base font-semibold text-brand-black focus:outline-none focus:border-brand-red focus:bg-white transition-all"
+                  autoFocus
+                />
+              </div>
             </div>
-          ) : (
-            /* OWNER DASHBOARD: "SEE BOOKINGS AND EVERYTHING" */
-            <motion.div
-              key="owner-dashboard"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ type: "spring", stiffness: 200, damping: 20 }}
-              className="space-y-6"
-            >
-              {/* Header Bar */}
-              <div className="bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl p-6 shadow-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="px-3 py-0.5 rounded-full bg-brand-red/20 border border-brand-red/30 text-brand-red text-[11px] font-bold uppercase tracking-wider">
-                      Owner Portal · Wally
-                    </span>
-                    <span className="text-xs text-white/50">Wally@wallysdrivingschool.com.au</span>
-                  </div>
-                  <h1 className="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">
-                    Booking Management Center
-                  </h1>
-                  <p className="text-white/60 text-xs sm:text-sm mt-0.5">
-                    View, manage, reschedule, and update all learner driver bookings.
-                  </p>
-                </div>
 
-                <div className="flex items-center flex-wrap gap-2.5">
-                  <Link
-                    to="/instructor-login"
-                    className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-4 py-2.5 rounded-xl text-xs font-bold border border-white/15 transition-all"
-                  >
-                    <Calendar className="w-4 h-4 text-brand-red" />
-                    <span>Instructor Schedule</span>
-                  </Link>
-                  <button
-                    onClick={() => setIsAddModalOpen(true)}
-                    className="flex items-center gap-2 bg-brand-red hover:bg-[#c41a21] text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-brand-red/30 transition-all cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Add Booking</span>
-                  </button>
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center gap-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 hover:text-white px-3.5 py-2.5 rounded-xl text-xs font-bold border border-red-500/30 transition-all cursor-pointer"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>Sign Out</span>
-                  </button>
-                </div>
-              </div>
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
+              <span className="text-[11px] text-black/50">
+                Tip: Enter the code from your confirmation screen (e.g. <strong>WD-8492</strong> or just <strong>8492</strong>).
+              </span>
 
-              {/* Statistics Grid */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 backdrop-blur-md">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-semibold text-white/60">Total Bookings</span>
-                    <UserCheck className="w-4 h-4 text-brand-red" />
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-white">{bookings.length}</div>
-                  <div className="text-[11px] text-white/40 mt-1">Across Sydney Western suburbs</div>
-                </div>
-
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 backdrop-blur-md">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-semibold text-white/60">Confirmed Lessons</span>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-emerald-400">{confirmedCount}</div>
-                  <div className="text-[11px] text-white/40 mt-1">Ready on instructor calendar</div>
-                </div>
-
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 backdrop-blur-md">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-semibold text-white/60">Pending Approval</span>
-                    <Clock className="w-4 h-4 text-amber-400" />
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-amber-400">{pendingCount}</div>
-                  <div className="text-[11px] text-white/40 mt-1">Requires confirmation call</div>
-                </div>
-
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 backdrop-blur-md">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-semibold text-white/60">Estimated Total</span>
-                    <DollarSign className="w-4 h-4 text-brand-red" />
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-white">${totalRevenue} AUD</div>
-                  <div className="text-[11px] text-white/40 mt-1">Active booked lessons value</div>
-                </div>
-              </div>
-
-              {/* Filters & Search Control Bar */}
-              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-                {/* Search */}
-                <div className="relative w-full sm:w-80">
-                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-white/40" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search student, ref #, phone, suburb..."
-                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all"
-                  />
-                </div>
-
-                {/* Status filter tabs */}
-                <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
-                  {(['All', 'Confirmed', 'Pending', 'Completed', 'Cancelled'] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      onClick={() => setStatusFilter(tab)}
-                      className={cn(
-                        "px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer",
-                        statusFilter === tab 
-                          ? "bg-brand-red text-white shadow-md shadow-brand-red/25" 
-                          : "bg-white/5 text-white/60 hover:text-white hover:bg-white/10"
-                      )}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Bookings List */}
-              <div className="space-y-3">
-                {filteredBookings.length === 0 ? (
-                  <div className="bg-white/5 border border-white/10 rounded-3xl p-12 text-center text-white/60">
-                    <p className="text-sm">No bookings match your current search/filter criteria.</p>
-                  </div>
+              <button
+                type="submit"
+                disabled={isSearching || !bookingCode.trim()}
+                className="w-full sm:w-auto bg-brand-red hover:bg-[#c41a21] text-white font-bold px-8 py-3 rounded-2xl text-sm transition-all shadow-md shadow-brand-red/25 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer shrink-0"
+              >
+                {isSearching ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
                 ) : (
-                  filteredBookings.map((item) => (
-                    <motion.div
-                      key={item.id}
-                      layout
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="bg-white/5 hover:bg-white/[0.07] border border-white/10 rounded-2xl p-5 sm:p-6 transition-all duration-300"
-                    >
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                        {/* Left Column: Student info & Package */}
-                        <div className="space-y-2 flex-1">
-                          <div className="flex items-center flex-wrap gap-2">
-                            <span className="font-mono text-xs font-bold text-white/60 bg-white/10 px-2.5 py-0.5 rounded-md">
-                              #{item.ref}
-                            </span>
-                            <span className={cn(
-                              "text-xs font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1",
-                              item.status === 'Confirmed' ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
-                              item.status === 'Pending' ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
-                              item.status === 'Completed' ? "bg-blue-500/20 text-blue-300 border-blue-500/30" :
-                              "bg-red-500/20 text-red-300 border-red-500/30"
-                            )}>
-                              <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                              {item.status}
-                            </span>
-                            <span className="text-xs text-white/40">Booked: {item.createdAt}</span>
-                          </div>
-
-                          <div className="flex items-baseline gap-3">
-                            <h3 className="text-lg font-bold text-white font-display">
-                              {item.studentName}
-                            </h3>
-                            <span className="text-brand-red font-bold text-sm">
-                              ${item.packagePrice} AUD
-                            </span>
-                          </div>
-
-                          <div className="text-xs text-white/80 font-medium">
-                            {item.packageTitle}
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-y-1.5 gap-x-4 text-xs text-white/60 pt-1">
-                            <div className="flex items-center gap-1.5 text-white/80">
-                              <Calendar className="w-3.5 h-3.5 text-brand-red" />
-                              <span>{item.date}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5 text-white/80">
-                              <Clock className="w-3.5 h-3.5 text-brand-red" />
-                              <span>{item.time}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <MapPin className="w-3.5 h-3.5 text-brand-red" />
-                              <span>Pickup: {item.suburb}, NSW</span>
-                            </div>
-                          </div>
-
-                          {item.notes && (
-                            <div className="text-xs text-white/50 bg-black/30 p-2.5 rounded-xl border border-white/5 mt-2">
-                              <strong className="text-white/70">Notes:</strong> {item.notes}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Right Column: Quick Owner Actions */}
-                        <div className="flex flex-wrap lg:flex-col items-center lg:items-end gap-2 shrink-0 border-t lg:border-t-0 border-white/10 pt-3 lg:pt-0">
-                          {/* Contact buttons */}
-                          <div className="flex items-center gap-2">
-                            <a
-                              href={`tel:${item.phone.replace(/\s+/g, '')}`}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-semibold transition-all"
-                              title="Call Student"
-                            >
-                              <Phone className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>{item.phone}</span>
-                            </a>
-                            <a
-                              href={`https://wa.me/61${item.phone.replace(/^0/, '').replace(/\s+/g, '')}?text=${encodeURIComponent(`Hi ${item.studentName}, this is Wally from Wally's Driving School regarding your booking #${item.ref}.`)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-2.5 py-1.5 bg-[#25D366]/20 hover:bg-[#25D366]/30 text-[#25D366] border border-[#25D366]/30 rounded-lg text-xs font-bold transition-all"
-                              title="WhatsApp Student"
-                            >
-                              WhatsApp
-                            </a>
-                          </div>
-
-                          {/* Status buttons */}
-                          <div className="flex items-center gap-1.5 mt-1">
-                            {item.status !== 'Confirmed' && (
-                              <button
-                                onClick={() => handleStatusChange(item.id, 'Confirmed')}
-                                className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[11px] font-bold rounded-md transition-all cursor-pointer"
-                              >
-                                Confirm
-                              </button>
-                            )}
-                            {item.status !== 'Completed' && (
-                              <button
-                                onClick={() => handleStatusChange(item.id, 'Completed')}
-                                className="px-2.5 py-1 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[11px] font-bold rounded-md transition-all cursor-pointer"
-                              >
-                                Complete
-                              </button>
-                            )}
-                            {item.status !== 'Cancelled' && (
-                              <button
-                                onClick={() => handleStatusChange(item.id, 'Cancelled')}
-                                className="px-2.5 py-1 bg-white/5 hover:bg-red-500/20 text-white/50 hover:text-red-400 text-[11px] font-bold rounded-md transition-all cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                            )}
-                            <button
-                              onClick={() => setEditingBooking(item)}
-                              className="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded-md transition-all cursor-pointer"
-                              title="Reschedule / Edit details"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(item.id, item.studentName)}
-                              className="p-1.5 bg-white/5 hover:bg-red-500/20 text-white/40 hover:text-red-400 rounded-md transition-all cursor-pointer"
-                              title="Delete booking record"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  ))
+                  <>
+                    <span>Open Booking</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
                 )}
-              </div>
+              </button>
+            </div>
+          </form>
+        </div>
 
-              {/* Bottom return link */}
-              <div className="pt-6 text-center text-xs text-white/40">
-                <Link to="/" className="hover:text-white transition-colors inline-flex items-center gap-1.5">
-                  <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Back to Public Website</span>
-                </Link>
-              </div>
+        {/* Success Banners */}
+        <AnimatePresence>
+          {rescheduleSuccess && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-4 text-xs sm:text-sm font-semibold flex items-center gap-3 mb-6 shadow-sm"
+            >
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>{rescheduleSuccess}</span>
+            </motion.div>
+          )}
+
+          {addressSuccess && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="bg-blue-50 border border-blue-200 text-blue-800 rounded-2xl p-4 text-xs sm:text-sm font-semibold flex items-center gap-3 mb-6 shadow-sm"
+            >
+              <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />
+              <span>{addressSuccess}</span>
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Multiple Results Tab Selector (if multiple bookings found for same phone/email) */}
+        {foundBookings.length > 1 && (
+          <div className="mb-4 flex items-center gap-2 overflow-x-auto pb-2">
+            <span className="text-xs font-bold text-black/60 shrink-0">Found {foundBookings.length} bookings:</span>
+            {foundBookings.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => setSelectedBooking(b)}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer",
+                  selectedBooking?.id === b.id
+                    ? "bg-brand-black text-white"
+                    : "bg-white text-black/70 hover:bg-black/5 border border-black/10"
+                )}
+              >
+                #{b.ref} ({b.date})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Booking Details Card */}
+        {selectedBooking ? (
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 shadow-md border border-black/5 relative overflow-hidden"
+          >
+            {/* Top Bar with Reference & Status */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-6 border-b border-black/5">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xs font-bold text-black/50 uppercase tracking-wider">Booking Ref:</span>
+                <span className="font-mono text-base sm:text-lg font-black text-brand-black bg-brand-offwhite px-3 py-1 rounded-xl border border-black/10">
+                  #{selectedBooking.ref}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleCopyRef(selectedBooking.ref)}
+                  className="p-1.5 hover:bg-black/5 rounded-lg text-black/40 hover:text-black transition-colors cursor-pointer"
+                  title="Copy Reference"
+                >
+                  {copiedRef === selectedBooking.ref ? (
+                    <Check className="w-4 h-4 text-emerald-600" />
+                  ) : (
+                    <Copy className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {selectedBooking.isRescheduled && (
+                  <span className="bg-amber-100 text-amber-800 border border-amber-300 font-bold text-xs px-3 py-1 rounded-full flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                    Rescheduled
+                  </span>
+                )}
+                <span className={cn(
+                  "text-xs font-black px-3.5 py-1 rounded-full uppercase tracking-wider border flex items-center gap-1.5",
+                  selectedBooking.status === 'Confirmed' ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                  selectedBooking.status === 'Pending' ? "bg-amber-50 text-amber-800 border-amber-300" :
+                  selectedBooking.status === 'Completed' ? "bg-blue-50 text-blue-700 border-blue-200" :
+                  "bg-red-50 text-red-700 border-red-200"
+                )}>
+                  {selectedBooking.status === 'Pending' && <Clock className="w-3 h-3 text-amber-600" />}
+                  {selectedBooking.status === 'Confirmed' && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
+                  <span>{selectedBooking.status === 'Pending' ? 'Pending Confirmation' : selectedBooking.status}</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Status Information Notice */}
+            {selectedBooking.status === 'Pending' ? (
+              <div className="mt-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 text-amber-900">
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-xs sm:text-sm block text-amber-900">
+                    Status: Pending Instructor Confirmation
+                  </span>
+                  <p className="text-[11px] sm:text-xs text-amber-800/90 mt-0.5 leading-relaxed">
+                    Your booking has been received. Your instructor Wally is reviewing your appointment and route. Once confirmed by Wally in the instructor portal, this status will automatically change to <strong className="text-amber-900 font-bold">Confirmed</strong>.
+                  </p>
+                </div>
+              </div>
+            ) : selectedBooking.status === 'Confirmed' ? (
+              <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-start gap-3 text-emerald-900">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-xs sm:text-sm block text-emerald-900">
+                    Booking Confirmed by Instructor
+                  </span>
+                  <p className="text-[11px] sm:text-xs text-emerald-800/90 mt-0.5 leading-relaxed">
+                    Wally has officially confirmed your driving lesson. Please be ready at your pickup address at the scheduled date and time.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Main Lesson Details */}
+            <div className="py-6 space-y-4">
+              <div>
+                <span className="text-xs font-bold text-brand-red uppercase tracking-wider block mb-1">
+                  Selected Package
+                </span>
+                <div className="flex items-baseline justify-between gap-2">
+                  <h2 className="text-lg sm:text-xl font-bold text-brand-black">
+                    {selectedBooking.packageTitle}
+                  </h2>
+                  <span className="text-base sm:text-lg font-black text-brand-red shrink-0">
+                    ${selectedBooking.packagePrice.toFixed(2)} AUD
+                  </span>
+                </div>
+              </div>
+
+              {/* Time & Date Highlight Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                <div className="bg-brand-offwhite p-4 rounded-2xl border border-black/5 flex items-start gap-3">
+                  <Calendar className="w-5 h-5 text-brand-red shrink-0 mt-0.5" />
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-black/50 block">
+                      Scheduled Date
+                    </span>
+                    <span className="text-sm sm:text-base font-bold text-brand-black">
+                      {selectedBooking.date}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bg-brand-offwhite p-4 rounded-2xl border border-black/5 flex items-start gap-3">
+                  <Clock className="w-5 h-5 text-brand-red shrink-0 mt-0.5" />
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-black/50 block">
+                      Lesson Time Slot
+                    </span>
+                    <span className="text-sm sm:text-base font-bold text-brand-black">
+                      {selectedBooking.time}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pickup Address Card */}
+              <div className="bg-brand-offwhite p-4 rounded-2xl border border-black/5 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <MapPin className="w-5 h-5 text-brand-red shrink-0 mt-0.5" />
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-black/50 block">
+                      Pickup Address & Suburb
+                    </span>
+                    <span className="text-sm font-bold text-brand-black block">
+                      {selectedBooking.pickupAddress || selectedBooking.notes || `${selectedBooking.suburb}, NSW`}
+                    </span>
+                    <span className="text-xs text-black/50">
+                      Service Area: {selectedBooking.suburb}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewAddress(selectedBooking.pickupAddress || '');
+                    setShowAddressModal(true);
+                  }}
+                  className="px-3 py-1.5 bg-white hover:bg-black/5 text-brand-black text-xs font-bold rounded-xl border border-black/10 transition-all shrink-0 cursor-pointer"
+                >
+                  Change
+                </button>
+              </div>
+
+              {/* Student Contact Info */}
+              <div className="pt-2 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-black/70">
+                <div className="flex items-center gap-1.5 font-bold text-brand-black">
+                  <User className="w-3.5 h-3.5 text-brand-red" />
+                  <span>{selectedBooking.studentName}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Smartphone className="w-3.5 h-3.5 text-black/50" />
+                  <span>{selectedBooking.phone}</span>
+                </div>
+                {selectedBooking.email && (
+                  <div className="flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-black/50" />
+                    <span>{selectedBooking.email}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="pt-6 border-t border-black/5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              {/* Reschedule Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setNewDate(selectedBooking.date);
+                  setNewTime(selectedBooking.time || AVAILABLE_TIMES[0]);
+                  setShowRescheduleModal(true);
+                }}
+                className="flex-1 bg-brand-red hover:bg-[#c41a21] text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-red/20 transition-all cursor-pointer"
+              >
+                <Calendar className="w-4 h-4" />
+                <span>Reschedule Date & Time</span>
+              </button>
+
+              {/* WhatsApp Instructor */}
+              <a
+                href={`https://wa.me/61406693301?text=${encodeURIComponent(`Hi Wally, I am inquiring about my driving lesson booking #${selectedBooking.ref} scheduled on ${selectedBooking.date} at ${selectedBooking.time} (${selectedBooking.studentName}).`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all text-center"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>WhatsApp Wally</span>
+              </a>
+            </div>
+          </motion.div>
+        ) : hasSearched && !isSearching ? (
+          /* Empty / Not Found State */
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="bg-white rounded-3xl p-8 text-center border border-black/5 shadow-sm"
+          >
+            <div className="w-12 h-12 rounded-full bg-red-100 text-brand-red flex items-center justify-center mx-auto mb-3">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-brand-black mb-1">
+              No Booking Found for "{bookingCode}"
+            </h3>
+            <p className="text-xs text-black/60 max-w-sm mx-auto mb-5">
+              Please double check the reference code (e.g. <strong>WD-8492</strong> or just <strong>8492</strong>) or search with the phone number used when booking.
+            </p>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              <Link
+                to="/book-now"
+                className="bg-brand-red text-white text-xs font-bold px-5 py-2.5 rounded-xl hover:bg-[#c41a21] transition-all"
+              >
+                Book a Driving Lesson Now
+              </Link>
+              <a
+                href="https://wa.me/61406693301"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-white border border-black/15 text-black text-xs font-bold px-5 py-2.5 rounded-xl hover:bg-black/5 transition-all inline-flex items-center gap-1.5"
+              >
+                <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                <span>WhatsApp Wally for Help</span>
+              </a>
+            </div>
+          </motion.div>
+        ) : null}
+
       </div>
 
-      {/* MODAL: RESCHEDULE / EDIT BOOKING */}
+      {/* Reschedule Modal */}
       <AnimatePresence>
-        {editingBooking && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+        {showRescheduleModal && selectedBooking && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-brand-black border border-white/15 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl relative"
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-black/10 relative"
             >
-              <h2 className="text-xl font-bold font-display mb-1 text-white">Reschedule / Edit Booking</h2>
-              <p className="text-xs text-white/60 mb-5">Update lesson timing or notes for #{editingBooking.ref} ({editingBooking.studentName})</p>
+              <button
+                type="button"
+                onClick={() => setShowRescheduleModal(false)}
+                className="absolute right-5 top-5 text-black/40 hover:text-black p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
 
-              <form onSubmit={handleSaveEdit} className="space-y-4">
+              <div className="mb-5">
+                <div className="inline-flex items-center gap-1.5 text-brand-red text-xs font-bold uppercase tracking-wider mb-1">
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Reschedule Booking #{selectedBooking.ref}</span>
+                </div>
+                <h3 className="text-xl font-bold text-brand-black">Pick a New Date & Time</h3>
+                <p className="text-xs text-black/60">
+                  Select your preferred replacement date and time slot. Wally will be updated immediately.
+                </p>
+              </div>
+
+              <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-white/70 uppercase mb-1">Student Name</label>
+                  <label className="block text-xs font-bold text-black/80 uppercase tracking-wider mb-1.5">
+                    New Date
+                  </label>
                   <input
-                    type="text"
-                    value={editingBooking.studentName}
-                    onChange={(e) => setEditingBooking({ ...editingBooking, studentName: e.target.value })}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Date</label>
-                    <input
-                      type="date"
-                      value={editingBooking.date}
-                      onChange={(e) => setEditingBooking({ ...editingBooking, date: e.target.value })}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Time Slot</label>
-                    <input
-                      type="text"
-                      value={editingBooking.time}
-                      onChange={(e) => setEditingBooking({ ...editingBooking, time: e.target.value })}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Phone</label>
-                    <input
-                      type="text"
-                      value={editingBooking.phone}
-                      onChange={(e) => setEditingBooking({ ...editingBooking, phone: e.target.value })}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Suburb</label>
-                    <input
-                      type="text"
-                      value={editingBooking.suburb}
-                      onChange={(e) => setEditingBooking({ ...editingBooking, suburb: e.target.value })}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-white/70 uppercase mb-1">Status</label>
-                  <select
-                    value={editingBooking.status}
-                    onChange={(e) => setEditingBooking({ ...editingBooking, status: e.target.value as any })}
-                    className="w-full bg-brand-black border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                  >
-                    <option value="Confirmed">Confirmed</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Cancelled">Cancelled</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-white/70 uppercase mb-1">Instructor Notes</label>
-                  <textarea
-                    rows={2}
-                    value={editingBooking.notes || ''}
-                    onChange={(e) => setEditingBooking({ ...editingBooking, notes: e.target.value })}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2.5 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditingBooking(null)}
-                    className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold transition-all"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 bg-brand-red hover:bg-[#c41a21] text-white rounded-xl text-xs font-bold shadow-lg shadow-brand-red/30 transition-all"
-                  >
-                    Save Changes
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL: ADD MANUAL BOOKING */}
-      <AnimatePresence>
-        {isAddModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-brand-black border border-white/15 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl relative max-h-[90vh] overflow-y-auto"
-            >
-              <h2 className="text-xl font-bold font-display mb-1 text-white">Create New Lesson Booking</h2>
-              <p className="text-xs text-white/60 mb-5">Log a phone, WhatsApp, or in-person student booking directly.</p>
-
-              <form onSubmit={handleCreateBooking} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-white/70 uppercase mb-1">Student Full Name *</label>
-                  <input
-                    type="text"
+                    type="date"
                     required
-                    value={newStudentName}
-                    onChange={(e) => setNewStudentName(e.target.value)}
-                    placeholder="e.g. Alex Henderson"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
+                    min={new Date().toISOString().split('T')[0]}
+                    value={newDate}
+                    onChange={(e) => setNewDate(e.target.value)}
+                    className="w-full bg-brand-offwhite border border-black/10 rounded-xl px-4 py-3 text-sm font-semibold text-brand-black focus:outline-none focus:border-brand-red"
                   />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Phone *</label>
-                    <input
-                      type="text"
-                      required
-                      value={newPhone}
-                      onChange={(e) => setNewPhone(e.target.value)}
-                      placeholder="0400 000 000"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Pickup Suburb</label>
-                    <input
-                      type="text"
-                      value={newSuburb}
-                      onChange={(e) => setNewSuburb(e.target.value)}
-                      placeholder="Rooty Hill, NSW"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Lesson Date</label>
-                    <input
-                      type="date"
-                      value={newDate}
-                      onChange={(e) => setNewDate(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Time Slot</label>
-                    <input
-                      type="text"
-                      value={newTime}
-                      onChange={(e) => setNewTime(e.target.value)}
-                      placeholder="10:00 AM - 11:00 AM"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Package</label>
-                    <input
-                      type="text"
-                      value={newPackageTitle}
-                      onChange={(e) => setNewPackageTitle(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-white/70 uppercase mb-1">Price ($ AUD)</label>
-                    <input
-                      type="number"
-                      value={newPrice}
-                      onChange={(e) => setNewPrice(Number(e.target.value))}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                    />
-                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-white/70 uppercase mb-1">Notes / Requirements</label>
-                  <textarea
-                    rows={2}
-                    value={newNotes}
-                    onChange={(e) => setNewNotes(e.target.value)}
-                    placeholder="Logbook check, RMS test prep, nervous student, etc."
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-brand-red"
-                  />
+                  <label className="block text-xs font-bold text-black/80 uppercase tracking-wider mb-1.5">
+                    Available Time Slot
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {AVAILABLE_TIMES.map((slot) => (
+                      <button
+                        type="button"
+                        key={slot}
+                        onClick={() => setNewTime(slot)}
+                        className={cn(
+                          "p-2.5 rounded-xl text-xs font-bold text-center border transition-all cursor-pointer",
+                          newTime === slot
+                            ? "bg-brand-red text-white border-brand-red shadow-sm"
+                            : "bg-brand-offwhite text-black/80 border-black/10 hover:bg-black/5"
+                        )}
+                      >
+                        {slot}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="flex justify-end gap-2.5 pt-2">
+                <div className="pt-4 border-t border-black/10 flex items-center justify-end gap-3">
                   <button
                     type="button"
-                    onClick={() => setIsAddModalOpen(false)}
-                    className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold transition-all"
+                    onClick={() => setShowRescheduleModal(false)}
+                    className="px-4 py-2 text-xs font-bold text-black/60 hover:text-black"
                   >
                     Cancel
                   </button>
+
                   <button
-                    type="submit"
-                    className="px-5 py-2 bg-brand-red hover:bg-[#c41a21] text-white rounded-xl text-xs font-bold shadow-lg shadow-brand-red/30 transition-all"
+                    type="button"
+                    disabled={isSavingReschedule || !newDate}
+                    onClick={handleSaveReschedule}
+                    className="bg-brand-red hover:bg-[#c41a21] text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-2"
                   >
-                    Confirm & Save Booking
+                    {isSavingReschedule ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <span>Confirm Reschedule</span>
+                    )}
                   </button>
                 </div>
-              </form>
+              </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+
+      {/* Address Modal */}
+      <AnimatePresence>
+        {showAddressModal && selectedBooking && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-black/10 relative"
+            >
+              <button
+                type="button"
+                onClick={() => setShowAddressModal(false)}
+                className="absolute right-5 top-5 text-black/40 hover:text-black p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="mb-5">
+                <div className="inline-flex items-center gap-1.5 text-brand-red text-xs font-bold uppercase tracking-wider mb-1">
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>Update Pickup Location</span>
+                </div>
+                <h3 className="text-xl font-bold text-brand-black">Pickup Address</h3>
+                <p className="text-xs text-black/60">
+                  Where should Wally pick you up for this driving lesson?
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-black/80 uppercase tracking-wider mb-1.5">
+                    Street Address & Details
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={newAddress}
+                    onChange={(e) => setNewAddress(e.target.value)}
+                    placeholder="e.g. 14 Railway St, Rooty Hill NSW 2766 (wait by front driveway)"
+                    className="w-full bg-brand-offwhite border border-black/10 rounded-xl p-3 text-sm font-semibold text-brand-black focus:outline-none focus:border-brand-red resize-none"
+                  />
+                </div>
+
+                <div className="pt-4 border-t border-black/10 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddressModal(false)}
+                    className="px-4 py-2 text-xs font-bold text-black/60 hover:text-black"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSavingAddress || !newAddress.trim()}
+                    onClick={handleSaveAddress}
+                    className="bg-brand-red hover:bg-[#c41a21] text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-2"
+                  >
+                    {isSavingAddress ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <span>Save Address</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }

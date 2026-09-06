@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Phone, Mail, MapPin, Clock, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Mail, MapPin, Clock, ArrowRight, ShieldCheck } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export function Footer() {
@@ -72,12 +72,6 @@ export function Footer() {
                 <Mail className="w-4 h-4 text-brand-red shrink-0" />
                 <a href="mailto:wally@wallysdrivingschool.com.au" className="hover:text-white transition-colors">
                   wally@wallysdrivingschool.com.au
-                </a>
-              </li>
-              <li className="flex items-center gap-3">
-                <Phone className="w-4 h-4 text-brand-red shrink-0" />
-                <a href="tel:0406693301" className="hover:text-white font-bold text-white transition-colors">
-                  0406 693 301
                 </a>
               </li>
               <li className="flex items-center gap-3">

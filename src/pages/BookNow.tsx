@@ -10,9 +10,9 @@ import {
   ChevronUp, 
   ChevronLeft, 
   ChevronRight, 
-  Phone, 
   Mail, 
   ArrowLeft, 
+  ArrowRight,
   Plus, 
   Trash2, 
   CreditCard, 
@@ -31,7 +31,7 @@ import {
   X
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { addBooking, BookingItem } from '../lib/bookings';
+import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -323,7 +323,7 @@ export function BookNow() {
               packagePrice: data.amountTotal || 65,
               date: meta.bookingDate || new Date().toISOString().split('T')[0],
               time: meta.bookingTime || 'Scheduled Session',
-              status: 'Confirmed',
+              status: 'Pending',
               notes: `Stripe Checkout Paid (${data.id}). Amount: $${data.amountTotal} AUD. Instructor: ${meta.instructorName || 'Fast Track Instructor'}`
             });
             setConfirmedBooking(verifiedBooking);
@@ -506,7 +506,8 @@ export function BookNow() {
   const cartSubtotal = cartItems.reduce((acc, it) => acc + it.price, 0);
 
   // Submit Final Booking
-  const handleConfirmAndPay = async (simulateMock = false) => {
+  const handleConfirmAndPay = async (simulateMock: boolean | React.MouseEvent = false) => {
+    const isMock = typeof simulateMock === 'boolean' ? simulateMock : false;
     setIsProcessing(true);
     setStripeError(null);
     setStripeNotice(null);
@@ -519,7 +520,7 @@ export function BookNow() {
     };
 
     // If card payment and not explicitly simulating mock test, initiate real Stripe Checkout
-    if (paymentMethod === 'card' && !simulateMock) {
+    if (paymentMethod === 'card' && !isMock) {
       try {
         const res = await fetch('/api/create-checkout-session', {
           method: 'POST',
@@ -565,19 +566,20 @@ export function BookNow() {
     }
 
     // Cash (Pay in Car) or Mock Simulation
-    setTimeout(() => {
+    setTimeout(async () => {
       setIsProcessing(false);
 
-      const newBooking = addBooking({
+      const newBooking = await createBookingInDb({
         studentName: `${firstName || 'Learner'} ${lastName || 'Driver'}`.trim(),
         phone: `${countryCode} ${phone || '0400 000 000'}`,
         email: email || 'student@example.com',
         suburb: suburbSearch || 'Rooty Hill NSW 2766',
+        pickupAddress: `${address || 'Home pickup'}, ${suburbSearch || ''}`.trim(),
         packageTitle: primaryItem.title,
         packagePrice: cartSubtotal,
         date: primaryItem.date || selectedDate,
         time: primaryItem.time || selectedTimeSlot,
-        status: 'Confirmed',
+        status: 'Pending',
         notes: `Pickup: ${address || 'Home pickup'}. Test Centre: ${selectedTestCentre}. Test Time: ${testTime || 'Not set'}. Payment: ${simulateMock ? 'MOCK CARD (TEST)' : paymentMethod.toUpperCase()}`
       });
 
@@ -628,11 +630,6 @@ export function BookNow() {
               <span>/</span>
               <span className="text-brand-red font-semibold">Book Now</span>
             </div>
-            <span className="text-black/20">|</span>
-            <a href="tel:0406693301" className="font-bold text-brand-red hover:underline flex items-center gap-1">
-              <Phone className="w-3.5 h-3.5" />
-              <span>0406 693 301</span>
-            </a>
           </div>
         </div>
 
@@ -650,20 +647,28 @@ export function BookNow() {
                 <CheckCircle2 className="w-8 h-8" />
               </div>
               
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wider mb-2">
-                Booking Received
+              <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold uppercase tracking-wider mb-2">
+                <Clock className="w-3.5 h-3.5 text-amber-700" />
+                Status: Pending Instructor Confirmation
               </span>
               <h2 className="text-2xl sm:text-3xl font-display font-bold text-brand-black mb-1.5">
                 Thank You, {confirmedBooking.studentName}!
               </h2>
               <p className="text-brand-black/70 text-xs sm:text-sm mb-5 max-w-md mx-auto">
-                Your driving lesson booking has been successfully logged. Wally has been notified and will contact you via phone/SMS to confirm your pickup spot.
+                Your driving lesson booking has been received. Wally (Owner & Instructor) will review your appointment and mark it <strong>Confirmed</strong> in the instructor portal.
               </p>
 
               <div className="bg-brand-offwhite rounded-2xl p-4 text-left text-xs sm:text-sm space-y-2 mb-6 border border-black/5">
                 <div className="flex justify-between items-center pb-2 border-b border-black/5">
                   <span className="text-brand-black/60">Booking Reference:</span>
-                  <span className="font-mono font-bold text-brand-red text-base">{confirmedBooking.ref}</span>
+                  <span className="font-mono font-bold text-brand-red text-base">#{confirmedBooking.ref}</span>
+                </div>
+                <div className="flex justify-between items-center pb-2 border-b border-black/5">
+                  <span className="text-brand-black/60">Current Status:</span>
+                  <span className="font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-200 text-xs uppercase flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-amber-600" />
+                    Pending Confirmation
+                  </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-brand-black/60">Selected Package:</span>
@@ -677,6 +682,12 @@ export function BookNow() {
                   <span className="text-brand-black/60">Service Suburb:</span>
                   <span className="font-bold text-brand-black">{confirmedBooking.suburb}</span>
                 </div>
+                {confirmedBooking.pickupAddress && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-brand-black/60">Pickup Address:</span>
+                    <span className="font-bold text-brand-black text-right truncate max-w-[220px]">{confirmedBooking.pickupAddress}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center pt-2 border-t border-black/5">
                   <span className="text-brand-black/60">Total Amount:</span>
                   <span className="font-display font-black text-brand-red text-base sm:text-lg">${confirmedBooking.packagePrice.toFixed(2)} AUD</span>
@@ -685,10 +696,11 @@ export function BookNow() {
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
                 <Link 
-                  to="/manage-booking" 
-                  className="w-full sm:w-auto bg-brand-black text-white px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm hover:bg-brand-red transition-all duration-300 shadow-md"
+                  to={`/manage-booking?ref=${encodeURIComponent(confirmedBooking.ref)}`}
+                  className="w-full sm:w-auto bg-brand-red text-white px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm hover:bg-[#c41a21] transition-all duration-300 shadow-md shadow-brand-red/30 flex items-center justify-center gap-2"
                 >
-                  Owner Portal / Manage Bookings
+                  <span>Manage / Reschedule My Booking</span>
+                  <ArrowRight className="w-4 h-4" />
                 </Link>
                 <Link 
                   to="/" 
@@ -798,13 +810,6 @@ export function BookNow() {
                 {!isSidebarCollapsed && (
                   <div className="bg-white/15 rounded-2xl p-3 text-xs space-y-1.5 backdrop-blur-sm border border-white/20 shadow-sm">
                     <span className="font-bold text-white uppercase tracking-wider text-[10px]">Get In Touch</span>
-                    <a 
-                      href="tel:0406693301" 
-                      className="flex items-center gap-2 text-white hover:text-white/80 font-semibold transition-colors truncate text-xs"
-                    >
-                      <Phone className="w-3 h-3 shrink-0" />
-                      <span>0406 693 301</span>
-                    </a>
                     <a 
                       href="mailto:wally@wallysdrivingschool.com.au" 
                       className="flex items-center gap-2 text-white/90 hover:text-white text-[11px] transition-colors truncate"
