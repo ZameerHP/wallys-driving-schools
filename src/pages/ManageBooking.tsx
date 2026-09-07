@@ -507,7 +507,7 @@ export function ManageBooking() {
                   className="flex-1 bg-neutral-950 hover:bg-black text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
                 >
                   <CreditCard className="w-4 h-4 text-[#FFC439]" />
-                  <span>Pay Online (Stripe / PayPal)</span>
+                  <span>Pay Online (Card / Google Pay)</span>
                 </button>
               )}
 

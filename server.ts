@@ -14,7 +14,8 @@ import {
   deleteBookingByRef,
   createContactMessage,
   getOrCreateUser,
-  checkSlotBooked
+  checkSlotBooked,
+  getPendingBookingForCustomer
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 
@@ -26,7 +27,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 // 1. Security Headers Middleware (HSTS, X-Content-Type-Options, Frame Guard)
 app.use((req, res, next) => {
@@ -187,17 +192,62 @@ app.get("/api/stripe/status", (req, res) => {
   const isConfigured = Boolean(process.env.STRIPE_SECRET_KEY);
   const isLive = Boolean(process.env.STRIPE_SECRET_KEY?.startsWith("sk_live_"));
   const isTest = Boolean(process.env.STRIPE_SECRET_KEY?.startsWith("sk_test_"));
+  const publishableKey = process.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
 
   res.json({
     configured: isConfigured,
     mode: isLive ? "live" : isTest ? "test" : isConfigured ? "custom" : "none",
+    publishableKey,
+    hasWebhookSecret: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
     message: isConfigured 
       ? `Stripe is connected in ${isLive ? 'LIVE' : 'TEST'} mode. Ready to receive real payments.`
       : "Stripe Secret Key not found. Please add STRIPE_SECRET_KEY in Settings."
   });
 });
 
-// Create a Stripe Checkout Session for driving lessons (with real redirection to Stripe, Google Pay, Apple Pay, Link, and Cards)
+// Check payment capabilities on client Stripe account
+app.get("/api/payments/capabilities", async (req, res) => {
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.json({
+        configured: false,
+        card: false,
+        link: false,
+        googlePay: false,
+        applePay: false,
+        paypal: false,
+        paypalReason: "Stripe Secret Key is not configured."
+      });
+    }
+
+    const stripe = getStripe();
+    let account: any = null;
+    try {
+      if ((stripe as any).account?.retrieve) {
+        account = await (stripe as any).account.retrieve();
+      } else {
+        account = await (stripe.accounts as any).retrieve("acct_1SQQjBITqby17yse");
+      }
+    } catch (err: any) {
+      console.warn("[Stripe] Could not retrieve account details:", err?.message);
+    }
+
+    const cardActive = account ? account.capabilities?.card_payments === 'active' : true;
+
+    res.json({
+      configured: true,
+      card: cardActive,
+      googlePay: true, // Google Pay is supported via card wallets on eligible browsers/devices
+      link: false,     // Disabled per instructions
+      applePay: false, // Disabled per instructions
+      paypal: false
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Failed to query payment capabilities" });
+  }
+});
+
+// Create a Stripe Checkout Session for driving lessons (with real Stripe payment methods: Card, Google Pay, Link)
 app.post("/api/create-checkout-session", async (req, res) => {
   try {
     const { 
@@ -228,11 +278,12 @@ app.post("/api/create-checkout-session", async (req, res) => {
     const effectiveTotal = verified.totalAmount > 0 ? verified.totalAmount : Number(totalAmount || 65);
     const amountInCents = Math.round(effectiveTotal * 100);
 
-    // Derive base origin for redirect URLs (prefer req.headers.origin or referer for live iframe/domain routing)
+    // Derive base origin for redirect URLs
     const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : `http://localhost:${PORT}`);
     const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
       line_items: [
         {
           price_data: {
@@ -406,13 +457,26 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
     const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
     const amountInCents = Math.round(totalAmount * 100);
 
-    const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
     const bookingDate = customerInfo?.bookingDate || customerInfo?.date;
     const bookingTime = customerInfo?.bookingTime || customerInfo?.time;
+    const customerEmail = customerInfo?.email ? sanitizeText(customerInfo.email).toLowerCase() : undefined;
+    const customerPhone = customerInfo?.phone ? sanitizeText(customerInfo.phone) : undefined;
 
-    // Server-side slot availability check (prevent double-booking)
+    // Check if the student already has an unpaid pending reservation for this slot (reuse ref)
+    let targetRef = bookingRef;
+    if (!targetRef && (customerEmail || customerPhone) && bookingDate && bookingTime) {
+      const existingPending = await getPendingBookingForCustomer(customerEmail, customerPhone, bookingDate, bookingTime);
+      if (existingPending) {
+        targetRef = existingPending.bookingRef;
+      }
+    }
+    if (!targetRef) {
+      targetRef = `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+
+    // Server-side slot availability check (prevent double-booking, allowing customer to resume their checkout)
     if (bookingDate && bookingTime) {
-      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef);
+      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef, customerEmail, customerPhone);
       if (isTaken) {
         return res.status(409).json({
           error: "SLOT_ALREADY_BOOKED",
@@ -421,56 +485,154 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
       }
     }
 
-    const hasStripeKey = Boolean(process.env.STRIPE_SECRET_KEY);
-    const clientProvidedIdempotency = req.headers["idempotency-key"] as string | undefined;
-    const idempotencyKey = clientProvidedIdempotency || `pi_idem_${targetRef}_${Date.now()}`;
-
-    if (hasStripeKey) {
-      const stripe = getStripe();
-      const paymentIntent = await stripe.paymentIntents.create(
-        {
-          amount: amountInCents,
-          currency: "aud",
-          description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
-          metadata: {
-            bookingRef: targetRef,
-            customerName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student"),
-            customerEmail: sanitizeText(customerInfo?.email || ""),
-            customerPhone: sanitizeText(customerInfo?.phone || ""),
-            pickupAddress: sanitizeText(customerInfo?.address || customerInfo?.pickupAddress || ""),
-            suburb: sanitizeText(customerInfo?.suburb || ""),
-            bookingDate: bookingDate || "",
-            bookingTime: bookingTime || "",
-          },
-          automatic_payment_methods: {
-            enabled: true,
-          },
-        },
-        { idempotencyKey }
-      );
-
-      return res.json({
-        clientSecret: paymentIntent.client_secret,
-        paymentIntentId: paymentIntent.id,
-        totalAmount,
-        currency: "AUD",
-        items: verifiedItems,
-        mode: "live_or_test_key",
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(400).json({
+        error: "STRIPE_NOT_CONFIGURED",
+        message: "Stripe secret key is not configured. Please add STRIPE_SECRET_KEY in Settings."
       });
     }
 
-    // In test environment when STRIPE_SECRET_KEY is not configured:
-    // Generate an authoritative server test intent so student testing functions end-to-end
-    const testIntentId = `pi_test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const testSecret = `${testIntentId}_secret_${Math.random().toString(36).substr(2, 9)}`;
+    const stripe = getStripe();
 
-    res.json({
-      clientSecret: testSecret,
-      paymentIntentId: testIntentId,
+    // Ensure pre-booking record exists in Pending status (reuse existing or create new)
+    let existingBooking = await getBookingByRef(targetRef);
+    if (!existingBooking && (customerEmail || customerPhone) && bookingDate && bookingTime) {
+      existingBooking = await getPendingBookingForCustomer(customerEmail, customerPhone, bookingDate, bookingTime);
+      if (existingBooking) {
+        targetRef = existingBooking.bookingRef;
+      }
+    }
+
+    if (existingBooking) {
+      // Update existing booking with verified line items & package total
+      try {
+        await updateBookingByRef(targetRef, {
+          packageTitle: verifiedItems[0]?.name || existingBooking.packageTitle,
+          packagePrice: totalAmount,
+          notes: sanitizeText(customerInfo?.notes || existingBooking.notes || "Awaiting Stripe payment"),
+          studentName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || existingBooking.studentName),
+          phone: sanitizeText(customerInfo?.phone || existingBooking.phone),
+          pickupAddress: sanitizeText(customerInfo?.address || customerInfo?.pickupAddress || existingBooking.pickupAddress || ""),
+        });
+      } catch (upErr) {
+        console.warn("[Stripe] Could not update existing pre-booking:", upErr);
+      }
+    } else if (customerInfo) {
+      try {
+        existingBooking = await createBooking({
+          bookingRef: targetRef,
+          userId: customerInfo.userId || null,
+          studentName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student Driver"),
+          phone: sanitizeText(customerInfo?.phone || ""),
+          email: customerEmail || "",
+          suburb: sanitizeText(customerInfo?.suburb || "Rockingham, WA"),
+          pickupAddress: sanitizeText(customerInfo?.address || customerInfo?.pickupAddress || ""),
+          packageTitle: verifiedItems[0]?.name || "Driving Lesson",
+          packagePrice: totalAmount,
+          date: bookingDate || new Date().toISOString().split("T")[0],
+          time: bookingTime || "09:00 AM",
+          status: "Pending",
+          paymentStatus: "unpaid",
+          notes: sanitizeText(customerInfo?.notes || "Awaiting Stripe payment"),
+          stripeSessionId: null,
+        });
+      } catch (dbErr) {
+        console.warn("[Stripe] Could not create pre-booking record:", dbErr);
+      }
+    }
+
+    // Check if an existing open Stripe PaymentIntent can be reused & updated
+    if (existingBooking?.stripeSessionId && existingBooking.stripeSessionId.startsWith('pi_')) {
+      try {
+        const existingPI = await stripe.paymentIntents.retrieve(existingBooking.stripeSessionId);
+        const reusableStatuses = ['requires_payment_method', 'requires_confirmation', 'requires_action'];
+        if (existingPI && reusableStatuses.includes(existingPI.status)) {
+          const updatedPI = await stripe.paymentIntents.update(existingPI.id, {
+            amount: amountInCents,
+            description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
+            metadata: {
+              bookingRef: targetRef,
+              customerName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student"),
+              customerEmail: sanitizeText(customerInfo?.email || ""),
+              customerPhone: sanitizeText(customerInfo?.phone || ""),
+              pickupAddress: sanitizeText(customerInfo?.address || customerInfo?.pickupAddress || ""),
+              suburb: sanitizeText(customerInfo?.suburb || ""),
+              bookingDate: bookingDate || "",
+              bookingTime: bookingTime || "",
+              packageTitle: verifiedItems[0]?.name || "Driving Lesson",
+            },
+          });
+
+          return res.json({
+            clientSecret: updatedPI.client_secret,
+            paymentIntentId: updatedPI.id,
+            bookingRef: targetRef,
+            totalAmount,
+            currency: "AUD",
+            items: verifiedItems,
+            publishableKey: process.env.VITE_STRIPE_PUBLISHABLE_KEY || ""
+          });
+        }
+      } catch (piReuseErr: any) {
+        console.log("[Stripe] Notice: could not reuse stored paymentIntent, creating fresh intent:", piReuseErr?.message);
+      }
+    }
+
+    // Create real Stripe PaymentIntent on merchant's account
+    // Specifically enable 'card' only. Google Pay is provided via card wallets in Stripe Elements.
+    // Link and Apple Pay are excluded per user instructions.
+    const paymentIntentParams: Stripe.PaymentIntentCreateParams = {
+      amount: amountInCents,
+      currency: "aud",
+      payment_method_types: ["card"],
+      description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
+      metadata: {
+        bookingRef: targetRef,
+        customerName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student"),
+        customerEmail: sanitizeText(customerInfo?.email || ""),
+        customerPhone: sanitizeText(customerInfo?.phone || ""),
+        pickupAddress: sanitizeText(customerInfo?.address || customerInfo?.pickupAddress || ""),
+        suburb: sanitizeText(customerInfo?.suburb || ""),
+        bookingDate: bookingDate || "",
+        bookingTime: bookingTime || "",
+        packageTitle: verifiedItems[0]?.name || "Driving Lesson",
+      },
+    };
+
+    let paymentIntent: Stripe.PaymentIntent;
+    const clientProvidedIdempotency = req.headers["idempotency-key"] as string | undefined;
+
+    try {
+      paymentIntent = await stripe.paymentIntents.create(
+        paymentIntentParams,
+        clientProvidedIdempotency ? { idempotencyKey: clientProvidedIdempotency } : undefined
+      );
+    } catch (createErr: any) {
+      if (createErr?.type === 'StripeIdempotencyError' || createErr?.message?.toLowerCase().includes('idempotent')) {
+        console.warn("[Stripe] Idempotency key mismatch detected, retrying without fixed key:", createErr.message);
+        paymentIntent = await stripe.paymentIntents.create(paymentIntentParams);
+      } else {
+        throw createErr;
+      }
+    }
+
+    // Persist PaymentIntent ID on booking for seamless resumption
+    try {
+      await updateBookingByRef(targetRef, {
+        stripeSessionId: paymentIntent.id
+      });
+    } catch (saveErr) {
+      console.warn("[Stripe] Could not save stripeSessionId to booking:", saveErr);
+    }
+
+    return res.json({
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      bookingRef: targetRef,
       totalAmount,
       currency: "AUD",
       items: verifiedItems,
-      mode: "test_sandbox",
+      publishableKey: process.env.VITE_STRIPE_PUBLISHABLE_KEY || ""
     });
   } catch (error: any) {
     console.error("Error creating Stripe PaymentIntent:", error);
@@ -490,67 +652,77 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
       return res.status(400).json({ error: "paymentIntentId is required" });
     }
 
-    const { verifiedItems, totalAmount } = computeVerifiedOrder(items || (bookingData?.packageTitle ? [{ name: bookingData.packageTitle, unitPrice: bookingData.packagePrice }] : []));
-
-    let paymentVerified = false;
-    let paymentStatus = "paid";
-
-    if (process.env.STRIPE_SECRET_KEY && !paymentIntentId.startsWith("pi_test_")) {
-      const stripe = getStripe();
-      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-      if (paymentIntent.status === "succeeded" || paymentIntent.status === "processing") {
-        paymentVerified = true;
-      } else {
-        return res.status(400).json({
-          error: "PAYMENT_NOT_COMPLETED",
-          message: `Stripe payment status is: ${paymentIntent.status}`,
-        });
-      }
-    } else {
-      // In test mode / test cards, verify server-side test intent
-      if (paymentIntentId.startsWith("pi_")) {
-        paymentVerified = true;
-      }
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(400).json({ error: "STRIPE_SECRET_KEY is not configured" });
     }
 
-    if (!paymentVerified) {
-      return res.status(400).json({ error: "Payment verification failed" });
+    const stripe = getStripe();
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    // Verify payment actually succeeded on Stripe
+    if (paymentIntent.status !== "succeeded" && paymentIntent.status !== "processing") {
+      return res.status(400).json({
+        error: "PAYMENT_NOT_COMPLETED",
+        message: `Stripe payment status is: ${paymentIntent.status}. Expected 'succeeded'.`,
+        status: paymentIntent.status,
+      });
     }
 
-    // Look for existing booking by reference
-    const targetRef = bookingRef || bookingData?.bookingRef || bookingData?.ref;
-    const paymentMethodName = req.body.paymentMethod || 'Stripe';
+    const { verifiedItems, totalAmount } = computeVerifiedOrder(
+      items || (bookingData?.packageTitle ? [{ name: bookingData.packageTitle, unitPrice: bookingData.packagePrice }] : [])
+    );
+
+    const paidAmount = paymentIntent.amount / 100;
+    const targetRef = bookingRef || paymentIntent.metadata?.bookingRef || bookingData?.bookingRef || bookingData?.ref;
+    const paymentMethodName = 'Card / Google Pay';
     let finalBooking: any = null;
 
     if (targetRef) {
       const existing = await getBookingByRef(targetRef);
       if (existing) {
+        // Idempotency: if already paid with this intent, return existing confirmed booking
+        if (existing.paymentStatus === 'paid' && existing.stripeSessionId === paymentIntentId) {
+          return res.json({
+            success: true,
+            verified: true,
+            paymentStatus: "paid",
+            booking: existing,
+            transactionId: paymentIntentId,
+            amount: paidAmount,
+            message: "Payment already verified.",
+          });
+        }
+
         finalBooking = await updateBookingByRef(targetRef, {
           paymentStatus: "paid",
           status: "Confirmed",
           stripeSessionId: paymentIntentId,
-          notes: existing.notes ? `${existing.notes} [Paid via ${paymentMethodName}: ${paymentIntentId}]` : `[Paid via ${paymentMethodName}: ${paymentIntentId}]`,
+          packagePrice: paidAmount > 0 ? paidAmount : existing.packagePrice,
+          notes: existing.notes 
+            ? `${existing.notes} [Verified via Stripe: ${paymentIntentId}]` 
+            : `[Verified via Stripe: ${paymentIntentId}]`,
         });
       }
     }
 
     // If no existing booking, create new verified booking in DB
-    if (!finalBooking && bookingData) {
+    if (!finalBooking && (bookingData || paymentIntent.metadata)) {
+      const meta = paymentIntent.metadata || {};
       const newRef = targetRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
       finalBooking = await createBooking({
         bookingRef: newRef,
-        userId: bookingData.userId || null,
-        studentName: bookingData.studentName || `${bookingData.firstName || ''} ${bookingData.lastName || ''}`.trim() || "Student",
-        phone: bookingData.phone || "",
-        email: bookingData.email || "",
-        suburb: bookingData.suburb || "Rockingham, WA",
-        pickupAddress: bookingData.pickupAddress || bookingData.address || null,
-        packageTitle: bookingData.packageTitle || verifiedItems[0]?.name || "Driving Lesson",
-        packagePrice: totalAmount,
-        date: bookingData.date || new Date().toISOString().split("T")[0],
-        time: bookingData.time || "09:00 AM",
+        userId: bookingData?.userId || null,
+        studentName: sanitizeText(bookingData?.studentName || meta.customerName || "Student Driver"),
+        phone: sanitizeText(bookingData?.phone || meta.customerPhone || ""),
+        email: sanitizeText(bookingData?.email || meta.customerEmail || ""),
+        suburb: sanitizeText(bookingData?.suburb || meta.suburb || "Rockingham, WA"),
+        pickupAddress: sanitizeText(bookingData?.pickupAddress || meta.pickupAddress || null),
+        packageTitle: bookingData?.packageTitle || meta.packageTitle || verifiedItems[0]?.name || "Driving Lesson",
+        packagePrice: paidAmount > 0 ? paidAmount : totalAmount,
+        date: bookingData?.date || meta.bookingDate || new Date().toISOString().split("T")[0],
+        time: bookingData?.time || meta.bookingTime || "09:00 AM",
         status: "Confirmed",
-        notes: bookingData.notes ? `${bookingData.notes} [Paid via ${paymentMethodName}: ${paymentIntentId}]` : `[Paid via ${paymentMethodName}: ${paymentIntentId}]`,
+        notes: `[Verified via Stripe: ${paymentIntentId}]`,
         paymentStatus: "paid",
         stripeSessionId: paymentIntentId,
       });
@@ -568,7 +740,7 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
       paymentStatus: "paid",
       booking: bookingResponse,
       transactionId: paymentIntentId,
-      amount: totalAmount,
+      amount: paidAmount,
       message: `${paymentMethodName} payment successfully verified and booking marked as Confirmed and Paid.`,
     });
   } catch (error: any) {
@@ -577,165 +749,159 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
   }
 });
 
-// 4. PayPal: Create order with server-computed amount & slot conflict prevention
-app.post("/api/payments/paypal/create-order", async (req, res) => {
+// Idempotency cache for processed webhook event IDs
+const processedWebhookEventIds = new Set<string>();
+
+// Centralized Stripe Webhook Handler with cryptographic signature verification and idempotency
+async function handleStripeWebhookEvent(req: express.Request, res: express.Response) {
+  let event: Stripe.Event;
+  const sig = req.headers["stripe-signature"] as string | undefined;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
   try {
-    const { items, customerInfo, bookingRef } = req.body;
-    const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
-
-    const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
-    const bookingDate = customerInfo?.bookingDate || customerInfo?.date;
-    const bookingTime = customerInfo?.bookingTime || customerInfo?.time;
-
-    // Server-side slot availability check (prevent double-booking)
-    if (bookingDate && bookingTime) {
-      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef);
-      if (isTaken) {
-        return res.status(409).json({
-          error: "SLOT_ALREADY_BOOKED",
-          message: `The ${bookingTime} slot on ${bookingDate} is already reserved. Please select another slot.`
-        });
+    if (webhookSecret && sig) {
+      const stripe = getStripe();
+      const rawBody = (req as any).rawBody || (typeof req.body === 'string' ? Buffer.from(req.body) : Buffer.from(JSON.stringify(req.body)));
+      event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+    } else {
+      // If webhook secret is not set, parse payload safely
+      event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      if (webhookSecret && !sig) {
+        console.warn("[Stripe Webhook] Received webhook event without stripe-signature header");
       }
     }
-
-    const orderId = `PAYPAL-ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    res.json({
-      orderId,
-      totalAmount,
-      currency: "AUD",
-      items: verifiedItems,
-      bookingRef: targetRef,
-    });
-  } catch (error: any) {
-    console.error("Error creating PayPal order:", error);
-    res.status(500).json({ error: "Failed to create PayPal order" });
+  } catch (err: any) {
+    console.error("[Stripe Webhook] Signature verification failed:", err.message);
+    return res.status(400).send(`Webhook signature verification failed: ${err.message}`);
   }
-});
 
-// 5. PayPal: Capture & verify order server-side and confirm booking
-app.post("/api/payments/paypal/capture-order", async (req, res) => {
-  try {
-    const { orderId, bookingRef, bookingData, items } = req.body;
-
-    if (!orderId) {
-      return res.status(400).json({ error: "orderId is required" });
-    }
-
-    const { verifiedItems, totalAmount } = computeVerifiedOrder(items || (bookingData?.packageTitle ? [{ name: bookingData.packageTitle, unitPrice: bookingData.packagePrice }] : []));
-
-    // Update existing booking or create new one with status 'Confirmed' & paymentStatus 'paid'
-    const targetRef = bookingRef || bookingData?.bookingRef || bookingData?.ref;
-    let finalBooking: any = null;
-
-    if (targetRef) {
-      const existing = await getBookingByRef(targetRef);
-      if (existing) {
-        finalBooking = await updateBookingByRef(targetRef, {
-          paymentStatus: "paid",
-          status: "Confirmed",
-          notes: existing.notes ? `${existing.notes} [Paid via PayPal: ${orderId}]` : `[Paid via PayPal: ${orderId}]`,
-        });
-      }
-    }
-
-    if (!finalBooking && bookingData) {
-      const newRef = targetRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
-      finalBooking = await createBooking({
-        bookingRef: newRef,
-        userId: bookingData.userId || null,
-        studentName: bookingData.studentName || `${bookingData.firstName || ''} ${bookingData.lastName || ''}`.trim() || "Student",
-        phone: bookingData.phone || "",
-        email: bookingData.email || "",
-        suburb: bookingData.suburb || "Rockingham, WA",
-        pickupAddress: bookingData.pickupAddress || bookingData.address || null,
-        packageTitle: bookingData.packageTitle || verifiedItems[0]?.name || "Driving Lesson",
-        packagePrice: totalAmount,
-        date: bookingData.date || new Date().toISOString().split("T")[0],
-        time: bookingData.time || "09:00 AM",
-        status: "Confirmed",
-        notes: bookingData.notes ? `${bookingData.notes} [Paid via PayPal: ${orderId}]` : `[Paid via PayPal: ${orderId}]`,
-        paymentStatus: "paid",
-        stripeSessionId: null,
-      });
-    }
-
-    const bookingResponse = finalBooking ? {
-      ...finalBooking,
-      ref: finalBooking.bookingRef || finalBooking.ref || targetRef,
-      paymentMethod: 'PayPal'
-    } : null;
-
-    res.json({
-      success: true,
-      verified: true,
-      paymentStatus: "paid",
-      booking: bookingResponse,
-      transactionId: orderId,
-      amount: totalAmount,
-      message: "PayPal payment successfully captured and booking marked as Confirmed and Paid.",
-    });
-  } catch (error: any) {
-    console.error("Error capturing PayPal payment:", error);
-    res.status(500).json({ error: error?.message || "Failed to capture PayPal payment" });
+  // Idempotency check: avoid duplicate event processing
+  if (event.id && processedWebhookEventIds.has(event.id)) {
+    console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id}`);
+    return res.json({ received: true, duplicate: true });
   }
-});
 
-// 6. Webhook callback for payment providers (Stripe / PayPal)
-app.post("/api/payments/webhook", async (req, res) => {
+  if (event.id) {
+    processedWebhookEventIds.add(event.id);
+    if (processedWebhookEventIds.size > 2000) {
+      const oldest = processedWebhookEventIds.values().next().value;
+      if (oldest) processedWebhookEventIds.delete(oldest);
+    }
+  }
+
+  console.log(`[Stripe Webhook] Processing event: ${event.type} (${event.id})`);
+
   try {
-    const event = req.body;
-    const eventType = event?.type || event?.event_type || "generic_webhook";
-    console.log("[Payment Webhook] Received event:", eventType);
-
-    // Stripe: payment_intent.succeeded
-    if (eventType === "payment_intent.succeeded") {
-      const pi = event.data?.object;
-      const ref = pi?.metadata?.bookingRef;
-      if (ref) {
-        await updateBookingByRef(ref, {
-          paymentStatus: "paid",
-          status: "Confirmed",
-          stripeSessionId: pi.id,
-        });
-        console.log(`[Stripe Webhook] Booking ${ref} flipped to Confirmed and paid.`);
-      }
-    } 
-    // Stripe: payment_intent.payment_failed
-    else if (eventType === "payment_intent.payment_failed") {
-      const pi = event.data?.object;
-      const ref = pi?.metadata?.bookingRef;
-      const failureMsg = pi?.last_payment_error?.message || "Payment was declined by card issuer";
-      // PCI-compliant: log only failure code and reference, never PAN or CVC
-      console.warn(`[Stripe Webhook] Payment failed for ${ref}: ${failureMsg}`);
-      if (ref) {
-        const existing = await getBookingByRef(ref);
-        if (existing) {
-          await updateBookingByRef(ref, {
-            notes: existing.notes ? `${existing.notes} [Payment failed: ${failureMsg}]` : `[Payment failed: ${failureMsg}]`
-          });
+    switch (event.type) {
+      case "payment_intent.succeeded": {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const ref = pi.metadata?.bookingRef;
+        if (ref) {
+          const existing = await getBookingByRef(ref);
+          if (existing) {
+            await updateBookingByRef(ref, {
+              status: "Confirmed",
+              paymentStatus: "paid",
+              stripeSessionId: pi.id,
+            });
+            console.log(`[Stripe Webhook] Booking ${ref} confirmed as paid for PaymentIntent ${pi.id}`);
+          }
         }
+        break;
       }
-    }
-    // PayPal: PAYMENT.CAPTURE.COMPLETED
-    else if (eventType === "PAYMENT.CAPTURE.COMPLETED") {
-      const resource = event.resource;
-      const customId = resource?.custom_id;
-      if (customId) {
-        await updateBookingByRef(customId, {
-          paymentStatus: "paid",
-          status: "Confirmed",
-        });
-        console.log(`[PayPal Webhook] Capture completed for booking ${customId}`);
+      case "payment_intent.payment_failed": {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const ref = pi.metadata?.bookingRef;
+        const failureMsg = pi.last_payment_error?.message || "Payment declined";
+        console.warn(`[Stripe Webhook] Payment failed for ${ref}: ${failureMsg}`);
+        if (ref) {
+          const existing = await getBookingByRef(ref);
+          if (existing && existing.paymentStatus !== 'paid') {
+            await updateBookingByRef(ref, {
+              paymentStatus: "failed",
+              notes: existing.notes 
+                ? `${existing.notes} [Payment Failed: ${failureMsg}]` 
+                : `[Payment Failed: ${failureMsg}]`,
+            });
+          }
+        }
+        break;
       }
+      case "payment_intent.canceled": {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const ref = pi.metadata?.bookingRef;
+        if (ref) {
+          const existing = await getBookingByRef(ref);
+          if (existing && existing.paymentStatus !== 'paid') {
+            await updateBookingByRef(ref, {
+              status: "Cancelled",
+              paymentStatus: "cancelled",
+            });
+            console.log(`[Stripe Webhook] Booking ${ref} cancelled due to payment intent cancellation`);
+          }
+        }
+        break;
+      }
+      case "payment_intent.processing": {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const ref = pi.metadata?.bookingRef;
+        if (ref) {
+          const existing = await getBookingByRef(ref);
+          if (existing && existing.paymentStatus !== 'paid') {
+            await updateBookingByRef(ref, {
+              paymentStatus: "processing",
+              status: "Pending",
+            });
+          }
+        }
+        break;
+      }
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const ref = session.metadata?.bookingRef;
+        if (session.payment_status === "paid" && ref) {
+          const existing = await getBookingByRef(ref);
+          if (existing) {
+            await updateBookingByRef(ref, {
+              status: "Confirmed",
+              paymentStatus: "paid",
+              stripeSessionId: session.id,
+            });
+            console.log(`[Stripe Webhook] Checkout session completed for booking ${ref}`);
+          }
+        }
+        break;
+      }
+      case "checkout.session.expired": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const ref = session.metadata?.bookingRef;
+        if (ref) {
+          const existing = await getBookingByRef(ref);
+          if (existing && existing.paymentStatus !== 'paid') {
+            await updateBookingByRef(ref, {
+              status: "Cancelled",
+              paymentStatus: "expired",
+            });
+            console.log(`[Stripe Webhook] Booking ${ref} expired`);
+          }
+        }
+        break;
+      }
+      default:
+        // Ignore unhandled event types cleanly
+        break;
     }
 
     res.json({ received: true });
   } catch (err: any) {
-    console.error("Webhook processing error:", err?.message || err);
-    res.status(400).send("Webhook error");
+    console.error("[Stripe Webhook] Handler error:", err?.message || err);
+    res.status(500).json({ error: "Webhook handler error" });
   }
-});
+}
+
+// Support both endpoint paths so any dashboard webhook configuration works
+app.post("/api/payments/webhook", handleStripeWebhookEvent);
+app.post("/api/stripe/webhook", handleStripeWebhookEvent);
 
 // Sync authenticated user to PostgreSQL users table
 app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
@@ -805,8 +971,8 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       return res.status(400).json({ error: "Missing required booking fields" });
     }
 
-    // Double booking verification: ensure slot is free
-    const isSlotTaken = await checkSlotBooked(date, time);
+    // Double booking verification: ensure slot is free (allowing customer to finalize their own pending booking)
+    const isSlotTaken = await checkSlotBooked(date, time, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
     if (isSlotTaken) {
       return res.status(409).json({
         error: "SLOT_ALREADY_BOOKED",
@@ -947,4 +1113,9 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
+export { app };

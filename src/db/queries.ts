@@ -188,10 +188,117 @@ export async function getBookingByRef(bookingRef: string) {
   return found || null;
 }
 
+// Retrieve pending booking for a specific customer on a date & time (to reuse ref during checkout retry)
+export async function getPendingBookingForCustomer(
+  email?: string,
+  phone?: string,
+  date?: string,
+  time?: string
+) {
+  const cleanEmail = email?.trim().toLowerCase();
+  const cleanPhone = phone?.replace(/\D/g, '');
+  const normalizedDate = date?.trim();
+  const normalizedTime = time?.trim();
+
+  if (!normalizedDate || !normalizedTime || (!cleanEmail && !cleanPhone)) {
+    return null;
+  }
+
+  // 1. PostgreSQL check if configured
+  if (isSqlConfigured && db) {
+    try {
+      const rows = await db
+        .select()
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.date, normalizedDate),
+            eq(bookings.time, normalizedTime),
+            eq(bookings.status, 'Pending'),
+            eq(bookings.paymentStatus, 'unpaid')
+          )
+        );
+
+      const match = rows.find(r => 
+        (cleanEmail && r.email?.toLowerCase() === cleanEmail) ||
+        (cleanPhone && r.phone?.replace(/\D/g, '') === cleanPhone)
+      );
+      if (match) return match;
+    } catch (error: any) {
+      console.warn('[AI Studio] getPendingBookingForCustomer SQL fallback:', error?.message);
+    }
+  }
+
+  // 2. In-memory check
+  return inMemoryBookings.find(b => 
+    b.date === normalizedDate &&
+    b.time === normalizedTime &&
+    b.status === 'Pending' &&
+    b.paymentStatus === 'unpaid' &&
+    ((cleanEmail && b.email?.toLowerCase() === cleanEmail) ||
+     (cleanPhone && b.phone?.replace(/\D/g, '') === cleanPhone))
+  ) || null;
+}
+
 // Check if a time slot on a specific date is already taken by an active booking (prevent double-booking)
-export async function checkSlotBooked(date: string, time: string, excludeRef?: string): Promise<boolean> {
+export async function checkSlotBooked(
+  date: string, 
+  time: string, 
+  excludeRef?: string,
+  customerEmail?: string,
+  customerPhone?: string
+): Promise<boolean> {
   const normalizedDate = date.trim();
   const normalizedTime = time.trim();
+  const cleanEmail = customerEmail?.trim().toLowerCase();
+  const cleanPhone = customerPhone?.replace(/\D/g, '');
+  const now = Date.now();
+  const PENDING_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes reservation hold for pending checkout
+
+  const isConflict = (r: any): boolean => {
+    // Exclude the current booking reference (student is paying for this ref)
+    if (excludeRef && r.bookingRef && r.bookingRef.toUpperCase() === excludeRef.toUpperCase()) {
+      return false;
+    }
+
+    // Must match date and time slot
+    if (r.date !== normalizedDate || r.time !== normalizedTime) {
+      return false;
+    }
+
+    // Cancelled bookings are freed up
+    if (r.status === 'Cancelled') {
+      return false;
+    }
+
+    // Confirmed or Paid bookings are always active conflicts
+    if (r.status === 'Confirmed' || r.paymentStatus === 'paid') {
+      return true;
+    }
+
+    // For unpaid 'Pending' reservations:
+    if (r.status === 'Pending' || r.paymentStatus === 'unpaid') {
+      // If the email or phone matches the customer attempting checkout, this is the SAME customer!
+      // They are resuming or retrying their payment, so do NOT block them.
+      if (cleanEmail && r.email && r.email.toLowerCase() === cleanEmail) {
+        return false;
+      }
+      if (cleanPhone && r.phone && r.phone.replace(/\D/g, '') === cleanPhone) {
+        return false;
+      }
+
+      // If pending reservation was created more than 20 minutes ago without payment, it has expired
+      const createdAtMs = r.createdAt ? new Date(r.createdAt).getTime() : 0;
+      if (createdAtMs > 0 && (now - createdAtMs) > PENDING_TIMEOUT_MS) {
+        return false;
+      }
+
+      // Recent pending checkout by another customer: temporarily hold slot
+      return true;
+    }
+
+    return false;
+  };
 
   // 1. Check PostgreSQL database if configured
   if (isSqlConfigured && db) {
@@ -207,8 +314,8 @@ export async function checkSlotBooked(date: string, time: string, excludeRef?: s
           )
         );
 
-      const activeRows = rows.filter(r => !excludeRef || r.bookingRef !== excludeRef);
-      if (activeRows.length > 0) {
+      const activeConflict = rows.some(isConflict);
+      if (activeConflict) {
         return true;
       }
     } catch (error: any) {
@@ -217,15 +324,7 @@ export async function checkSlotBooked(date: string, time: string, excludeRef?: s
   }
 
   // 2. Check in-memory store
-  const inMemoryConflict = inMemoryBookings.some(b => {
-    if (excludeRef && b.bookingRef === excludeRef) return false;
-    return (
-      b.date === normalizedDate &&
-      b.time === normalizedTime &&
-      b.status !== 'Cancelled'
-    );
-  });
-
+  const inMemoryConflict = inMemoryBookings.some(isConflict);
   return inMemoryConflict;
 }
 

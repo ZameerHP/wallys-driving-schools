@@ -316,6 +316,17 @@ export function BookNow() {
   // URL params for Stripe redirection
   const [searchParams] = useSearchParams();
 
+  // Stable booking reference for current checkout flow
+  const [activeBookingRef, setActiveBookingRef] = useState<string>(() => {
+    try {
+      const saved = sessionStorage.getItem('wallys_active_booking_ref');
+      if (saved && saved.startsWith('WD-')) return saved;
+    } catch {}
+    const newRef = `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+    try { sessionStorage.setItem('wallys_active_booking_ref', newRef); } catch {}
+    return newRef;
+  });
+
   // Payment State
   const [paymentMethod, setPaymentMethod] = useState<'card' | 'cash'>('card');
   const [cardNumber, setCardNumber] = useState('');
@@ -576,7 +587,7 @@ export function BookNow() {
         }
 
         if (data.url) {
-          // Redirect to Stripe's hosted Checkout page (Apple Pay, Google Pay, Cards)
+          // Redirect to Stripe's hosted Checkout page (Google Pay, Cards)
           window.location.href = data.url;
           return;
         }
@@ -700,7 +711,7 @@ export function BookNow() {
                   {confirmedBooking.paymentStatus === 'paid' ? (
                     <span className="font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-lg border border-emerald-200 text-xs uppercase flex items-center gap-1">
                       <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      Paid Online ({confirmedBooking.paymentMethod || 'Card / PayPal'})
+                      Paid Online ({confirmedBooking.paymentMethod || 'Card / Google Pay'})
                     </span>
                   ) : (
                     <span className="font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-200 text-xs uppercase flex items-center gap-1">
@@ -1598,6 +1609,7 @@ export function BookNow() {
                       exit={{ opacity: 0, y: -10 }}
                     >
                       <PaymentsStep
+                        bookingRef={activeBookingRef}
                         items={cartItems.length > 0 ? cartItems.map(it => ({
                           id: it.id,
                           name: it.title,
