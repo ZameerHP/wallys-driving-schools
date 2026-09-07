@@ -48,6 +48,22 @@ export const GooglePayMark: React.FC<{ className?: string; size?: 'sm' | 'md' | 
   );
 };
 
+// Safe HTTP response parser to prevent "Unexpected token A... is not valid JSON" when servers return HTML or text error pages
+async function parseResponseSafely(res: Response): Promise<{ data: any; isJson: boolean; rawText: string }> {
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      const data = await res.json();
+      return { data, isJson: true, rawText: '' };
+    } catch {
+      // JSON parse failed
+    }
+  }
+  const rawText = await res.text().catch(() => '');
+  return { data: null, isJson: false, rawText };
+}
+
+
 export interface PaymentLineItem {
   id?: string;
   name: string;
@@ -165,9 +181,9 @@ const RealStripeCheckoutForm: React.FC<RealStripeCheckoutFormProps> = ({
           })
         });
 
-        const verifyData = await verifyRes.json();
-        if (!verifyRes.ok || !verifyData.success) {
-          throw new Error(verifyData.message || 'Server verification failed');
+        const { data: verifyData, isJson: isVerifyJson } = await parseResponseSafely(verifyRes);
+        if (!verifyRes.ok || !isVerifyJson || !verifyData?.success) {
+          throw new Error(verifyData?.message || 'Server verification failed');
         }
 
         onPaymentSuccess(verifyData.booking, {
@@ -240,9 +256,9 @@ const RealStripeCheckoutForm: React.FC<RealStripeCheckoutFormProps> = ({
                 })
               });
 
-              const verifyData = await verifyRes.json();
-              if (!verifyRes.ok || !verifyData.success) {
-                throw new Error(verifyData.message || 'Server verification failed');
+              const { data: verifyData, isJson: isVerifyJson } = await parseResponseSafely(verifyRes);
+              if (!verifyRes.ok || !isVerifyJson || !verifyData?.success) {
+                throw new Error(verifyData?.message || 'Server verification failed');
               }
 
               onPaymentSuccess(verifyData.booking, {
@@ -334,9 +350,9 @@ const RealStripeCheckoutForm: React.FC<RealStripeCheckoutFormProps> = ({
           })
         });
 
-        const verifyData = await verifyRes.json();
-        if (!verifyRes.ok || !verifyData.success) {
-          throw new Error(verifyData.message || 'Payment confirmed by Stripe, but server booking verification failed.');
+        const { data: verifyData, isJson: isVerifyJson } = await parseResponseSafely(verifyRes);
+        if (!verifyRes.ok || !isVerifyJson || !verifyData?.success) {
+          throw new Error(verifyData?.message || 'Payment confirmed by Stripe, but server booking verification failed.');
         }
 
         onPaymentSuccess(verifyData.booking, {
@@ -745,13 +761,22 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
         })
       });
 
-      const intentData = await intentRes.json();
+      const { data: intentData, isJson, rawText } = await parseResponseSafely(intentRes);
 
-      if (!intentRes.ok || intentData.error) {
-        if (intentData.error === 'SLOT_ALREADY_BOOKED') {
+      if (!intentRes.ok || !isJson || !intentData || intentData.error) {
+        if (intentData?.error === 'SLOT_ALREADY_BOOKED') {
           throw new Error(intentData.message || 'This time slot is already reserved. Please select another time.');
         }
-        throw new Error(intentData.message || 'Unable to initiate Stripe payment.');
+        if (intentData?.message) {
+          throw new Error(intentData.message);
+        }
+        if (!intentRes.ok) {
+          if (intentRes.status === 500 || rawText.toLowerCase().includes('server error')) {
+            throw new Error('Payment gateway configuration notice: If this app is deployed on Vercel, please verify STRIPE_SECRET_KEY and VITE_STRIPE_PUBLISHABLE_KEY in your Vercel Project Settings > Environment Variables.');
+          }
+          throw new Error(`Unable to initialize payment (HTTP ${intentRes.status}).`);
+        }
+        throw new Error('Unable to initiate Stripe payment.');
       }
 
       if (intentData.totalAmount) {
@@ -771,8 +796,8 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
       } else {
         // Fallback: fetch publishable key from status
         const statusRes = await fetch('/api/stripe/status');
-        const statusData = await statusRes.json();
-        if (statusData.publishableKey) {
+        const { data: statusData } = await parseResponseSafely(statusRes);
+        if (statusData?.publishableKey) {
           setStripePromise(loadStripe(statusData.publishableKey));
         }
       }
@@ -790,6 +815,31 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
   useEffect(() => {
     initializePayment();
   }, [initTrigger]);
+
+  // Pay with Cash on Day fallback
+  const handlePayCashOnDay = () => {
+    const studentName = customerInfo.name || `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || 'Student';
+    const cashBooking = {
+      bookingRef,
+      ref: bookingRef,
+      studentName,
+      email: customerInfo.email,
+      phone: customerInfo.phone,
+      packageTitle: verifiedItems[0]?.name || 'Driving Lesson',
+      packagePrice: serverTotal,
+      date: customerInfo.date || customerInfo.bookingDate,
+      time: customerInfo.time || customerInfo.bookingTime,
+      suburb: customerInfo.suburb,
+      pickupAddress: customerInfo.address || customerInfo.pickupAddress,
+      status: 'Confirmed',
+      paymentStatus: 'cash_on_day',
+    };
+    onPaymentSuccess(cashBooking, {
+      method: 'cash',
+      transactionId: `CASH-${bookingRef}`,
+      amount: serverTotal
+    });
+  };
 
   // Request Stripe Hosted Checkout (fallback / alternative flow)
   const handleRequestHostedCheckout = async () => {
@@ -815,9 +865,9 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
         })
       });
 
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.message || 'Failed to generate checkout session.');
+      const { data, isJson } = await parseResponseSafely(res);
+      if (!res.ok || !isJson || !data || data.error) {
+        throw new Error(data?.message || 'Failed to generate checkout session.');
       }
 
       if (data.url) {
@@ -1028,7 +1078,7 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
             <p className="text-xs text-black/60 max-w-md mx-auto">
               {errorMessage || "Unable to load Stripe elements. Please check your network connection or verify your Stripe API keys."}
             </p>
-            <div className="flex items-center justify-center gap-2 pt-1">
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
               {isSlotConflict && (
                 <button
                   type="button"
@@ -1044,6 +1094,22 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
                 className="px-3.5 py-1.5 bg-black/5 text-[#111111] rounded-lg font-semibold text-xs hover:bg-black/10 transition-colors cursor-pointer"
               >
                 Retry Connection
+              </button>
+              <button
+                type="button"
+                onClick={handleRequestHostedCheckout}
+                disabled={isCreatingHosted}
+                className="px-3.5 py-1.5 bg-neutral-100 text-neutral-800 border border-neutral-200 rounded-lg font-semibold text-xs hover:bg-neutral-200 transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                {isCreatingHosted ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
+                Hosted Checkout
+              </button>
+              <button
+                type="button"
+                onClick={handlePayCashOnDay}
+                className="px-3.5 py-1.5 bg-neutral-900 text-white rounded-lg font-semibold text-xs hover:bg-black transition-colors cursor-pointer"
+              >
+                Pay with Cash on Day
               </button>
             </div>
           </div>

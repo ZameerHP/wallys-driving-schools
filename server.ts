@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import Stripe from "stripe";
 import { 
@@ -27,11 +26,44 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({
-  verify: (req: any, _res, buf) => {
-    req.rawBody = buf;
+// Enable CORS for API requests across domains/previews
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, stripe-signature");
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
   }
-}));
+  next();
+});
+
+// Normalize API route URLs for Vercel / serverless deployments (if proxy/rewrite stripped /api)
+app.use((req, _res, next) => {
+  if (!req.url.startsWith('/api') && (
+    req.url.startsWith('/payments') ||
+    req.url.startsWith('/stripe') ||
+    req.url.startsWith('/bookings') ||
+    req.url.startsWith('/contact') ||
+    req.url.startsWith('/health') ||
+    req.url.startsWith('/instructor') ||
+    req.url.startsWith('/create-checkout-session')
+  )) {
+    req.url = `/api${req.url}`;
+  }
+  next();
+});
+
+// If body is already parsed by Vercel serverless runtime, avoid re-reading consumed stream which causes requests to hang
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === "object") {
+    return next();
+  }
+  express.json({
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })(req, res, next);
+});
 
 // 1. Security Headers Middleware (HSTS, X-Content-Type-Options, Frame Guard)
 app.use((req, res, next) => {
@@ -1092,9 +1124,21 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Global JSON error handler to ensure JSON responses on unexpected exceptions
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[Server Error]", err);
+  if (!res.headersSent) {
+    res.status(err?.status || 500).json({
+      error: "INTERNAL_SERVER_ERROR",
+      message: err?.message || "An internal server error occurred"
+    });
+  }
+});
+
 // Vite middleware & Static asset serving
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -1113,9 +1157,10 @@ async function startServer() {
   });
 }
 
-if (!process.env.VERCEL) {
-  startServer();
+if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  startServer().catch(err => console.error("Server start error:", err));
 }
 
 export default app;
 export { app };
+
