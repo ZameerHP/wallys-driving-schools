@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import Stripe from "stripe";
 import { 
@@ -19,9 +18,6 @@ import {
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
@@ -210,7 +206,7 @@ app.post("/api/auth/instructor-logout", (req, res) => {
 let stripeClient: Stripe | null = null;
 function getStripe(): Stripe {
   if (!stripeClient) {
-    const key = process.env.STRIPE_SECRET_KEY;
+    const key = (process.env.STRIPE_SECRET_KEY || "").trim();
     if (!key) {
       throw new Error("STRIPE_SECRET_KEY is not configured");
     }
@@ -221,10 +217,11 @@ function getStripe(): Stripe {
 
 // Check Stripe configuration status
 app.get("/api/stripe/status", (req, res) => {
-  const isConfigured = Boolean(process.env.STRIPE_SECRET_KEY);
-  const isLive = Boolean(process.env.STRIPE_SECRET_KEY?.startsWith("sk_live_"));
-  const isTest = Boolean(process.env.STRIPE_SECRET_KEY?.startsWith("sk_test_"));
-  const publishableKey = process.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
+  const secretKey = (process.env.STRIPE_SECRET_KEY || "").trim();
+  const publishableKey = (process.env.VITE_STRIPE_PUBLISHABLE_KEY || "").trim();
+  const isConfigured = Boolean(secretKey);
+  const isLive = Boolean(secretKey.startsWith("sk_live_"));
+  const isTest = Boolean(secretKey.startsWith("sk_test_"));
 
   res.json({
     configured: isConfigured,

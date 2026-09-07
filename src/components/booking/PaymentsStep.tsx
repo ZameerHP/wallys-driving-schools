@@ -791,14 +791,17 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
       if (intentData.clientSecret) {
         setClientSecret(intentData.clientSecret);
       }
-      if (intentData.publishableKey) {
-        setStripePromise(loadStripe(intentData.publishableKey));
+      const clientEnvKey = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_STRIPE_PUBLISHABLE_KEY) || "";
+      const pubKey = (intentData.publishableKey || clientEnvKey || "").trim();
+      if (pubKey) {
+        setStripePromise(loadStripe(pubKey));
       } else {
         // Fallback: fetch publishable key from status
         const statusRes = await fetch('/api/stripe/status');
         const { data: statusData } = await parseResponseSafely(statusRes);
-        if (statusData?.publishableKey) {
-          setStripePromise(loadStripe(statusData.publishableKey));
+        const fallbackKey = (statusData?.publishableKey || "").trim();
+        if (fallbackKey) {
+          setStripePromise(loadStripe(fallbackKey));
         }
       }
     } catch (err: any) {
@@ -1070,28 +1073,57 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
             />
           </Elements>
         ) : (
-          <div className="p-6 text-center space-y-3">
-            <AlertCircle className="w-8 h-8 text-[#E3222A] mx-auto" />
-            <div className="text-sm font-semibold text-[#111111]">
-              {isSlotConflict ? "Selected Slot Conflict" : errorMessage ? "Payment Initialization Notice" : "Payment Gateway Loading"}
+          <div className="p-6 text-center space-y-4">
+            <AlertCircle className="w-9 h-9 text-[#E3222A] mx-auto" />
+            <div className="text-sm font-bold text-[#111111]">
+              {isSlotConflict ? "Selected Slot Conflict" : errorMessage?.includes('Vercel') || errorMessage?.includes('STRIPE') ? "Stripe Setup Required in Vercel" : "Payment Initialization Notice"}
             </div>
-            <p className="text-xs text-black/60 max-w-md mx-auto">
-              {errorMessage || "Unable to load Stripe elements. Please check your network connection or verify your Stripe API keys."}
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+            
+            {errorMessage?.includes('Vercel') || errorMessage?.includes('STRIPE') ? (
+              <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3.5 text-left text-xs text-amber-900 space-y-2 max-w-lg mx-auto">
+                <p className="font-semibold text-amber-950 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-amber-700" />
+                  Live Vercel Deployment Notice:
+                </p>
+                <p className="text-[11px] leading-relaxed text-amber-800">
+                  When deploying to Vercel, Stripe credentials must be added in your Vercel Dashboard:
+                </p>
+                <div className="bg-white/80 border border-amber-200 rounded-lg p-2 font-mono text-[10px] space-y-1 text-neutral-800">
+                  <div>• <span className="font-bold">STRIPE_SECRET_KEY</span> = sk_live_... (or sk_test_...)</div>
+                  <div>• <span className="font-bold">VITE_STRIPE_PUBLISHABLE_KEY</span> = pk_live_... (or pk_test_...)</div>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  Go to <strong>Vercel &gt; Your Project &gt; Settings &gt; Environment Variables</strong>, add both keys, and click <strong>Redeploy</strong>.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-black/60 max-w-md mx-auto">
+                {errorMessage || "Unable to load Stripe elements. Please check your network connection or verify your Stripe API keys."}
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
               {isSlotConflict && (
                 <button
                   type="button"
                   onClick={onBack}
-                  className="px-3.5 py-1.5 bg-[#E3222A] text-white rounded-lg font-bold text-xs hover:bg-[#c91d24] transition-colors cursor-pointer"
+                  className="px-4 py-2 bg-[#E3222A] text-white rounded-lg font-bold text-xs hover:bg-[#c91d24] transition-colors cursor-pointer"
                 >
                   Select Another Slot
                 </button>
               )}
               <button
                 type="button"
+                onClick={handlePayCashOnDay}
+                className="px-4 py-2 bg-[#111111] text-white rounded-lg font-bold text-xs hover:bg-neutral-800 transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                Book Now & Pay Cash on Day
+              </button>
+              <button
+                type="button"
                 onClick={initializePayment}
-                className="px-3.5 py-1.5 bg-black/5 text-[#111111] rounded-lg font-semibold text-xs hover:bg-black/10 transition-colors cursor-pointer"
+                className="px-3.5 py-2 bg-black/5 text-[#111111] rounded-lg font-semibold text-xs hover:bg-black/10 transition-colors cursor-pointer"
               >
                 Retry Connection
               </button>
@@ -1099,17 +1131,10 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
                 type="button"
                 onClick={handleRequestHostedCheckout}
                 disabled={isCreatingHosted}
-                className="px-3.5 py-1.5 bg-neutral-100 text-neutral-800 border border-neutral-200 rounded-lg font-semibold text-xs hover:bg-neutral-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                className="px-3.5 py-2 bg-neutral-100 text-neutral-800 border border-neutral-200 rounded-lg font-semibold text-xs hover:bg-neutral-200 transition-colors cursor-pointer flex items-center gap-1.5"
               >
                 {isCreatingHosted ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
                 Hosted Checkout
-              </button>
-              <button
-                type="button"
-                onClick={handlePayCashOnDay}
-                className="px-3.5 py-1.5 bg-neutral-900 text-white rounded-lg font-semibold text-xs hover:bg-black transition-colors cursor-pointer"
-              >
-                Pay with Cash on Day
               </button>
             </div>
           </div>
