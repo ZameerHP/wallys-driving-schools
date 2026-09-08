@@ -123,37 +123,36 @@ export function CustomCursor() {
 
   return (
     <>
-      {/* Precision Center Dot */}
+      {/* Precision Center Red Dot */}
       <div
         ref={cursorDotRef}
-        className="pointer-events-none fixed top-0 left-0 z-[999999] -translate-x-1/2 -translate-y-1/2 rounded-full transition-opacity duration-300"
+        className="pointer-events-none fixed top-0 left-0 z-[999999] -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-150 ease-out"
         style={{
-          width: isHovered ? '0px' : '6px',
-          height: isHovered ? '0px' : '6px',
+          width: isHovered ? '7px' : '6px',
+          height: isHovered ? '7px' : '6px',
           backgroundColor: '#E3222A',
-          boxShadow: '0 0 10px rgba(227, 34, 42, 0.8)',
+          boxShadow: '0 0 8px rgba(227, 34, 42, 0.9), 0 0 2px #E3222A',
           opacity: isVisible ? 1 : 0,
         }}
       />
 
-      {/* Fluid Trailing Ring with Mix-Blend Mode */}
+      {/* Fluid Trailing Red Ring */}
       <div
         ref={cursorRingRef}
         className="pointer-events-none fixed top-0 left-0 z-[999998] flex items-center justify-center -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-300 ease-out"
         style={{
-          width: isHovered ? (cursorText ? '80px' : '52px') : '32px',
-          height: isHovered ? (cursorText ? '80px' : '52px') : '32px',
-          border: isHovered ? '1.5px solid rgba(227, 34, 42, 0.9)' : '1px solid rgba(255, 255, 255, 0.4)',
-          backgroundColor: isHovered ? 'rgba(227, 34, 42, 0.12)' : 'transparent',
-          backdropFilter: isHovered ? 'blur(4px)' : 'none',
-          boxShadow: isHovered ? '0 0 25px rgba(227, 34, 42, 0.35)' : 'none',
+          width: isHovered ? (cursorText ? '80px' : '48px') : '32px',
+          height: isHovered ? (cursorText ? '80px' : '48px') : '32px',
+          border: isHovered ? '2px solid rgba(227, 34, 42, 0.95)' : '1.5px solid rgba(227, 34, 42, 0.8)',
+          backgroundColor: isHovered ? 'rgba(227, 34, 42, 0.1)' : 'rgba(227, 34, 42, 0.02)',
+          boxShadow: isHovered ? '0 0 18px rgba(227, 34, 42, 0.35)' : '0 0 8px rgba(227, 34, 42, 0.2)',
           opacity: isVisible ? 1 : 0,
         }}
       >
         {cursorText && (
           <span 
             ref={cursorTextRef}
-            className="text-[10px] font-bold uppercase tracking-widest text-white drop-shadow-md select-none"
+            className="text-[10px] font-bold uppercase tracking-widest text-[#E3222A] drop-shadow-sm select-none"
           >
             {cursorText}
           </span>

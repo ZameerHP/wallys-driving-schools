@@ -56,6 +56,13 @@
     outline: none;
     box-shadow: 0 0 0 2px rgba(227, 34, 42, 0.4);
   }
+
+  /* Global removal of default browser white arrow cursor: custom red ring & dot only */
+  @media (pointer: fine) {
+    *, *::before, *::after, html, body, a, button, input, select, textarea, [role="button"], label {
+      cursor: none !important;
+    }
+  }
 }
 
 @layer utilities {

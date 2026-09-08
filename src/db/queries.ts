@@ -28,26 +28,6 @@ const inMemoryBookings: any[] = [
     updatedAt: new Date('2026-06-01T08:30:00Z'),
   },
   {
-    id: 2,
-    bookingRef: 'WD-3190',
-    userId: null,
-    studentName: 'Marcus Chen',
-    phone: '0423 456 789',
-    email: 'm.chen@example.com',
-    suburb: 'Baldivis',
-    pickupAddress: '28 Rivergums Blvd, Baldivis WA 6171',
-    packageTitle: '2 Hours Lesson',
-    packagePrice: 130,
-    date: '2026-06-16',
-    time: '02:00 PM',
-    status: 'Pending',
-    notes: 'Focus on parallel parking and roundabout navigation',
-    paymentStatus: 'unpaid',
-    stripeSessionId: null,
-    createdAt: new Date('2026-06-02T11:15:00Z'),
-    updatedAt: new Date('2026-06-02T11:15:00Z'),
-  },
-  {
     id: 3,
     bookingRef: 'WD-7521',
     userId: null,
@@ -210,7 +190,7 @@ export async function getOrCreateUser(
 }
 
 // Fetch bookings with optional email or userId filter
-export async function getBookings(filter?: { email?: string; userId?: string }) {
+export async function getBookings(filter?: { email?: string; userId?: string; includeUnpaid?: boolean }) {
   const mergedMap = new Map<string, any>();
 
   // 1. Fetch from Supabase
@@ -257,6 +237,12 @@ export async function getBookings(filter?: { email?: string; userId?: string }) 
   }
 
   let list = Array.from(mergedMap.values());
+  
+  // Strict check: Only paid bookings are returned to students/manage booking
+  if (!filter?.includeUnpaid) {
+    list = list.filter(b => b.paymentStatus === 'paid');
+  }
+
   if (filter?.userId || filter?.email) {
     list = list.filter(b => 
       (filter.userId && b.userId === filter.userId) || 
@@ -268,7 +254,7 @@ export async function getBookings(filter?: { email?: string; userId?: string }) 
 }
 
 // Retrieve single booking by reference code (e.g. WD-8492)
-export async function getBookingByRef(bookingRef: string) {
+export async function getBookingByRef(bookingRef: string, options?: { allowUnpaid?: boolean }) {
   const cleanRef = bookingRef.trim().toUpperCase();
 
   // 1. Check Supabase
@@ -282,7 +268,10 @@ export async function getBookingByRef(bookingRef: string) {
         .limit(1);
 
       if (!error && data && data.length > 0) {
-        return mapSupabaseRowToBooking(data[0]);
+        const found = mapSupabaseRowToBooking(data[0]);
+        if (found && (options?.allowUnpaid || found.paymentStatus === 'paid')) {
+          return found;
+        }
       }
     } catch {}
   }
@@ -296,13 +285,18 @@ export async function getBookingByRef(bookingRef: string) {
         .where(eq(bookings.bookingRef, bookingRef))
         .limit(1);
 
-      if (result[0]) return result[0];
+      if (result[0] && (options?.allowUnpaid || result[0].paymentStatus === 'paid')) {
+        return result[0];
+      }
     } catch {}
   }
 
   // 3. Check in-memory
   const found = inMemoryBookings.find(b => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
-  return found || null;
+  if (found && (options?.allowUnpaid || found.paymentStatus === 'paid')) {
+    return found;
+  }
+  return null;
 }
 
 // Retrieve pending booking for a specific customer on a date & time (to reuse ref during checkout retry)

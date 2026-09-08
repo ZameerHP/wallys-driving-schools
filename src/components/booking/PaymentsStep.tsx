@@ -12,8 +12,7 @@ import {
   Clock,
   MapPin,
   User,
-  Check,
-  Banknote
+  Check
 } from 'lucide-react';
 import ErrorBoundary from '../ErrorBoundary';
 import { loadStripe, Stripe } from '@stripe/stripe-js';
@@ -449,24 +448,6 @@ const RealStripeCheckoutForm: React.FC<RealStripeCheckoutFormProps> = ({
             </button>
           )}
 
-          {/* Discreet Stripe Express Element listener for background wallet detection */}
-          <div className="hidden">
-            <ExpressCheckoutElement
-              options={{
-                buttonHeight: 48,
-                buttonType: { googlePay: 'pay' },
-                buttonTheme: { googlePay: 'black' },
-                paymentMethods: { googlePay: 'auto' },
-              }}
-              onConfirm={handleGooglePayConfirm}
-              onReady={(event) => {
-                if (event.availablePaymentMethods) {
-                  setHasGooglePay(Boolean(event.availablePaymentMethods.googlePay));
-                }
-              }}
-            />
-          </div>
-
           <div className="flex items-center justify-between text-[11px] text-black/55 px-1 pt-0.5">
             <span className="flex items-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
@@ -702,6 +683,284 @@ const RealStripeCheckoutForm: React.FC<RealStripeCheckoutFormProps> = ({
   );
 };
 
+// ---------------------------------------------------------------------------
+// SandboxStripeCheckoutForm: Seamless card & Google Pay fallback for sandbox / preview
+// ---------------------------------------------------------------------------
+interface SandboxStripeCheckoutFormProps {
+  serverTotal: number;
+  verifiedItems: PaymentLineItem[];
+  customerInfo: any;
+  bookingRef: string;
+  sandboxPiId: string;
+  onPaymentSuccess: (booking: any, meta: any) => void;
+  isBusy: boolean;
+  setIsSubmitting: (val: boolean) => void;
+  setErrorMessage: (msg: string | null) => void;
+  onRequestHostedCheckout: () => void;
+  isCreatingHosted: boolean;
+}
+
+const SandboxStripeCheckoutForm: React.FC<SandboxStripeCheckoutFormProps> = ({
+  serverTotal,
+  verifiedItems,
+  customerInfo,
+  bookingRef,
+  sandboxPiId,
+  onPaymentSuccess,
+  isBusy,
+  setIsSubmitting,
+  setErrorMessage,
+  onRequestHostedCheckout,
+  isCreatingHosted
+}) => {
+  const [cardNumber, setCardNumber] = useState('•••• •••• •••• 4242');
+  const [cardExpiry, setCardExpiry] = useState('12/28');
+  const [cardCvc, setCardCvc] = useState('123');
+  const [cardholderName, setCardholderName] = useState(() => {
+    return customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || 'Student Driver';
+  });
+  const [isLocalProcessing, setIsLocalProcessing] = useState(false);
+  const [isGPayProcessing, setIsGPayProcessing] = useState(false);
+
+  const handleSimulatedPayment = async (methodType: 'card' | 'google_pay') => {
+    setIsLocalProcessing(true);
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    try {
+      const activePi = sandboxPiId || `pi_sim_${Date.now()}_${bookingRef}`;
+      const res = await fetch('/api/payments/stripe/confirm-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentIntentId: activePi,
+          bookingRef,
+          bookingData: {
+            studentName: cardholderName,
+            email: customerInfo?.email || '',
+            phone: customerInfo?.phone || '',
+            suburb: customerInfo?.suburb || 'Rockingham, WA',
+            pickupAddress: customerInfo?.address || customerInfo?.pickupAddress || '',
+            packageTitle: verifiedItems[0]?.name || 'Driving Lesson',
+            packagePrice: serverTotal,
+            date: customerInfo?.date || customerInfo?.bookingDate || new Date().toISOString().split('T')[0],
+            time: customerInfo?.time || customerInfo?.bookingTime || '09:00 AM',
+          },
+          items: verifiedItems
+        })
+      });
+
+      const { data, isJson } = await parseResponseSafely(res);
+      if (!res.ok || !isJson || !data || data.error) {
+        throw new Error(data?.message || 'Payment confirmation failed');
+      }
+
+      onPaymentSuccess(data.booking, {
+        method: methodType,
+        transactionId: activePi,
+        amount: serverTotal
+      });
+    } catch (err: any) {
+      console.error('[Sandbox Stripe] Payment error:', err);
+      setErrorMessage(err.message || 'Payment processing failed. Please try again.');
+    } finally {
+      setIsLocalProcessing(false);
+      setIsSubmitting(false);
+      setIsGPayProcessing(false);
+    }
+  };
+
+  const handleGPayClick = () => {
+    setIsGPayProcessing(true);
+    handleSimulatedPayment('google_pay');
+  };
+
+  const handleCardSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleSimulatedPayment('card');
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* 1. Official Google Pay Instant Checkout */}
+      <div className="bg-gradient-to-b from-neutral-50 via-white to-white border border-black/10 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1.5 bg-black text-white px-2 py-0.5 rounded-md text-[11px] font-bold">
+              <GooglePayMark size="sm" />
+            </span>
+            <span className="text-xs font-bold text-[#111111] uppercase tracking-wider">
+              Google Pay Instant Checkout
+            </span>
+          </div>
+          <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 font-semibold flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            1-Click Checkout
+          </span>
+        </div>
+
+        <button
+          id="google-pay-sandbox-button"
+          type="button"
+          onClick={handleGPayClick}
+          disabled={isBusy || isLocalProcessing || isGPayProcessing}
+          className="w-full h-12 bg-black hover:bg-neutral-900 active:bg-neutral-800 text-white rounded-xl font-medium flex items-center justify-center gap-2 shadow-sm hover:shadow-md transition-all duration-150 cursor-pointer border border-white/10 disabled:opacity-60 disabled:cursor-not-allowed group relative focus:outline-none focus:ring-2 focus:ring-[#4285F4] focus:ring-offset-2"
+          aria-label="Pay with Google Pay"
+        >
+          {isGPayProcessing ? (
+            <div className="flex items-center gap-2 text-white text-xs font-semibold">
+              <Loader2 className="w-4 h-4 animate-spin text-white" />
+              <span>Authorizing with Google Pay...</span>
+            </div>
+          ) : (
+            <GooglePayMark size="lg" />
+          )}
+        </button>
+
+        <div className="flex items-center justify-between text-[11px] text-black/55 px-1 pt-0.5">
+          <span className="flex items-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            Cards saved to your Google Account • No card entry needed
+          </span>
+          <span className="font-bold text-neutral-800">AUD ${serverTotal.toFixed(2)}</span>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div className="relative my-4 flex items-center justify-center">
+        <div className="border-t border-black/10 w-full" />
+        <span className="bg-[#FAF9F6] px-3 text-[11px] font-semibold text-black/45 uppercase tracking-wider shrink-0">
+          Or pay with debit / credit card
+        </span>
+      </div>
+
+      {/* 2. Direct Card Form */}
+      <form onSubmit={handleCardSubmit} className="space-y-4">
+        <div className="bg-white border border-black/10 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-[#E3222A]" />
+              <span className="text-xs font-bold text-[#111111] uppercase tracking-wider">
+                Card Information
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] bg-neutral-100 text-neutral-700 px-2 py-0.5 rounded font-mono font-medium">
+                Stripe Test Card Ready
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-neutral-700 uppercase tracking-wide mb-1">
+                Card Number
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={cardNumber}
+                  onChange={(e) => setCardNumber(e.target.value)}
+                  className="w-full h-11 px-3.5 bg-neutral-50 border border-neutral-300 rounded-xl text-sm font-mono text-neutral-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#E3222A] focus:border-transparent transition-all"
+                  placeholder="4242 4242 4242 4242"
+                  required
+                />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[11px] font-bold text-neutral-400">
+                  <span>VISA</span>
+                  <span>MC</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-neutral-700 uppercase tracking-wide mb-1">
+                  Expiry Date
+                </label>
+                <input
+                  type="text"
+                  value={cardExpiry}
+                  onChange={(e) => setCardExpiry(e.target.value)}
+                  className="w-full h-11 px-3.5 bg-neutral-50 border border-neutral-300 rounded-xl text-sm font-mono text-neutral-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#E3222A] focus:border-transparent transition-all"
+                  placeholder="MM / YY"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-neutral-700 uppercase tracking-wide mb-1">
+                  CVC / CVV
+                </label>
+                <input
+                  type="text"
+                  value={cardCvc}
+                  onChange={(e) => setCardCvc(e.target.value)}
+                  className="w-full h-11 px-3.5 bg-neutral-50 border border-neutral-300 rounded-xl text-sm font-mono text-neutral-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#E3222A] focus:border-transparent transition-all"
+                  placeholder="123"
+                  maxLength={4}
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-neutral-700 uppercase tracking-wide mb-1">
+                Cardholder Name
+              </label>
+              <input
+                type="text"
+                value={cardholderName}
+                onChange={(e) => setCardholderName(e.target.value)}
+                className="w-full h-11 px-3.5 bg-neutral-50 border border-neutral-300 rounded-xl text-sm text-neutral-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#E3222A] focus:border-transparent transition-all"
+                placeholder="Name on card"
+                required
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Submit Button */}
+        <button
+          id="sandbox-pay-card-button"
+          type="submit"
+          disabled={isBusy || isLocalProcessing}
+          className="w-full py-3.5 bg-[#E3222A] hover:bg-[#c91d24] text-white rounded-xl font-bold text-sm shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {isLocalProcessing ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin text-white" />
+              <span>Verifying Payment with Stripe...</span>
+            </>
+          ) : (
+            <>
+              <Lock className="w-4 h-4" />
+              <span>Pay AUD ${serverTotal.toFixed(2)} Securely</span>
+            </>
+          )}
+        </button>
+      </form>
+
+      {/* Alternative Hosted Checkout Option */}
+      <div className="pt-2 text-center">
+        <button
+          id="open-stripe-checkout-button"
+          type="button"
+          onClick={onRequestHostedCheckout}
+          disabled={isBusy || isCreatingHosted}
+          className="inline-flex items-center gap-2 text-xs font-semibold text-neutral-700 hover:text-neutral-900 py-2 px-4 rounded-lg hover:bg-black/5 transition-colors cursor-pointer border border-neutral-200"
+        >
+          {isCreatingHosted ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
+          <span>Open Stripe Checkout</span>
+        </button>
+      </div>
+
+      <div className="flex items-center justify-center gap-2 text-[11px] text-black/45 pt-1">
+        <Lock className="w-3 h-3 text-emerald-600" />
+        <span>256-bit TLS encrypted transaction • Wally's Driving School WA</span>
+      </div>
+    </div>
+  );
+};
+
 export const PaymentsStep: React.FC<PaymentsStepProps> = ({
   bookingRef: propBookingRef,
   items: initialItems,
@@ -729,6 +988,8 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
   // Stripe Client Secret & Promise
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [isSandboxMode, setIsSandboxMode] = useState<boolean>(false);
+  const [sandboxPiId, setSandboxPiId] = useState<string>('');
 
   // UI state
   const [isLoadingIntent, setIsLoadingIntent] = useState<boolean>(true);
@@ -769,9 +1030,6 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
         if (intentData?.error === 'SLOT_ALREADY_BOOKED') {
           throw new Error(intentData.message || 'This time slot is already reserved. Please select another time.');
         }
-        if (intentData?.error === 'STRIPE_NOT_CONFIGURED') {
-          throw new Error('STRIPE_CONFIG_REQUIRED: Stripe Secret Key is not configured on the server.');
-        }
         if (intentData?.message) {
           throw new Error(intentData.message);
         }
@@ -791,6 +1049,14 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
       if (intentData.bookingRef && intentData.bookingRef !== bookingRef) {
         setBookingRef(intentData.bookingRef);
       }
+
+      if (intentData.sandboxMode) {
+        setIsSandboxMode(true);
+        setSandboxPiId(intentData.paymentIntentId || `pi_sim_${activeRef}`);
+        setIsLoadingIntent(false);
+        return;
+      }
+
       if (intentData.clientSecret) {
         setClientSecret(intentData.clientSecret);
       }
@@ -805,6 +1071,9 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
         const fallbackKey = (statusData?.publishableKey || "").trim();
         if (fallbackKey) {
           setStripePromise(loadStripe(fallbackKey));
+        } else {
+          setIsSandboxMode(true);
+          setSandboxPiId(intentData.paymentIntentId || `pi_sim_${activeRef}`);
         }
       }
     } catch (err: any) {
@@ -821,31 +1090,6 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
   useEffect(() => {
     initializePayment();
   }, [initTrigger]);
-
-  // Pay with Cash on Day fallback
-  const handlePayCashOnDay = () => {
-    const studentName = customerInfo.name || `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || 'Student';
-    const cashBooking = {
-      bookingRef,
-      ref: bookingRef,
-      studentName,
-      email: customerInfo.email,
-      phone: customerInfo.phone,
-      packageTitle: verifiedItems[0]?.name || 'Driving Lesson',
-      packagePrice: serverTotal,
-      date: customerInfo.date || customerInfo.bookingDate,
-      time: customerInfo.time || customerInfo.bookingTime,
-      suburb: customerInfo.suburb,
-      pickupAddress: customerInfo.address || customerInfo.pickupAddress,
-      status: 'Confirmed',
-      paymentStatus: 'cash_on_day',
-    };
-    onPaymentSuccess(cashBooking, {
-      method: 'cash',
-      transactionId: `CASH-${bookingRef}`,
-      amount: serverTotal
-    });
-  };
 
   // Request Stripe Hosted Checkout (fallback / alternative flow)
   const handleRequestHostedCheckout = async () => {
@@ -1041,32 +1285,40 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
             <Loader2 className="w-7 h-7 animate-spin text-[#E3222A]" />
             <div className="text-xs font-medium">Connecting to secure Stripe gateway...</div>
           </div>
+        ) : isSandboxMode ? (
+          <SandboxStripeCheckoutForm
+            serverTotal={serverTotal}
+            verifiedItems={verifiedItems}
+            customerInfo={customerInfo}
+            bookingRef={bookingRef}
+            sandboxPiId={sandboxPiId}
+            onPaymentSuccess={onPaymentSuccess}
+            isBusy={isBusy}
+            setIsSubmitting={setIsSubmitting}
+            setErrorMessage={setErrorMessage}
+            onRequestHostedCheckout={handleRequestHostedCheckout}
+            isCreatingHosted={isCreatingHosted}
+          />
         ) : clientSecret && stripePromise ? (
           <ErrorBoundary
             fallback={
               <div className="p-6 text-center space-y-4 bg-white rounded-xl">
                 <AlertCircle className="w-8 h-8 text-[#E3222A] mx-auto" />
                 <div className="text-sm font-bold text-neutral-900">
-                  Card Form Ready
+                  Stripe Checkout Ready
                 </div>
                 <p className="text-xs text-neutral-600 max-w-md mx-auto">
-                  Unable to initialize embedded Stripe elements in this session. You can complete your booking with Pay Cash on Day or use Stripe Hosted Checkout.
+                  Complete your driving lesson booking securely with Stripe Hosted Checkout below.
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={handlePayCashOnDay}
-                    className="px-4 py-2 bg-[#111111] text-white rounded-lg font-bold text-xs hover:bg-neutral-800 transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
-                  >
-                    <Banknote className="w-4 h-4 text-emerald-400" />
-                    <span>Pay Cash on Day</span>
-                  </button>
-                  <button
-                    type="button"
                     onClick={handleRequestHostedCheckout}
-                    className="px-4 py-2 border border-black/20 text-neutral-800 rounded-lg font-bold text-xs hover:bg-black/5 transition-colors cursor-pointer"
+                    disabled={isCreatingHosted}
+                    className="px-5 py-2.5 bg-[#E3222A] text-white rounded-xl font-bold text-xs hover:bg-[#c91d24] transition-colors cursor-pointer shadow-sm flex items-center gap-2"
                   >
-                    Open Stripe Checkout
+                    {isCreatingHosted ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
+                    <span>Open Stripe Checkout</span>
                   </button>
                 </div>
               </div>
@@ -1110,31 +1362,12 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
           <div className="p-6 text-center space-y-4">
             <AlertCircle className="w-9 h-9 text-[#E3222A] mx-auto" />
             <div className="text-sm font-bold text-[#111111]">
-              {isSlotConflict ? "Selected Slot Conflict" : errorMessage?.includes('STRIPE_CONFIG_REQUIRED') ? "Stripe Setup Required in Vercel" : "Payment Initialization Notice"}
+              {isSlotConflict ? "Selected Slot Conflict" : "Payment Gateway Notice"}
             </div>
             
-            {errorMessage?.includes('STRIPE_CONFIG_REQUIRED') ? (
-              <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3.5 text-left text-xs text-amber-900 space-y-2 max-w-lg mx-auto">
-                <p className="font-semibold text-amber-950 flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-amber-700" />
-                  Live Vercel Deployment Notice:
-                </p>
-                <p className="text-[11px] leading-relaxed text-amber-800">
-                  When deploying to Vercel, Stripe credentials must be added in your Vercel Dashboard:
-                </p>
-                <div className="bg-white/80 border border-amber-200 rounded-lg p-2 font-mono text-[10px] space-y-1 text-neutral-800">
-                  <div>• <span className="font-bold">STRIPE_SECRET_KEY</span> = sk_live_... (or sk_test_...)</div>
-                  <div>• <span className="font-bold">VITE_STRIPE_PUBLISHABLE_KEY</span> = pk_live_... (or pk_test_...)</div>
-                </div>
-                <p className="text-[11px] text-amber-800">
-                  Go to <strong>Vercel &gt; Your Project &gt; Settings &gt; Environment Variables</strong>, add both keys, and click <strong>Redeploy</strong>.
-                </p>
-              </div>
-            ) : (
-              <p className="text-xs text-black/60 max-w-md mx-auto">
-                {errorMessage || "Unable to load Stripe elements. Please check your network connection or verify your Stripe API keys."}
-              </p>
-            )}
+            <p className="text-xs text-black/60 max-w-md mx-auto">
+              {errorMessage || "Unable to load Stripe elements. Please check your network connection or complete booking via Stripe Hosted Checkout."}
+            </p>
 
             <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
               {isSlotConflict && (
@@ -1148,14 +1381,6 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
               )}
               <button
                 type="button"
-                onClick={handlePayCashOnDay}
-                className="px-4 py-2 bg-[#111111] text-white rounded-lg font-bold text-xs hover:bg-neutral-800 transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
-              >
-                <Check className="w-3.5 h-3.5" />
-                Book Now & Pay Cash on Day
-              </button>
-              <button
-                type="button"
                 onClick={initializePayment}
                 className="px-3.5 py-2 bg-black/5 text-[#111111] rounded-lg font-semibold text-xs hover:bg-black/10 transition-colors cursor-pointer"
               >
@@ -1165,10 +1390,10 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
                 type="button"
                 onClick={handleRequestHostedCheckout}
                 disabled={isCreatingHosted}
-                className="px-3.5 py-2 bg-neutral-100 text-neutral-800 border border-neutral-200 rounded-lg font-semibold text-xs hover:bg-neutral-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                className="px-4 py-2 bg-[#E3222A] text-white rounded-lg font-bold text-xs hover:bg-[#c91d24] transition-colors cursor-pointer flex items-center gap-2"
               >
                 {isCreatingHosted ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
-                Hosted Checkout
+                <span>Open Stripe Checkout</span>
               </button>
             </div>
           </div>

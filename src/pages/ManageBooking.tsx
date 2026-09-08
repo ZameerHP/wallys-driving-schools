@@ -362,17 +362,17 @@ export function ManageBooking() {
                   "text-xs font-black px-3.5 py-1 rounded-full uppercase tracking-wider border flex items-center gap-1.5",
                   selectedBooking.paymentStatus === 'paid'
                     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                    : "bg-neutral-100 text-neutral-700 border-neutral-300"
+                    : "bg-amber-50 text-amber-800 border-amber-200"
                 )}>
                   {selectedBooking.paymentStatus === 'paid' ? (
                     <>
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      <span>Paid Online</span>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Paid Online (Stripe)</span>
                     </>
                   ) : (
                     <>
-                      <CreditCard className="w-3 h-3 text-neutral-500" />
-                      <span>Pay In Car / Unpaid</span>
+                      <CreditCard className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Awaiting Payment</span>
                     </>
                   )}
                 </span>

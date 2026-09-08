@@ -33,7 +33,8 @@ export function getStoredBookings(): BookingItem[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const list = Array.isArray(parsed) ? parsed : [];
+    return list.filter(b => b.paymentStatus === 'paid');
   } catch (err) {
     console.error('Failed to parse cached bookings:', err);
     return [];
@@ -259,7 +260,10 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
   const addItems = (items: BookingItem[]) => {
     for (const item of items) {
       if (item && item.ref && !resultsMap.has(item.ref)) {
-        resultsMap.set(item.ref, item);
+        // Only return paid, completed bookings to the customer Manage Booking screen
+        if (item.paymentStatus === 'paid') {
+          resultsMap.set(item.ref, item);
+        }
       }
     }
   };
