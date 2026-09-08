@@ -767,14 +767,15 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
         if (intentData?.error === 'SLOT_ALREADY_BOOKED') {
           throw new Error(intentData.message || 'This time slot is already reserved. Please select another time.');
         }
+        if (intentData?.error === 'STRIPE_NOT_CONFIGURED') {
+          throw new Error('STRIPE_CONFIG_REQUIRED: Stripe Secret Key is not configured on the server.');
+        }
         if (intentData?.message) {
           throw new Error(intentData.message);
         }
         if (!intentRes.ok) {
-          if (intentRes.status === 500 || rawText.toLowerCase().includes('server error')) {
-            throw new Error('Payment gateway configuration notice: If this app is deployed on Vercel, please verify STRIPE_SECRET_KEY and VITE_STRIPE_PUBLISHABLE_KEY in your Vercel Project Settings > Environment Variables.');
-          }
-          throw new Error(`Unable to initialize payment (HTTP ${intentRes.status}).`);
+          const detail = rawText && !rawText.startsWith('<!') ? `: ${rawText.slice(0, 150)}` : '';
+          throw new Error(`Unable to initialize payment (HTTP ${intentRes.status}${detail}).`);
         }
         throw new Error('Unable to initiate Stripe payment.');
       }
@@ -1076,10 +1077,10 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
           <div className="p-6 text-center space-y-4">
             <AlertCircle className="w-9 h-9 text-[#E3222A] mx-auto" />
             <div className="text-sm font-bold text-[#111111]">
-              {isSlotConflict ? "Selected Slot Conflict" : errorMessage?.includes('Vercel') || errorMessage?.includes('STRIPE') ? "Stripe Setup Required in Vercel" : "Payment Initialization Notice"}
+              {isSlotConflict ? "Selected Slot Conflict" : errorMessage?.includes('STRIPE_CONFIG_REQUIRED') ? "Stripe Setup Required in Vercel" : "Payment Initialization Notice"}
             </div>
             
-            {errorMessage?.includes('Vercel') || errorMessage?.includes('STRIPE') ? (
+            {errorMessage?.includes('STRIPE_CONFIG_REQUIRED') ? (
               <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3.5 text-left text-xs text-amber-900 space-y-2 max-w-lg mx-auto">
                 <p className="font-semibold text-amber-950 flex items-center gap-1.5">
                   <Lock className="w-3.5 h-3.5 text-amber-700" />
