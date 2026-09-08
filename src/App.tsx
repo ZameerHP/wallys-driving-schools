@@ -58,10 +58,32 @@ function MainLayout() {
 }
 
 export default function App() {
-  const [showPreloader, setShowPreloader] = useState(true);
+  const [showPreloader, setShowPreloader] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname;
+      if (path.startsWith('/book-now') || path.startsWith('/manage-booking') || path.startsWith('/instructor-login')) {
+        return false;
+      }
+      try {
+        if (sessionStorage.getItem('wally_has_seen_preloader') === 'true') {
+          return false;
+        }
+      } catch {}
+    }
+    return true;
+  });
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  const handleVideoFinish = () => {
+    try {
+      sessionStorage.setItem('wally_has_seen_preloader', 'true');
+    } catch {}
+    setShowPreloader(false);
+  };
+
   useEffect(() => {
+    if (!showPreloader) return;
+
     const video = videoRef.current;
     if (video) {
       video.muted = true;
@@ -85,17 +107,13 @@ export default function App() {
       }
     }
 
-    // Safety fallback: if video doesn't end on its own within 4.5 seconds
+    // Safety fallback: if video doesn't end on its own within 3.5 seconds
     const fallbackTimer = setTimeout(() => {
-      setShowPreloader(false);
-    }, 4500);
+      handleVideoFinish();
+    }, 3500);
 
     return () => clearTimeout(fallbackTimer);
-  }, []);
-
-  const handleVideoFinish = () => {
-    setShowPreloader(false);
-  };
+  }, [showPreloader]);
 
   return (
     <>

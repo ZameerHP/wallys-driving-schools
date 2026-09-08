@@ -12,8 +12,10 @@ import {
   Clock,
   MapPin,
   User,
-  Check
+  Check,
+  Banknote
 } from 'lucide-react';
+import ErrorBoundary from '../ErrorBoundary';
 import { loadStripe, Stripe } from '@stripe/stripe-js';
 import {
   Elements,
@@ -1040,39 +1042,70 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
             <div className="text-xs font-medium">Connecting to secure Stripe gateway...</div>
           </div>
         ) : clientSecret && stripePromise ? (
-          <Elements
-            stripe={stripePromise}
-            options={{
-              clientSecret,
-              appearance: {
-                theme: 'stripe',
-                variables: {
-                  colorPrimary: '#E3222A',
-                  colorBackground: '#ffffff',
-                  colorText: '#111111',
-                  colorDanger: '#df1b41',
-                  fontFamily: 'inherit',
-                  borderRadius: '10px',
-                  fontSizeBase: '14px',
-                  spacingUnit: '4px'
-                }
-              }
-            }}
+          <ErrorBoundary
+            fallback={
+              <div className="p-6 text-center space-y-4 bg-white rounded-xl">
+                <AlertCircle className="w-8 h-8 text-[#E3222A] mx-auto" />
+                <div className="text-sm font-bold text-neutral-900">
+                  Card Form Ready
+                </div>
+                <p className="text-xs text-neutral-600 max-w-md mx-auto">
+                  Unable to initialize embedded Stripe elements in this session. You can complete your booking with Pay Cash on Day or use Stripe Hosted Checkout.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handlePayCashOnDay}
+                    className="px-4 py-2 bg-[#111111] text-white rounded-lg font-bold text-xs hover:bg-neutral-800 transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
+                  >
+                    <Banknote className="w-4 h-4 text-emerald-400" />
+                    <span>Pay Cash on Day</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRequestHostedCheckout}
+                    className="px-4 py-2 border border-black/20 text-neutral-800 rounded-lg font-bold text-xs hover:bg-black/5 transition-colors cursor-pointer"
+                  >
+                    Open Stripe Checkout
+                  </button>
+                </div>
+              </div>
+            }
           >
-            <RealStripeCheckoutForm
-              clientSecret={clientSecret}
-              serverTotal={serverTotal}
-              verifiedItems={verifiedItems}
-              customerInfo={customerInfo}
-              bookingRef={bookingRef}
-              onPaymentSuccess={onPaymentSuccess}
-              isBusy={isBusy}
-              setIsSubmitting={setIsSubmitting}
-              setErrorMessage={setErrorMessage}
-              onRequestHostedCheckout={handleRequestHostedCheckout}
-              isCreatingHosted={isCreatingHosted}
-            />
-          </Elements>
+            <Elements
+              stripe={stripePromise}
+              options={{
+                clientSecret,
+                appearance: {
+                  theme: 'stripe',
+                  variables: {
+                    colorPrimary: '#E3222A',
+                    colorBackground: '#ffffff',
+                    colorText: '#111111',
+                    colorDanger: '#df1b41',
+                    fontFamily: 'inherit',
+                    borderRadius: '10px',
+                    fontSizeBase: '14px',
+                    spacingUnit: '4px'
+                  }
+                }
+              }}
+            >
+              <RealStripeCheckoutForm
+                clientSecret={clientSecret}
+                serverTotal={serverTotal}
+                verifiedItems={verifiedItems}
+                customerInfo={customerInfo}
+                bookingRef={bookingRef}
+                onPaymentSuccess={onPaymentSuccess}
+                isBusy={isBusy}
+                setIsSubmitting={setIsSubmitting}
+                setErrorMessage={setErrorMessage}
+                onRequestHostedCheckout={handleRequestHostedCheckout}
+                isCreatingHosted={isCreatingHosted}
+              />
+            </Elements>
+          </ErrorBoundary>
         ) : (
           <div className="p-6 text-center space-y-4">
             <AlertCircle className="w-9 h-9 text-[#E3222A] mx-auto" />

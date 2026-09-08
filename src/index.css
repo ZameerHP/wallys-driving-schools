@@ -10,9 +10,10 @@
 }
 
 @layer base {
-  html {
-    @apply text-brand-black bg-brand-black font-body antialiased;
+  html, body {
+    @apply text-brand-black bg-white font-body antialiased;
     scroll-behavior: smooth;
+    min-height: 100%;
   }
   
   h1, h2, h3, h4, h5, h6 {
@@ -34,7 +35,7 @@
     width: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: #0B0B0C;
+    background: #f1f1f1;
   }
   ::-webkit-scrollbar-thumb {
     background: rgba(227, 34, 42, 0.5);
@@ -47,7 +48,7 @@
   /* Firefox Scrollbar */
   html {
     scrollbar-width: thin;
-    scrollbar-color: rgba(227, 34, 42, 0.5) #0B0B0C;
+    scrollbar-color: rgba(227, 34, 42, 0.5) #f1f1f1;
   }
 
   /* Premium Focus States */

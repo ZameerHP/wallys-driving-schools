@@ -33,6 +33,7 @@ import {
 import { cn } from '../lib/utils';
 import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
 import PaymentsStep from '../components/booking/PaymentsStep';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -272,7 +273,6 @@ export function BookNow() {
   
   // Selections
   const [selectedService, setSelectedService] = useState<DrivingService | null>(SERVICES[0]);
-  const [showPackageUpsell, setShowPackageUpsell] = useState<boolean>(false);
   const [selectedPackage, setSelectedPackage] = useState<ServicePackage | null>(null);
   
   // Date & Time
@@ -408,10 +408,6 @@ export function BookNow() {
   // Helper to step forward/backward
   const goToNextStep = () => {
     if (activeStepId === 'service') {
-      if (selectedService?.hasLinkedPackages && !selectedPackage) {
-        setShowPackageUpsell(true);
-        return;
-      }
       setActiveStepId('datetime');
     } else if (activeStepId === 'datetime') {
       // Sync or update cart item
@@ -463,24 +459,7 @@ export function BookNow() {
   // Service Selection Handlers
   const handleSelectService = (srv: DrivingService) => {
     setSelectedService(srv);
-    setSelectedPackage(null); // Reset package selection initially
-    if (srv.hasLinkedPackages) {
-      setShowPackageUpsell(true);
-    } else {
-      setShowPackageUpsell(false);
-    }
-  };
-
-  const handlePickPackage = (pkg: ServicePackage) => {
-    setSelectedPackage(pkg);
-    setShowPackageUpsell(false);
-    setActiveStepId('package');
-  };
-
-  const handleSkipPackages = () => {
     setSelectedPackage(null);
-    setShowPackageUpsell(false);
-    setActiveStepId('datetime');
   };
 
   // Filtered Services
@@ -1025,73 +1004,6 @@ export function BookNow() {
                           );
                         })}
                       </div>
-
-                      {/* INLINE SLIDE-IN PACKAGE UPSELL PANEL */}
-                      <AnimatePresence>
-                        {showPackageUpsell && selectedService?.hasLinkedPackages && (
-                          <motion.div 
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="bg-brand-red/5 border border-brand-red/20 rounded-2xl p-4 sm:p-5 overflow-hidden"
-                          >
-                            <div className="text-center mb-3">
-                              <span className="text-[11px] font-bold text-brand-red uppercase tracking-wider">Save with Multi-Lesson Packs</span>
-                              <h4 className="text-sm sm:text-base font-bold text-brand-black mt-0.5">
-                                Special package deals for this service:
-                              </h4>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-                              {PACKAGES.map((pkg) => (
-                                <div 
-                                  key={pkg.id}
-                                  onClick={() => handlePickPackage(pkg)}
-                                  className="bg-white border-2 border-brand-red/30 hover:border-brand-red rounded-xl p-3.5 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col justify-between"
-                                >
-                                  <div>
-                                    <div className="flex justify-between items-start mb-1.5">
-                                      <h5 className="font-bold text-xs sm:text-sm text-brand-black">{pkg.name}</h5>
-                                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                                        Save ${pkg.savings}
-                                      </span>
-                                    </div>
-                                    <p className="text-[11px] text-brand-black/70 mb-2">{pkg.includesText}</p>
-                                    <div className="inline-block px-2 py-0.5 bg-brand-offwhite rounded-md text-[10px] font-medium text-brand-black/80">
-                                      Counts as <strong>{pkg.logbookHours} Logbook Hours</strong>
-                                    </div>
-                                  </div>
-
-                                  <div className="mt-3 pt-2 border-t border-black/5 flex items-center justify-between">
-                                    <span className="text-base sm:text-lg font-display font-bold text-brand-red">${pkg.price.toFixed(2)}</span>
-                                    <span className="text-[11px] font-bold text-brand-red group-hover:underline flex items-center">
-                                      Choose Package →
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-
-                            {/* "OR" DIVIDER */}
-                            <div className="flex items-center gap-3 my-2.5">
-                              <div className="flex-1 h-px bg-black/10" />
-                              <span className="text-[10px] uppercase font-bold text-brand-black/40">or</span>
-                              <div className="flex-1 h-px bg-black/10" />
-                            </div>
-
-                            {/* SKIP PACKAGES BUTTON */}
-                            <div className="text-center">
-                              <button
-                                type="button"
-                                onClick={handleSkipPackages}
-                                className="text-xs font-bold text-brand-black/70 hover:text-brand-red py-1.5 px-3.5 rounded-xl border border-black/15 hover:border-brand-red transition-all cursor-pointer"
-                              >
-                                Skip packages and continue with single lesson [${selectedService.price.toFixed(2)}]
-                              </button>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
                     </motion.div>
                   )}
 
@@ -1608,43 +1520,49 @@ export function BookNow() {
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
                     >
-                      <PaymentsStep
-                        bookingRef={activeBookingRef}
-                        items={cartItems.length > 0 ? cartItems.map(it => ({
-                          id: it.id,
-                          name: it.title,
-                          unitPrice: it.price,
-                          quantity: 1,
-                          lineTotal: it.price
-                        })) : [{
-                          id: 'default-lesson',
-                          name: selectedPackage ? selectedPackage.name : (selectedService?.name || '1 Hour Driving Lesson'),
-                          unitPrice: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00),
-                          quantity: 1,
-                          lineTotal: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00)
-                        }]}
-                        customerInfo={{
-                          name: `${firstName || 'Learner'} ${lastName || 'Driver'}`.trim(),
-                          firstName,
-                          lastName,
-                          email,
-                          phone: `${countryCode} ${phone}`,
-                          address,
-                          pickupAddress: `${address}, ${suburbSearch}`.trim(),
-                          suburb: suburbSearch,
-                          date: selectedDate,
-                          time: selectedTimeSlot,
-                          bookingDate: selectedDate,
-                          bookingTime: selectedTimeSlot,
-                          notes: `Pickup: ${address}. Test Centre: ${selectedTestCentre}. Test Time: ${testTime || 'Not set'}.`,
-                          packageTitle: cartItems[0]?.title || selectedPackage?.name || selectedService?.name || 'Driving Lesson',
-                          packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedService?.price || 65.00)
-                        }}
-                        onBack={() => setActiveStepId('info')}
-                        onPaymentSuccess={(booking) => {
-                          setConfirmedBooking(booking);
-                        }}
-                      />
+                      <ErrorBoundary
+                        title="Payment Form Ready"
+                        message="Unable to render payment elements in this browser session. You can safely return to the previous step or reload."
+                        onReset={() => setActiveStepId('info')}
+                      >
+                        <PaymentsStep
+                          bookingRef={activeBookingRef}
+                          items={cartItems.length > 0 ? cartItems.map(it => ({
+                            id: it.id,
+                            name: it.title,
+                            unitPrice: it.price,
+                            quantity: 1,
+                            lineTotal: it.price
+                          })) : [{
+                            id: 'default-lesson',
+                            name: selectedPackage ? selectedPackage.name : (selectedService?.name || '1 Hour Driving Lesson'),
+                            unitPrice: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00),
+                            quantity: 1,
+                            lineTotal: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00)
+                          }]}
+                          customerInfo={{
+                            name: `${firstName || 'Learner'} ${lastName || 'Driver'}`.trim(),
+                            firstName,
+                            lastName,
+                            email,
+                            phone: `${countryCode} ${phone}`,
+                            address,
+                            pickupAddress: `${address}, ${suburbSearch}`.trim(),
+                            suburb: suburbSearch,
+                            date: selectedDate,
+                            time: selectedTimeSlot,
+                            bookingDate: selectedDate,
+                            bookingTime: selectedTimeSlot,
+                            notes: `Pickup: ${address}. Test Centre: ${selectedTestCentre}. Test Time: ${testTime || 'Not set'}.`,
+                            packageTitle: cartItems[0]?.title || selectedPackage?.name || selectedService?.name || 'Driving Lesson',
+                            packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedService?.price || 65.00)
+                          }}
+                          onBack={() => setActiveStepId('info')}
+                          onPaymentSuccess={(booking) => {
+                            setConfirmedBooking(booking);
+                          }}
+                        />
+                      </ErrorBoundary>
                     </motion.div>
                   )}
 
