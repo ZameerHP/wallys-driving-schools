@@ -230,3 +230,77 @@ export function validateAustralianPhone(rawPhone: string): { isValid: boolean; f
 
   return { isValid: true, formatted, rawDigits: `0${nationalNumber}` };
 }
+
+/**
+ * Validates phone numbers internationally, applying strict Australian formatting
+ * when dialCode is '+61', and E.164-compliant checks for all other countries.
+ */
+export function validateInternationalPhone(
+  rawPhone: string,
+  dialCode: string = '+61'
+): { isValid: boolean; formatted: string; rawDigits: string; error?: string } {
+  const input = (rawPhone || '').trim();
+
+  if (!input) {
+    return { isValid: false, formatted: '', rawDigits: '', error: 'Phone number is required.' };
+  }
+
+  // If Australian dial code (+61), use Australia's specific validation
+  if (dialCode === '+61' || dialCode === '61') {
+    return validateAustralianPhone(input);
+  }
+
+  // International phone validation
+  // Strip formatting: spaces, dashes, brackets, dots
+  let cleaned = input.replace(/[\s\-().]/g, '');
+
+  // Strip dial code if user pasted or included it in the input field
+  const normalizedDial = dialCode.replace('+', '');
+  if (cleaned.startsWith(dialCode)) {
+    cleaned = cleaned.slice(dialCode.length);
+  } else if (cleaned.startsWith(normalizedDial)) {
+    cleaned = cleaned.slice(normalizedDial.length);
+  }
+
+  // Strip leading 0 often present in local formats (e.g. UK 07xxx, NZ 021xxx)
+  if (cleaned.startsWith('0')) {
+    cleaned = cleaned.slice(1);
+  }
+
+  // Must only contain digits
+  if (!/^\d+$/.test(cleaned)) {
+    return {
+      isValid: false,
+      formatted: input,
+      rawDigits: cleaned,
+      error: 'Phone number must contain only numbers.'
+    };
+  }
+
+  // ITU-T E.164 recommends national subscriber numbers between 6 and 14 digits
+  if (cleaned.length < 6 || cleaned.length > 14) {
+    return {
+      isValid: false,
+      formatted: input,
+      rawDigits: cleaned,
+      error: 'Please enter a valid phone number (6 to 14 digits).'
+    };
+  }
+
+  // Check for dummy repeating sequence (e.g. 11111111, 99999999)
+  if (/^(\d)\1{5,}$/.test(cleaned) || cleaned === '12345678' || cleaned === '123456789') {
+    return {
+      isValid: false,
+      formatted: input,
+      rawDigits: cleaned,
+      error: 'Please enter a genuine phone number.'
+    };
+  }
+
+  const formatted = `${dialCode} ${cleaned}`;
+  return {
+    isValid: true,
+    formatted,
+    rawDigits: cleaned
+  };
+}

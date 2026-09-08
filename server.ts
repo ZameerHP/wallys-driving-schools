@@ -17,7 +17,7 @@ import {
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
-import { validateAustralianPhone, validateWorkingEmail } from "./src/lib/validation.ts";
+import { validateAustralianPhone, validateWorkingEmail, validateInternationalPhone } from "./src/lib/validation.ts";
 
 dotenv.config();
 
@@ -1038,9 +1038,10 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       return res.status(400).json({ error: emailCheck.error || "A valid working email is required" });
     }
 
-    const phoneCheck = validateAustralianPhone(phone);
+    const countryCode = req.body.countryCode || (phone.startsWith('+') ? phone.split(' ')[0] : '+61');
+    const phoneCheck = validateInternationalPhone(phone, countryCode);
     if (!phoneCheck.isValid) {
-      return res.status(400).json({ error: phoneCheck.error || "Only Australian phone numbers are allowed" });
+      return res.status(400).json({ error: phoneCheck.error || "Please enter a valid phone number" });
     }
 
     // Double booking verification: ensure slot is free (allowing customer to finalize their own pending booking)
@@ -1150,9 +1151,10 @@ app.post("/api/contact", contactLimiter, async (req, res) => {
     }
 
     if (phone && phone.trim()) {
-      const phoneCheck = validateAustralianPhone(phone);
+      const countryCode = req.body.countryCode || (phone.startsWith('+') ? phone.split(' ')[0] : '+61');
+      const phoneCheck = validateInternationalPhone(phone, countryCode);
       if (!phoneCheck.isValid) {
-        return res.status(400).json({ error: phoneCheck.error || "Only Australian phone numbers are allowed" });
+        return res.status(400).json({ error: phoneCheck.error || "Please enter a valid phone number" });
       }
     }
 

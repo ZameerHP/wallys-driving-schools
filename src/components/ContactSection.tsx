@@ -15,7 +15,9 @@ import {
 } from 'lucide-react';
 import { TiltCard } from './TiltCard';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
-import { validateAustralianPhone, validateWorkingEmail } from '../lib/validation';
+import { validateInternationalPhone, validateWorkingEmail } from '../lib/validation';
+import { Country, DEFAULT_COUNTRY } from '../lib/countries';
+import { PhoneInputWithCountry } from './PhoneInputWithCountry';
 
 interface ContactSectionProps {
   showBreadcrumbs?: boolean;
@@ -34,6 +36,7 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
     phone: '',
     message: ''
   });
+  const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
 
   const [errors, setErrors] = useState<{ name?: string; phone?: string; email?: string }>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -49,7 +52,7 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
       newErrors.name = 'Please enter your full name';
     }
 
-    const phoneCheck = validateAustralianPhone(formData.phone);
+    const phoneCheck = validateInternationalPhone(formData.phone, selectedCountry.dialCode);
     if (!phoneCheck.isValid) {
       newErrors.phone = phoneCheck.error;
     }
@@ -277,28 +280,32 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
                         {/* 2. Number / Phone */}
                         <div>
                           <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-black/70 mb-1">
-                            Australian Phone <span className="text-brand-red">*</span>
+                            Phone Number <span className="text-brand-red">*</span>
                           </label>
-                          <div className="relative">
-                            <Smartphone className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-brand-black/40 pointer-events-none" />
-                            <input 
-                              type="tel" 
-                              placeholder="0406 693 301"
-                              value={formData.phone}
-                              onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-                              className={`w-full bg-brand-offwhite border rounded-xl pl-9 pr-3 py-2.5 text-xs sm:text-sm text-brand-black placeholder:text-brand-black/35 focus:outline-none transition-all ${
-                                errors.phone ? 'border-brand-red ring-2 ring-brand-red/20' : 'border-black/10 focus:border-brand-red focus:bg-white'
-                              }`}
-                            />
-                          </div>
-                          {errors.phone && <p className="text-[10px] text-brand-red font-medium pt-0.5">{errors.phone}</p>}
+                          <PhoneInputWithCountry
+                            phone={formData.phone}
+                            onChangePhone={(val) => {
+                              setFormData(prev => ({ ...prev, phone: val }));
+                              if (errors.phone) {
+                                setErrors(prev => ({ ...prev, phone: undefined }));
+                              }
+                            }}
+                            selectedCountry={selectedCountry}
+                            onChangeCountry={(country) => {
+                              setSelectedCountry(country);
+                              if (errors.phone) {
+                                setErrors(prev => ({ ...prev, phone: undefined }));
+                              }
+                            }}
+                            error={errors.phone}
+                          />
                         </div>
                       </div>
 
                       {/* Field 3: Email Address */}
                       <div>
                         <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-black/70 mb-1">
-                          Working Email Address <span className="text-brand-red">*</span>
+                          Email Address <span className="text-brand-red">*</span>
                         </label>
                         <div className="relative">
                           <Mail className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-brand-black/40 pointer-events-none" />

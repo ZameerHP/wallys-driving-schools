@@ -34,7 +34,9 @@ import { cn } from '../lib/utils';
 import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
 import PaymentsStep from '../components/booking/PaymentsStep';
 import ErrorBoundary from '../components/ErrorBoundary';
-import { validateAustralianPhone, validateWorkingEmail } from '../lib/validation';
+import { validateInternationalPhone, validateWorkingEmail } from '../lib/validation';
+import { Country, DEFAULT_COUNTRY } from '../lib/countries';
+import { PhoneInputWithCountry } from '../components/PhoneInputWithCountry';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -302,6 +304,7 @@ export function BookNow() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [countryCode, setCountryCode] = useState('+61');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
@@ -442,10 +445,10 @@ export function BookNow() {
         errors.email = emailCheck.error || 'Please enter a valid working email address';
       }
 
-      // Strict Australian phone number check
-      const phoneCheck = validateAustralianPhone(phone);
+      // Phone number check with international country code support
+      const phoneCheck = validateInternationalPhone(phone, selectedCountry.dialCode);
       if (!phoneCheck.isValid) {
-        errors.phone = phoneCheck.error || 'Only Australian phone numbers are allowed (e.g. 0412 345 678)';
+        errors.phone = phoneCheck.error || 'Please enter a valid phone number';
       }
 
       if (!address.trim()) errors.address = 'Pickup address is required';
@@ -1407,12 +1410,9 @@ export function BookNow() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {/* Email */}
                         <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider">
-                              Working Email <span className="text-brand-red">*</span>
-                            </label>
-                            <span className="text-[10px] text-brand-black/45 font-medium">Real email required</span>
-                          </div>
+                          <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
+                            Email <span className="text-brand-red">*</span>
+                          </label>
                           <input 
                             type="email"
                             value={email}
@@ -1432,53 +1432,40 @@ export function BookNow() {
                               infoErrors.email ? "border-brand-red ring-2 ring-brand-red/20" : "border-black/10 focus:border-brand-red"
                             )}
                           />
-                          {infoErrors.email ? (
-                            <span className="text-[10px] text-brand-red font-semibold block mt-1">{infoErrors.email}</span>
-                          ) : (
-                            <span className="text-[10px] text-brand-black/45 block mt-1">Invoice & confirmation will be sent here</span>
-                          )}
+                          {infoErrors.email && <span className="text-[10px] text-brand-red font-semibold block mt-1">{infoErrors.email}</span>}
                         </div>
 
-                        {/* Phone with Country Code (Australian Only) */}
+                        {/* Phone with Country Code Selector */}
                         <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider">
-                              Australian Phone <span className="text-brand-red">*</span>
-                            </label>
-                            <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                              AU Only
-                            </span>
-                          </div>
-                          <div className="flex gap-2">
-                            <div className="flex items-center gap-1 bg-brand-offwhite border border-black/10 rounded-xl px-3 py-2.5 text-xs font-bold text-brand-black shrink-0 select-none shadow-sm">
-                              <span>🇦🇺</span>
-                              <span>+61</span>
-                            </div>
-                            <input 
-                              type="tel"
-                              value={phone}
-                              onChange={(e) => {
-                                setPhone(e.target.value);
-                                if (infoErrors.phone) {
-                                  setInfoErrors(prev => {
-                                    const copy = { ...prev };
-                                    delete copy.phone;
-                                    return copy;
-                                  });
-                                }
-                              }}
-                              placeholder="0412 345 678"
-                              className={cn(
-                                "flex-1 bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
-                                infoErrors.phone ? "border-brand-red ring-2 ring-brand-red/20" : "border-black/10 focus:border-brand-red"
-                              )}
-                            />
-                          </div>
-                          {infoErrors.phone ? (
-                            <span className="text-[10px] text-brand-red font-semibold block mt-1">{infoErrors.phone}</span>
-                          ) : (
-                            <span className="text-[10px] text-brand-black/45 block mt-1">Australian 10-digit mobile (04xx xxx xxx) or landline</span>
-                          )}
+                          <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
+                            Phone Number <span className="text-brand-red">*</span>
+                          </label>
+                          <PhoneInputWithCountry
+                            phone={phone}
+                            onChangePhone={(val) => {
+                              setPhone(val);
+                              if (infoErrors.phone) {
+                                setInfoErrors(prev => {
+                                  const copy = { ...prev };
+                                  delete copy.phone;
+                                  return copy;
+                                });
+                              }
+                            }}
+                            selectedCountry={selectedCountry}
+                            onChangeCountry={(country) => {
+                              setSelectedCountry(country);
+                              setCountryCode(country.dialCode);
+                              if (infoErrors.phone) {
+                                setInfoErrors(prev => {
+                                  const copy = { ...prev };
+                                  delete copy.phone;
+                                  return copy;
+                                });
+                              }
+                            }}
+                            error={infoErrors.phone}
+                          />
                         </div>
                       </div>
 
