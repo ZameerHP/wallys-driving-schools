@@ -1,8 +1,22 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Retrieve environment variables safely
-const supabaseUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_URL) || '';
-const supabaseAnonKey = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) || '';
+// Retrieve environment variables safely across browser and server contexts
+const getEnvVar = (key: string): string => {
+  try {
+    if (typeof import.meta !== 'undefined' && (import.meta as any).env?.[key]) {
+      return (import.meta as any).env[key];
+    }
+  } catch {}
+  try {
+    if (typeof process !== 'undefined' && process.env?.[key]) {
+      return process.env[key] || '';
+    }
+  } catch {}
+  return '';
+};
+
+const supabaseUrl = getEnvVar('VITE_SUPABASE_URL') || getEnvVar('SUPABASE_URL');
+const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY') || getEnvVar('SUPABASE_ANON_KEY') || getEnvVar('SUPABASE_KEY');
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && 

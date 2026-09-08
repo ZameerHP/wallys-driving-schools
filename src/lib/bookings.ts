@@ -109,32 +109,70 @@ export function deleteBooking(id: string): BookingItem[] {
 // Convert database record to standard BookingItem
 export function mapDbToBookingItem(row: any): BookingItem {
   let pickup = row.pickup_address || row.pickupAddress || row.address || '';
-  if (!pickup && row.notes && typeof row.notes === 'string') {
-    const pickupMatch = row.notes.match(/Pickup:\s*([^.]+)/i);
-    if (pickupMatch) {
-      pickup = pickupMatch[1].trim();
+  let extractedRef = row.booking_ref || row.bookingRef || row.ref || '';
+  let extractedSuburb = row.suburb || '';
+  let extractedPrice = Number(row.package_price || row.packagePrice || row.price || 0);
+  let extractedPayment = row.payment_status || row.paymentStatus || 'unpaid';
+
+  if (row.notes && typeof row.notes === 'string') {
+    if (!pickup) {
+      const pickupMatch = row.notes.match(/\[Pickup:\s*([^\]]+)\]/i) || row.notes.match(/Pickup:\s*([^.]+)/i);
+      if (pickupMatch) {
+        pickup = pickupMatch[1].trim();
+      }
+    }
+    if (!extractedRef) {
+      const refMatch = row.notes.match(/\[BookingRef:\s*([^\]]+)\]/i) || row.notes.match(/BookingRef:\s*([A-Z0-9-]+)/i);
+      if (refMatch) {
+        extractedRef = refMatch[1].trim();
+      }
+    }
+    if (!extractedSuburb) {
+      const suburbMatch = row.notes.match(/\[Suburb:\s*([^\]]+)\]/i) || row.notes.match(/Suburb:\s*([^,|]+)/i);
+      if (suburbMatch) {
+        extractedSuburb = suburbMatch[1].trim();
+      }
+    }
+    if (!extractedPrice) {
+      const priceMatch = row.notes.match(/\[Price:\s*\$?(\d+(?:\.\d+)?)\]/i) || row.notes.match(/Price:\s*\$?(\d+(?:\.\d+)?)/i);
+      if (priceMatch) {
+        extractedPrice = Number(priceMatch[1]);
+      }
+    }
+    if (extractedPayment === 'unpaid') {
+      const paymentMatch = row.notes.match(/\[Payment:\s*([^\]]+)\]/i);
+      if (paymentMatch) {
+        extractedPayment = paymentMatch[1].trim();
+      }
     }
   }
 
+  if (!extractedRef) {
+    extractedRef = `WD-${row.id || Math.floor(1000 + Math.random() * 9000)}`;
+  }
+  if (!extractedPrice) {
+    extractedPrice = 65;
+  }
+
   return {
-    id: String(row.id || row.booking_ref || row.bookingRef || Math.random()),
-    ref: row.booking_ref || row.bookingRef || row.ref || `WD-${row.id || Math.floor(1000 + Math.random() * 9000)}`,
-    studentName: row.student_name || row.studentName || row.name || 'Learner Driver',
-    phone: row.phone || '',
-    email: row.email || '',
-    suburb: row.suburb || '',
+    id: String(row.id || extractedRef),
+    ref: extractedRef,
+    studentName: row.students?.full_name || row.student_name || row.studentName || row.name || 'Learner Driver',
+    phone: row.students?.phone || row.phone || '',
+    email: row.students?.email || row.email || '',
+    suburb: extractedSuburb || 'Rockingham & Surrounds',
     pickupAddress: pickup || undefined,
-    packageTitle: row.package_title || row.packageTitle || row.package || 'Driving Lesson',
-    packagePrice: Number(row.package_price || row.packagePrice || row.price || 70),
-    date: row.date || '',
-    time: row.time || '',
+    packageTitle: row.lesson_type || row.package_title || row.packageTitle || row.package || '1 Hour Driving Lesson',
+    packagePrice: extractedPrice,
+    date: row.lesson_date || row.date || '',
+    time: row.start_time || row.time || '',
     status: (row.status as BookingItem['status']) || 'Pending',
     notes: row.notes || undefined,
     createdAt: row.created_at || row.createdAt 
       ? new Date(row.created_at || row.createdAt).toISOString().split('T')[0] 
       : new Date().toISOString().split('T')[0],
     isRescheduled: Boolean(row.is_rescheduled || row.isRescheduled || (row.notes && row.notes.includes('[RESCHEDULED]'))),
-    paymentStatus: row.payment_status || row.paymentStatus || 'unpaid',
+    paymentStatus: extractedPayment,
     stripeSessionId: row.stripe_session_id || row.stripeSessionId || null,
   };
 }
@@ -185,7 +223,7 @@ export async function fetchBookingsFromDb(token?: string | null): Promise<Bookin
       try {
         const { data, error } = await sb
           .from('bookings')
-          .select('*')
+          .select('*, students(*), instructors(*)')
           .order('created_at', { ascending: false });
         if (!error && Array.isArray(data) && data.length > 0) {
           addItems(data.map(mapDbToBookingItem));
@@ -361,24 +399,65 @@ export async function createBookingInDb(
     const sb = getSupabase();
     if (sb) {
       try {
-        const payload = {
-          booking_ref: bookingRef,
-          student_name: booking.studentName,
-          phone: booking.phone,
-          email: booking.email,
-          suburb: booking.suburb,
-          pickup_address: booking.pickupAddress || null,
-          package_title: booking.packageTitle,
-          package_price: booking.packagePrice,
-          date: booking.date,
-          time: booking.time,
+        let studentId: any = null;
+        if (booking.studentName) {
+          try {
+            const { data: stdData } = await sb
+              .from('students')
+              .upsert({
+                full_name: booking.studentName,
+                phone: booking.phone,
+                email: booking.email,
+              })
+              .select('id')
+              .single();
+            if (stdData?.id) {
+              studentId = stdData.id;
+            }
+          } catch {}
+        }
+
+        const notesWithMeta = `[BookingRef: ${bookingRef}] [Price: $${booking.packagePrice}] [Suburb: ${booking.suburb}] ${booking.pickupAddress ? `[Pickup: ${booking.pickupAddress}]` : ''} ${booking.notes || ''}`.trim();
+
+        // Attempt relational schema insert
+        const relationalPayload: Record<string, any> = {
+          student_id: studentId,
+          lesson_type: booking.packageTitle,
+          lesson_date: booking.date,
+          start_time: booking.time,
           status: booking.status || 'Pending',
-          notes: booking.notes || null,
-          payment_status: 'unpaid',
+          notes: notesWithMeta,
         };
-        const { data, error } = await sb.from('bookings').insert(payload).select().single();
-        if (!error && data) {
-          finalItem = mapDbToBookingItem(data);
+
+        const { data: relData, error: relError } = await sb
+          .from('bookings')
+          .insert(relationalPayload)
+          .select('*, students(*), instructors(*)')
+          .single();
+
+        if (!relError && relData) {
+          finalItem = mapDbToBookingItem(relData);
+        } else {
+          // Fallback to flat schema insert if columns exist
+          const flatPayload = {
+            booking_ref: bookingRef,
+            student_name: booking.studentName,
+            phone: booking.phone,
+            email: booking.email,
+            suburb: booking.suburb,
+            pickup_address: booking.pickupAddress || null,
+            package_title: booking.packageTitle,
+            package_price: booking.packagePrice,
+            date: booking.date,
+            time: booking.time,
+            status: booking.status || 'Pending',
+            notes: notesWithMeta,
+            payment_status: 'unpaid',
+          };
+          const { data: flatData, error: flatError } = await sb.from('bookings').insert(flatPayload).select().single();
+          if (!flatError && flatData) {
+            finalItem = mapDbToBookingItem(flatData);
+          }
         }
       } catch (err) {
         console.warn('Supabase booking insert failed:', err);

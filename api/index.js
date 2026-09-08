@@ -6,7 +6,7 @@ var __export = (target, all) => {
 
 // server.ts
 import express from "express";
-import path2 from "path";
+import path from "path";
 import dotenv from "dotenv";
 import Stripe from "stripe";
 
@@ -131,7 +131,70 @@ try {
 var db = dbInstance;
 
 // src/db/queries.ts
-import { eq, desc, or, and, ne } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
+
+// src/lib/supabase-server.ts
+import { createClient } from "@supabase/supabase-js";
+var supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+var supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || "";
+var isSupabaseServerConfigured = Boolean(
+  supabaseUrl && supabaseKey && supabaseUrl.startsWith("http") && supabaseKey.length > 10
+);
+var serverClientInstance = null;
+function getSupabaseServerClient() {
+  if (!isSupabaseServerConfigured) {
+    return null;
+  }
+  if (!serverClientInstance) {
+    try {
+      serverClientInstance = createClient(supabaseUrl, supabaseKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false
+        }
+      });
+      console.log(`[Supabase Server] Connected to ${supabaseUrl}`);
+    } catch (err) {
+      console.warn("[Supabase Server] Failed to initialize Supabase server client:", err?.message || err);
+      return null;
+    }
+  }
+  return serverClientInstance;
+}
+async function checkSupabaseConnection() {
+  const status = {
+    configured: isSupabaseServerConfigured,
+    url: supabaseUrl ? supabaseUrl.replace(/^https?:\/\//, "").split(".")[0] + ".supabase.co" : "",
+    hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    hasAnonKey: Boolean(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY),
+    connected: false,
+    tables: {
+      bookings: false,
+      students: false,
+      instructors: false
+    }
+  };
+  const client = getSupabaseServerClient();
+  if (!client) {
+    return status;
+  }
+  try {
+    const [bRes, sRes, iRes] = await Promise.all([
+      client.from("bookings").select("id").limit(1),
+      client.from("students").select("id").limit(1),
+      client.from("instructors").select("id").limit(1)
+    ]);
+    status.tables.bookings = !bRes.error;
+    status.tables.students = !sRes.error;
+    status.tables.instructors = !iRes.error;
+    status.connected = !bRes.error || !sRes.error || !iRes.error;
+  } catch (err) {
+    status.connected = false;
+  }
+  return status;
+}
+
+// src/db/queries.ts
 var inMemoryUsers = /* @__PURE__ */ new Map();
 var inMemoryContactMessages = [];
 var inMemoryBookings = [
@@ -146,14 +209,14 @@ var inMemoryBookings = [
     pickupAddress: "14 Chiswick Approach, Wellard WA 6170",
     packageTitle: "1 Hour Driving Lesson",
     packagePrice: 65,
-    date: "2025-06-15",
+    date: "2026-06-15",
     time: "10:00 AM",
     status: "Confirmed",
     notes: "Preparing for practical driving assessment at Rockingham DVS",
     paymentStatus: "paid",
     stripeSessionId: null,
-    createdAt: /* @__PURE__ */ new Date("2025-06-01T08:30:00Z"),
-    updatedAt: /* @__PURE__ */ new Date("2025-06-01T08:30:00Z")
+    createdAt: /* @__PURE__ */ new Date("2026-06-01T08:30:00Z"),
+    updatedAt: /* @__PURE__ */ new Date("2026-06-01T08:30:00Z")
   },
   {
     id: 2,
@@ -166,14 +229,14 @@ var inMemoryBookings = [
     pickupAddress: "28 Rivergums Blvd, Baldivis WA 6171",
     packageTitle: "2 Hours Lesson",
     packagePrice: 130,
-    date: "2025-06-16",
+    date: "2026-06-16",
     time: "02:00 PM",
     status: "Pending",
     notes: "Focus on parallel parking and roundabout navigation",
     paymentStatus: "unpaid",
     stripeSessionId: null,
-    createdAt: /* @__PURE__ */ new Date("2025-06-02T11:15:00Z"),
-    updatedAt: /* @__PURE__ */ new Date("2025-06-02T11:15:00Z")
+    createdAt: /* @__PURE__ */ new Date("2026-06-02T11:15:00Z"),
+    updatedAt: /* @__PURE__ */ new Date("2026-06-02T11:15:00Z")
   },
   {
     id: 3,
@@ -186,19 +249,90 @@ var inMemoryBookings = [
     pickupAddress: "55 Simpson Ave, Rockingham WA 6168",
     packageTitle: "Car Hire + 1 Hour Lesson",
     packagePrice: 200,
-    date: "2025-06-18",
-    time: "09:30 AM",
+    date: "2026-06-18",
+    time: "09:00 AM",
     status: "Confirmed",
-    notes: "PDA Test appointment at 10:45 AM, Rockingham Licensing Centre",
+    notes: "PDA car hire package. DVS test scheduled at 10:05 AM",
     paymentStatus: "paid",
     stripeSessionId: null,
-    createdAt: /* @__PURE__ */ new Date("2025-06-03T14:20:00Z"),
-    updatedAt: /* @__PURE__ */ new Date("2025-06-03T14:20:00Z")
+    createdAt: /* @__PURE__ */ new Date("2026-06-03T14:20:00Z"),
+    updatedAt: /* @__PURE__ */ new Date("2026-06-03T14:20:00Z")
+  },
+  {
+    id: 4,
+    bookingRef: "WD-9943",
+    userId: null,
+    studentName: "Liam O'Connor",
+    phone: "0445 678 901",
+    email: "liam.oc@example.com",
+    suburb: "Kwinana",
+    pickupAddress: "12 Gilmore Ave, Kwinana WA 6167",
+    packageTitle: "1 Hour Driving Lesson",
+    packagePrice: 65,
+    date: "2026-06-20",
+    time: "11:30 AM",
+    status: "Confirmed",
+    notes: "Initial lesson, automatic dual controls requested",
+    paymentStatus: "paid",
+    stripeSessionId: null,
+    createdAt: /* @__PURE__ */ new Date("2026-06-04T09:00:00Z"),
+    updatedAt: /* @__PURE__ */ new Date("2026-06-04T09:00:00Z")
   }
 ];
-var nextBookingId = 4;
+var nextBookingId = 10;
 var nextUserId = 1;
 var nextContactId = 1;
+function mapSupabaseRowToBooking(row) {
+  let pickup = row.pickup_address || row.pickupAddress || "";
+  let ref = row.booking_ref || row.bookingRef || "";
+  let suburb = row.suburb || "";
+  let price = Number(row.package_price || row.packagePrice || 0);
+  let payment = row.payment_status || row.paymentStatus || "unpaid";
+  if (row.notes && typeof row.notes === "string") {
+    if (!pickup) {
+      const match = row.notes.match(/\[Pickup:\s*([^\]]+)\]/i) || row.notes.match(/Pickup:\s*([^.]+)/i);
+      if (match) pickup = match[1].trim();
+    }
+    if (!ref) {
+      const match = row.notes.match(/\[BookingRef:\s*([^\]]+)\]/i) || row.notes.match(/BookingRef:\s*([A-Z0-9-]+)/i);
+      if (match) ref = match[1].trim();
+    }
+    if (!suburb) {
+      const match = row.notes.match(/\[Suburb:\s*([^\]]+)\]/i) || row.notes.match(/Suburb:\s*([^,|]+)/i);
+      if (match) suburb = match[1].trim();
+    }
+    if (!price) {
+      const match = row.notes.match(/\[Price:\s*\$?(\d+(?:\.\d+)?)\]/i) || row.notes.match(/Price:\s*\$?(\d+(?:\.\d+)?)/i);
+      if (match) price = Number(match[1]);
+    }
+    if (payment === "unpaid") {
+      const match = row.notes.match(/\[Payment:\s*([^\]]+)\]/i);
+      if (match) payment = match[1].trim();
+    }
+  }
+  if (!ref) ref = `WD-${row.id || Math.floor(1e3 + Math.random() * 9e3)}`;
+  if (!price) price = 65;
+  return {
+    id: row.id || ref,
+    bookingRef: ref,
+    userId: row.user_id || row.userId || null,
+    studentName: row.students?.full_name || row.student_name || row.studentName || "Learner Driver",
+    phone: row.students?.phone || row.phone || "",
+    email: row.students?.email || row.email || "",
+    suburb: suburb || "Rockingham & Surrounds",
+    pickupAddress: pickup || null,
+    packageTitle: row.lesson_type || row.package_title || row.packageTitle || "1 Hour Driving Lesson",
+    packagePrice: price,
+    date: row.lesson_date || row.date || "",
+    time: row.start_time || row.time || "",
+    status: row.status || "Pending",
+    notes: row.notes || null,
+    paymentStatus: payment,
+    stripeSessionId: row.stripe_session_id || row.stripeSessionId || null,
+    createdAt: row.created_at ? new Date(row.created_at) : /* @__PURE__ */ new Date(),
+    updatedAt: row.updated_at ? new Date(row.updated_at) : /* @__PURE__ */ new Date()
+  };
+}
 async function getOrCreateUser(uid, email, displayName, photoUrl) {
   if (isSqlConfigured && db) {
     try {
@@ -219,7 +353,7 @@ async function getOrCreateUser(uid, email, displayName, photoUrl) {
       }).returning();
       return result[0];
     } catch (error) {
-      console.warn("[AI Studio] PostgreSQL getOrCreateUser failed, using in-memory store:", error?.message);
+      console.warn("[AI Studio] PostgreSQL getOrCreateUser fallback:", error?.message);
     }
   }
   let user = inMemoryUsers.get(uid);
@@ -247,40 +381,68 @@ async function getOrCreateUser(uid, email, displayName, photoUrl) {
   return user;
 }
 async function getBookings(filter) {
-  if (isSqlConfigured && db) {
+  const mergedMap = /* @__PURE__ */ new Map();
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
     try {
-      if (filter?.userId || filter?.email) {
-        return await db.select().from(bookings).where(
-          or(
-            filter.userId ? eq(bookings.userId, filter.userId) : void 0,
-            filter.email ? eq(bookings.email, filter.email) : void 0
-          )
-        ).orderBy(desc(bookings.createdAt));
+      const { data, error } = await supabase.from("bookings").select("*, students(*), instructors(*)").order("created_at", { ascending: false });
+      if (!error && Array.isArray(data)) {
+        for (const row of data) {
+          const mapped = mapSupabaseRowToBooking(row);
+          if (mapped.bookingRef) {
+            mergedMap.set(mapped.bookingRef.toUpperCase(), mapped);
+          }
+        }
       }
-      return await db.select().from(bookings).orderBy(desc(bookings.createdAt));
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL getBookings failed, using in-memory store:", error?.message);
+    } catch (err) {
+      console.warn("[Supabase Server] getBookings notice:", err?.message || err);
     }
   }
-  let list = [...inMemoryBookings];
+  if (isSqlConfigured && db) {
+    try {
+      const sqlRows = await db.select().from(bookings).orderBy(desc(bookings.createdAt));
+      for (const row of sqlRows) {
+        if (row.bookingRef) {
+          mergedMap.set(row.bookingRef.toUpperCase(), row);
+        }
+      }
+    } catch (error) {
+      console.warn("[AI Studio] PostgreSQL getBookings notice:", error?.message);
+    }
+  }
+  for (const b of inMemoryBookings) {
+    if (b.bookingRef && !mergedMap.has(b.bookingRef.toUpperCase())) {
+      mergedMap.set(b.bookingRef.toUpperCase(), b);
+    }
+  }
+  let list = Array.from(mergedMap.values());
   if (filter?.userId || filter?.email) {
     list = list.filter(
-      (b) => filter.userId && b.userId === filter.userId || filter.email && b.email.toLowerCase() === filter.email.toLowerCase()
+      (b) => filter.userId && b.userId === filter.userId || filter.email && b.email && b.email.toLowerCase() === filter.email.toLowerCase()
     );
   }
   return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 async function getBookingByRef(bookingRef) {
+  const cleanRef = bookingRef.trim().toUpperCase();
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from("bookings").select("*, students(*), instructors(*)").ilike("notes", `%${cleanRef}%`).limit(1);
+      if (!error && data && data.length > 0) {
+        return mapSupabaseRowToBooking(data[0]);
+      }
+    } catch {
+    }
+  }
   if (isSqlConfigured && db) {
     try {
       const result = await db.select().from(bookings).where(eq(bookings.bookingRef, bookingRef)).limit(1);
-      return result[0] || null;
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL getBookingByRef failed, using in-memory store:", error?.message);
+      if (result[0]) return result[0];
+    } catch {
     }
   }
-  const cleanRef = bookingRef.trim().toUpperCase();
-  const found = inMemoryBookings.find((b) => b.bookingRef.toUpperCase() === cleanRef);
+  const found = inMemoryBookings.find((b) => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
   return found || null;
 }
 async function getPendingBookingForCustomer(email, phone, date, time) {
@@ -291,26 +453,9 @@ async function getPendingBookingForCustomer(email, phone, date, time) {
   if (!normalizedDate || !normalizedTime || !cleanEmail && !cleanPhone) {
     return null;
   }
-  if (isSqlConfigured && db) {
-    try {
-      const rows = await db.select().from(bookings).where(
-        and(
-          eq(bookings.date, normalizedDate),
-          eq(bookings.time, normalizedTime),
-          eq(bookings.status, "Pending"),
-          eq(bookings.paymentStatus, "unpaid")
-        )
-      );
-      const match = rows.find(
-        (r) => cleanEmail && r.email?.toLowerCase() === cleanEmail || cleanPhone && r.phone?.replace(/\D/g, "") === cleanPhone
-      );
-      if (match) return match;
-    } catch (error) {
-      console.warn("[AI Studio] getPendingBookingForCustomer SQL fallback:", error?.message);
-    }
-  }
-  return inMemoryBookings.find(
-    (b) => b.date === normalizedDate && b.time === normalizedTime && b.status === "Pending" && b.paymentStatus === "unpaid" && (cleanEmail && b.email?.toLowerCase() === cleanEmail || cleanPhone && b.phone?.replace(/\D/g, "") === cleanPhone)
+  const allBookings = await getBookings();
+  return allBookings.find(
+    (b) => b.date === normalizedDate && b.time === normalizedTime && (b.status === "Pending" || b.paymentStatus === "unpaid") && (cleanEmail && b.email?.toLowerCase() === cleanEmail || cleanPhone && b.phone?.replace(/\D/g, "") === cleanPhone)
   ) || null;
 }
 async function checkSlotBooked(date, time, excludeRef, customerEmail, customerPhone) {
@@ -348,51 +493,10 @@ async function checkSlotBooked(date, time, excludeRef, customerEmail, customerPh
     }
     return false;
   };
-  if (isSqlConfigured && db) {
-    try {
-      const rows = await db.select().from(bookings).where(
-        and(
-          eq(bookings.date, normalizedDate),
-          eq(bookings.time, normalizedTime),
-          ne(bookings.status, "Cancelled")
-        )
-      );
-      const activeConflict = rows.some(isConflict);
-      if (activeConflict) {
-        return true;
-      }
-    } catch (error) {
-      console.warn("[AI Studio] checkSlotBooked SQL query fallback:", error?.message);
-    }
-  }
-  const inMemoryConflict = inMemoryBookings.some(isConflict);
-  return inMemoryConflict;
+  const currentBookings = await getBookings();
+  return currentBookings.some(isConflict);
 }
 async function createBooking(data) {
-  if (isSqlConfigured && db) {
-    try {
-      const result = await db.insert(bookings).values({
-        bookingRef: data.bookingRef,
-        userId: data.userId || null,
-        studentName: data.studentName,
-        phone: data.phone,
-        email: data.email,
-        suburb: data.suburb,
-        pickupAddress: data.pickupAddress || null,
-        packageTitle: data.packageTitle,
-        packagePrice: data.packagePrice,
-        date: data.date,
-        time: data.time,
-        status: data.status || "Confirmed",
-        notes: data.notes || null,
-        paymentStatus: data.paymentStatus || "unpaid",
-        stripeSessionId: data.stripeSessionId || null
-      }).returning();
-      return result[0];
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL createBooking failed, using in-memory store:", error?.message);
-    }
-  }
   const newBooking = {
     id: nextBookingId++,
     bookingRef: data.bookingRef,
@@ -413,22 +517,86 @@ async function createBooking(data) {
     createdAt: /* @__PURE__ */ new Date(),
     updatedAt: /* @__PURE__ */ new Date()
   };
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      let studentId = null;
+      if (data.studentName) {
+        try {
+          const { data: stdData } = await supabase.from("students").upsert({
+            full_name: data.studentName,
+            phone: data.phone,
+            email: data.email
+          }).select("id").single();
+          if (stdData?.id) studentId = stdData.id;
+        } catch {
+        }
+      }
+      const formattedNotes = `[BookingRef: ${data.bookingRef}] [Price: $${data.packagePrice}] [Suburb: ${data.suburb}] ${data.pickupAddress ? `[Pickup: ${data.pickupAddress}]` : ""} ${data.notes || ""}`.trim();
+      const { data: sbRow, error: sbErr } = await supabase.from("bookings").insert({
+        student_id: studentId,
+        lesson_type: data.packageTitle,
+        lesson_date: data.date,
+        start_time: data.time,
+        status: data.status || "Pending",
+        notes: formattedNotes
+      }).select("*, students(*), instructors(*)").single();
+      if (!sbErr && sbRow) {
+        const mapped = mapSupabaseRowToBooking(sbRow);
+        inMemoryBookings.unshift(mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn("[Supabase Server] createBooking fallback:", err?.message || err);
+    }
+  }
+  if (isSqlConfigured && db) {
+    try {
+      const result = await db.insert(bookings).values({
+        bookingRef: data.bookingRef,
+        userId: data.userId || null,
+        studentName: data.studentName,
+        phone: data.phone,
+        email: data.email,
+        suburb: data.suburb,
+        pickupAddress: data.pickupAddress || null,
+        packageTitle: data.packageTitle,
+        packagePrice: data.packagePrice,
+        date: data.date,
+        time: data.time,
+        status: data.status || "Confirmed",
+        notes: data.notes || null,
+        paymentStatus: data.paymentStatus || "unpaid",
+        stripeSessionId: data.stripeSessionId || null
+      }).returning();
+      if (result[0]) {
+        inMemoryBookings.unshift(result[0]);
+        return result[0];
+      }
+    } catch (error) {
+      console.warn("[AI Studio] PostgreSQL createBooking fallback:", error?.message);
+    }
+  }
   inMemoryBookings.unshift(newBooking);
   return newBooking;
 }
 async function updateBooking(id, updates) {
-  if (isSqlConfigured && db) {
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
     try {
-      const result = await db.update(bookings).set({
-        ...updates,
-        updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq(bookings.id, id)).returning();
-      return result[0];
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL updateBooking failed, using in-memory store:", error?.message);
+      const numId = typeof id === "number" ? id : parseInt(String(id).replace(/\D/g, ""), 10);
+      const sbUpdates = {};
+      if (updates.status) sbUpdates.status = updates.status;
+      if (updates.notes) sbUpdates.notes = updates.notes;
+      if (updates.date) sbUpdates.lesson_date = updates.date;
+      if (updates.time) sbUpdates.start_time = updates.time;
+      if (!isNaN(numId)) {
+        await supabase.from("bookings").update(sbUpdates).eq("id", numId);
+      }
+    } catch {
     }
   }
-  const idx = inMemoryBookings.findIndex((b) => b.id === id);
+  const idx = inMemoryBookings.findIndex((b) => String(b.id) === String(id));
   if (idx !== -1) {
     inMemoryBookings[idx] = {
       ...inMemoryBookings[idx],
@@ -440,19 +608,29 @@ async function updateBooking(id, updates) {
   return null;
 }
 async function updateBookingByRef(bookingRef, updates) {
-  if (isSqlConfigured && db) {
+  const cleanRef = bookingRef.trim().toUpperCase();
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
     try {
-      const result = await db.update(bookings).set({
-        ...updates,
-        updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq(bookings.bookingRef, bookingRef)).returning();
-      return result[0];
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL updateBookingByRef failed, using in-memory store:", error?.message);
+      const sbUpdates = {};
+      if (updates.status) sbUpdates.status = updates.status;
+      if (updates.notes) sbUpdates.notes = updates.notes;
+      if (updates.date) sbUpdates.lesson_date = updates.date;
+      if (updates.time) sbUpdates.start_time = updates.time;
+      await supabase.from("bookings").update(sbUpdates).ilike("notes", `%${cleanRef}%`);
+    } catch {
     }
   }
-  const cleanRef = bookingRef.trim().toUpperCase();
-  const idx = inMemoryBookings.findIndex((b) => b.bookingRef.toUpperCase() === cleanRef);
+  if (isSqlConfigured && db) {
+    try {
+      await db.update(bookings).set({
+        ...updates,
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq(bookings.bookingRef, bookingRef));
+    } catch {
+    }
+  }
+  const idx = inMemoryBookings.findIndex((b) => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
   if (idx !== -1) {
     inMemoryBookings[idx] = {
       ...inMemoryBookings[idx],
@@ -464,51 +642,38 @@ async function updateBookingByRef(bookingRef, updates) {
   return null;
 }
 async function deleteBookingById(id) {
-  if (isSqlConfigured && db) {
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
     try {
-      return await db.delete(bookings).where(eq(bookings.id, id)).returning();
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL deleteBookingById failed, using in-memory store:", error?.message);
+      const numId = typeof id === "number" ? id : parseInt(String(id).replace(/\D/g, ""), 10);
+      if (!isNaN(numId)) {
+        await supabase.from("bookings").delete().eq("id", numId);
+      }
+    } catch {
     }
   }
-  const idx = inMemoryBookings.findIndex((b) => b.id === id);
+  const idx = inMemoryBookings.findIndex((b) => String(b.id) === String(id));
   if (idx !== -1) {
-    const deleted = inMemoryBookings.splice(idx, 1);
-    return deleted;
+    return inMemoryBookings.splice(idx, 1);
   }
   return [];
 }
 async function deleteBookingByRef(bookingRef) {
-  if (isSqlConfigured && db) {
+  const cleanRef = bookingRef.trim().toUpperCase();
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
     try {
-      return await db.delete(bookings).where(eq(bookings.bookingRef, bookingRef)).returning();
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL deleteBookingByRef failed, using in-memory store:", error?.message);
+      await supabase.from("bookings").delete().ilike("notes", `%${cleanRef}%`);
+    } catch {
     }
   }
-  const cleanRef = bookingRef.trim().toUpperCase();
-  const idx = inMemoryBookings.findIndex((b) => b.bookingRef.toUpperCase() === cleanRef);
+  const idx = inMemoryBookings.findIndex((b) => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
   if (idx !== -1) {
-    const deleted = inMemoryBookings.splice(idx, 1);
-    return deleted;
+    return inMemoryBookings.splice(idx, 1);
   }
   return [];
 }
 async function createContactMessage(data) {
-  if (isSqlConfigured && db) {
-    try {
-      const result = await db.insert(contactMessages).values({
-        name: data.name,
-        email: data.email,
-        phone: data.phone || null,
-        subject: data.subject || null,
-        message: data.message
-      }).returning();
-      return result[0];
-    } catch (error) {
-      console.warn("[AI Studio] PostgreSQL createContactMessage failed, using in-memory store:", error?.message);
-    }
-  }
   const newMsg = {
     id: nextContactId++,
     name: data.name,
@@ -522,103 +687,87 @@ async function createContactMessage(data) {
   return newMsg;
 }
 
-// src/lib/firebase-admin.ts
-import { initializeApp, getApps } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-import fs from "fs";
-import path from "path";
-var projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || "marine-will-2cjpc";
-try {
-  const configPath = path.resolve(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed.projectId) {
-      projectId = parsed.projectId;
-    }
-  }
-} catch (e) {
-  console.warn("[Firebase Admin] Notice: could not load config from file:", e);
-}
-if (!getApps().length) {
-  try {
-    initializeApp({
-      projectId
-    });
-  } catch (err) {
-    console.warn("[Firebase Admin] Initialization notice:", err?.message);
-  }
-}
-var adminAuthInstance;
-try {
-  adminAuthInstance = getAuth();
-} catch (err) {
-  console.warn("[Firebase Admin] getAuth fallback notice:", err?.message);
-  adminAuthInstance = {
-    verifyIdToken: async () => {
-      throw new Error("Firebase Admin Auth not initialized");
-    }
-  };
-}
-var adminAuth = adminAuthInstance;
-
 // src/middleware/auth.ts
+function parseTokenPayload(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length === 3) {
+      let base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      while (base64.length % 4) {
+        base64 += "=";
+      }
+      const payload = JSON.parse(Buffer.from(base64, "base64").toString("utf-8"));
+      const uid = payload.sub || payload.user_id || payload.id;
+      if (uid) {
+        return {
+          uid,
+          id: uid,
+          email: payload.email,
+          name: payload.user_metadata?.full_name || payload.name || payload.email,
+          ...payload
+        };
+      }
+    }
+  } catch {
+  }
+  return null;
+}
 var requireAuth = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized: Missing token" });
   }
-  const token = authHeader.split("Bearer ")[1];
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    req.user = decodedToken;
-    next();
-  } catch (error) {
+  const token = authHeader.split("Bearer ")[1].trim();
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
     try {
-      const parts = token.split(".");
-      if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
-        if (payload && (payload.sub || payload.user_id)) {
-          req.user = {
-            uid: payload.sub || payload.user_id,
-            email: payload.email,
-            name: payload.name,
-            picture: payload.picture,
-            ...payload
-          };
-          return next();
-        }
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (!error && user) {
+        req.user = {
+          uid: user.id,
+          id: user.id,
+          email: user.email,
+          name: user.user_metadata?.full_name || user.user_metadata?.name || user.email,
+          role: user.role,
+          ...user
+        };
+        return next();
       }
     } catch {
     }
-    console.error("Error verifying Firebase ID token:", error);
-    return res.status(401).json({ error: "Unauthorized: Invalid token" });
   }
+  const parsed = parseTokenPayload(token);
+  if (parsed) {
+    req.user = parsed;
+    return next();
+  }
+  return res.status(401).json({ error: "Unauthorized: Invalid Supabase token" });
 };
 var optionalAuth = async (req, _res, next) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.split("Bearer ")[1];
-    try {
-      const decodedToken = await adminAuth.verifyIdToken(token);
-      req.user = decodedToken;
-    } catch {
+    const token = authHeader.split("Bearer ")[1].trim();
+    const supabase = getSupabaseServerClient();
+    if (supabase) {
       try {
-        const parts = token.split(".");
-        if (parts.length === 3) {
-          const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
-          if (payload && (payload.sub || payload.user_id)) {
-            req.user = {
-              uid: payload.sub || payload.user_id,
-              email: payload.email,
-              name: payload.name,
-              picture: payload.picture,
-              ...payload
-            };
-          }
+        const { data: { user }, error } = await supabase.auth.getUser(token);
+        if (!error && user) {
+          req.user = {
+            uid: user.id,
+            id: user.id,
+            email: user.email,
+            name: user.user_metadata?.full_name || user.user_metadata?.name || user.email,
+            role: user.role,
+            ...user
+          };
+          return next();
         }
       } catch {
       }
+    }
+    const parsed = parseTokenPayload(token);
+    if (parsed) {
+      req.user = parsed;
     }
   }
   next();
@@ -1172,6 +1321,12 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
     });
   }
 });
+app.get("/api/payments/stripe/create-intent", (_req, res) => {
+  res.status(405).json({
+    error: "METHOD_NOT_ALLOWED",
+    message: "Use POST with lesson items and customer info to create a Stripe payment intent."
+  });
+});
 app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
   try {
     const { paymentIntentId, bookingRef, bookingData, items } = req.body;
@@ -1556,6 +1711,14 @@ app.post("/api/contact", contactLimiter, async (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
 });
+app.get("/api/supabase/status", async (_req, res) => {
+  try {
+    const status = await checkSupabaseConnection();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ configured: false, error: err?.message || "Failed to check Supabase connection" });
+  }
+});
 app.use((err, _req, res, _next) => {
   console.error("[Server Error]", err);
   if (!res.headersSent) {
@@ -1574,10 +1737,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path2.join(process.cwd(), "dist");
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path2.join(distPath, "index.html"));
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
   app.listen(PORT, "0.0.0.0", () => {

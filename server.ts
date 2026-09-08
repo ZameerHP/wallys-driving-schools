@@ -16,6 +16,7 @@ import {
   getPendingBookingForCustomer
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
+import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
 
 dotenv.config();
 
@@ -696,6 +697,13 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
   }
 });
 
+app.get("/api/payments/stripe/create-intent", (_req, res) => {
+  res.status(405).json({
+    error: "METHOD_NOT_ALLOWED",
+    message: "Use POST with lesson items and customer info to create a Stripe payment intent."
+  });
+});
+
 // 3. Stripe: Server-side payment verification & booking confirmation
 app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
   try {
@@ -1143,6 +1151,16 @@ app.post("/api/contact", contactLimiter, async (req, res) => {
 // Health check endpoint
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Supabase live connection status endpoint
+app.get("/api/supabase/status", async (_req, res) => {
+  try {
+    const status = await checkSupabaseConnection();
+    res.json(status);
+  } catch (err: any) {
+    res.status(500).json({ configured: false, error: err?.message || "Failed to check Supabase connection" });
+  }
 });
 
 // Global JSON error handler to ensure JSON responses on unexpected exceptions
