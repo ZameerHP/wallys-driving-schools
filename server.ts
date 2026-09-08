@@ -35,20 +35,25 @@ app.use((req, res, next) => {
 
 // Normalize API route URLs for Vercel / serverless deployments (if proxy/rewrite stripped /api or routed via /api/index)
 app.use((req, _res, next) => {
-  // If Vercel rewrote to /api/index, check query path or headers
+  // If Vercel rewrote with query path or if req.url lost the specific sub-route
   if (req.query?.path) {
     const rawPath = Array.isArray(req.query.path) ? req.query.path.join('/') : String(req.query.path);
     const cleanPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
     req.url = `/api${cleanPath}`;
-  } else if (req.url === '/api/index' || req.url === '/api' || req.url.startsWith('/api/index?') || req.url.startsWith('/api?')) {
+  } else if (req.url === '/api/index' || req.url === '/api' || req.url === '/api/' || req.url.startsWith('/api/index?') || req.url.startsWith('/api?')) {
     const matchedPath = 
       (req.headers['x-matched-path'] as string) ||
       (req.headers['x-vercel-matched-path'] as string) ||
       (req.headers['x-vercel-original-url'] as string) ||
       (req.headers['x-forwarded-uri'] as string) ||
-      (req.headers['x-original-url'] as string);
-    if (matchedPath && matchedPath.startsWith('/api')) {
-      req.url = matchedPath;
+      (req.headers['x-original-url'] as string) ||
+      ((req.originalUrl && req.originalUrl !== '/api' && req.originalUrl !== '/api/') ? req.originalUrl : undefined);
+
+    if (matchedPath) {
+      const normalizedPath = matchedPath.startsWith('/api') ? matchedPath : `/api${matchedPath.startsWith('/') ? matchedPath : `/${matchedPath}`}`;
+      const qIdx = req.url.indexOf('?');
+      const query = qIdx !== -1 ? req.url.slice(qIdx) : '';
+      req.url = `${normalizedPath}${query && !normalizedPath.includes('?') ? query : ''}`;
     }
   }
 
