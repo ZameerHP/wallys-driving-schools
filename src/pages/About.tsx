@@ -33,8 +33,11 @@ export function About() {
             className="rounded-[40px] overflow-hidden shadow-2xl h-[520px] relative group"
           >
             <img 
-              src="https://images.unsplash.com/photo-1595054173872-3580455c11f7?auto=format&fit=crop&q=80&w=1200" 
+              src="/assets/images/about-driving-lesson.jpg" 
               alt="About Wally's Driving School" 
+              onError={(e) => {
+                e.currentTarget.src = "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=1200";
+              }}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
@@ -114,21 +117,24 @@ export function About() {
                 id: 'alvert-tine',
                 name: 'Alvert Tine',
                 role: 'Senior Driving Instructor',
-                image: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=600',
+                image: '/assets/images/instructor-alvert.jpg',
+                fallback: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=600',
                 exp: '5+ Years Experience'
               },
               {
                 id: 'sara-liner',
                 name: 'Sara Liner',
                 role: 'Driving Instructor & Safety Specialist',
-                image: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=600',
+                image: '/assets/images/instructor-sara.jpg',
+                fallback: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=600',
                 exp: '7+ Years Experience'
               },
               {
                 id: 'mark-wood',
                 name: 'Mark Wood',
                 role: 'RMS Driving Test Specialist',
-                image: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=600',
+                image: '/assets/images/instructor-mark.jpg',
+                fallback: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=600',
                 exp: '8+ Years Experience'
               }
             ].map((instructor, index) => (
@@ -145,6 +151,9 @@ export function About() {
                   <img 
                     src={instructor.image} 
                     alt={instructor.name} 
+                    onError={(e) => {
+                      if (instructor.fallback) e.currentTarget.src = instructor.fallback;
+                    }}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
                   />
                   <div className="absolute top-4 right-4 bg-brand-black/80 backdrop-blur-md text-white text-[11px] font-bold px-3 py-1 rounded-full">

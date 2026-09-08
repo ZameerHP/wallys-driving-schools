@@ -82,6 +82,9 @@ export function BlogPost() {
             <img 
               src={post.image} 
               alt={post.title}
+              onError={(e) => { 
+                e.currentTarget.src = "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=1200"; 
+              }}
               className="w-full h-full object-cover"
             />
           </div>

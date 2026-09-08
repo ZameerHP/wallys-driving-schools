@@ -17,6 +17,7 @@ import {
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
+import { validateAustralianPhone, validateWorkingEmail } from "./src/lib/validation.ts";
 
 dotenv.config();
 
@@ -1032,6 +1033,16 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       return res.status(400).json({ error: "Missing required booking fields" });
     }
 
+    const emailCheck = validateWorkingEmail(email);
+    if (!emailCheck.isValid) {
+      return res.status(400).json({ error: emailCheck.error || "A valid working email is required" });
+    }
+
+    const phoneCheck = validateAustralianPhone(phone);
+    if (!phoneCheck.isValid) {
+      return res.status(400).json({ error: phoneCheck.error || "Only Australian phone numbers are allowed" });
+    }
+
     // Double booking verification: ensure slot is free (allowing customer to finalize their own pending booking)
     const isSlotTaken = await checkSlotBooked(date, time, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
     if (isSlotTaken) {
@@ -1131,6 +1142,18 @@ app.post("/api/contact", contactLimiter, async (req, res) => {
     const { name, email, phone, subject, message } = req.body;
     if (!name || !email || !message) {
       return res.status(400).json({ error: "Name, email, and message are required" });
+    }
+
+    const emailCheck = validateWorkingEmail(email);
+    if (!emailCheck.isValid) {
+      return res.status(400).json({ error: emailCheck.error || "A valid working email is required" });
+    }
+
+    if (phone && phone.trim()) {
+      const phoneCheck = validateAustralianPhone(phone);
+      if (!phoneCheck.isValid) {
+        return res.status(400).json({ error: phoneCheck.error || "Only Australian phone numbers are allowed" });
+      }
     }
 
     const saved = await createContactMessage({

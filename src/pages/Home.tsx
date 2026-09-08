@@ -371,11 +371,25 @@ export function Home() {
             {/* 3D Tilt Image Stack */}
             <TiltCard maxTilt={8} className="relative h-[360px] sm:h-[400px] lg:h-[440px] xl:h-[480px] rounded-[32px]">
               <div className="absolute inset-0 rounded-[32px] overflow-hidden shadow-xl">
-                <img src="https://images.unsplash.com/photo-1595054173872-3580455c11f7?auto=format&fit=crop&q=80&w=800" className="w-full h-full object-cover" alt="Driving Lesson" />
+                <img 
+                  src="/assets/images/about-driving-lesson.jpg" 
+                  onError={(e) => {
+                    e.currentTarget.src = "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=800";
+                  }}
+                  className="w-full h-full object-cover" 
+                  alt="Driving Lesson" 
+                />
                 <div className="absolute inset-0 bg-gradient-to-t from-brand-black/35 to-transparent" />
               </div>
               <div className="absolute -bottom-4 -right-4 w-3/5 h-3/5 rounded-[24px] border-[6px] border-brand-offwhite overflow-hidden shadow-xl">
-                <img src="https://images.unsplash.com/photo-1606821812822-7cd60e5eb3e8?auto=format&fit=crop&q=80&w=800" className="w-full h-full object-cover" alt="Instructor" />
+                <img 
+                  src="/assets/images/about-instructor.jpg" 
+                  onError={(e) => {
+                    e.currentTarget.src = "https://images.unsplash.com/photo-1541899481282-d53bffe3c35d?auto=format&fit=crop&q=80&w=800";
+                  }}
+                  className="w-full h-full object-cover" 
+                  alt="Instructor" 
+                />
               </div>
               
               {/* Experience badge */}
@@ -704,7 +718,14 @@ export function Home() {
               >
                 <div>
                   <div className="h-48 overflow-hidden relative">
-                    <img src={post.image} alt={post.title} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
+                    <img 
+                      src={post.image} 
+                      alt={post.title} 
+                      onError={(e) => { 
+                        e.currentTarget.src = "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=800"; 
+                      }} 
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" 
+                    />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/25 to-transparent" />
                     <div className="absolute top-4 left-4 bg-brand-red text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">
                       {post.date}

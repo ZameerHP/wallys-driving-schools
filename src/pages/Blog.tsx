@@ -41,6 +41,9 @@ export function Blog() {
                 <img 
                   src={post.image} 
                   alt={post.title}
+                  onError={(e) => { 
+                    e.currentTarget.src = "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=800"; 
+                  }}
                   className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />

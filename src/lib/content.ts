@@ -3,19 +3,19 @@ export const INSTRUCTORS = [
     id: 'alvert-tine',
     name: 'Alvert Tine',
     role: 'Senior Driving Instructor',
-    image: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=400'
+    image: '/assets/images/instructor-alvert.jpg'
   },
   {
     id: 'sara-liner',
     name: 'Sara Liner',
     role: 'Driving Instructor',
-    image: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=400'
+    image: '/assets/images/instructor-sara.jpg'
   },
   {
     id: 'mark-wood',
     name: 'Mark Wood',
     role: 'Driving Instructor',
-    image: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=400'
+    image: '/assets/images/instructor-mark.jpg'
   }
 ];
 
@@ -196,7 +196,7 @@ export const BLOG_POSTS = [
     author: 'waleed_khurram',
     role: 'Teacher',
     date: '18 DEC 2023',
-    image: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=600',
+    image: '/assets/images/blog-test-prep.jpg',
     content: `
       <p>Driving is much more than just operating a vehicle; it is a vital life skill that requires continuous refinement, spatial awareness, and situational judgment. Whether you are a brand-new learner or looking to sharpen your abilities behind the wheel, here are five proven ways to rapidly develop your driving skills:</p>
       
@@ -222,7 +222,7 @@ export const BLOG_POSTS = [
     author: 'waleed_khurram',
     role: 'Teacher',
     date: '18 DEC 2023',
-    image: 'https://images.unsplash.com/photo-1516224364402-4b2169c73335?auto=format&fit=crop&q=80&w=600',
+    image: '/assets/images/blog-parking.jpg',
     content: `
       <p>Learning to drive from friends or family members might seem like an easy way to save money, but it often comes with hidden risks—namely, passing down bad driving habits and uncertified instruction. Investing in structured professional driving lessons is essential for long-term safety and success on the road.</p>
       
@@ -245,7 +245,7 @@ export const BLOG_POSTS = [
     author: 'waleed_khurram',
     role: 'Teacher',
     date: '18 DEC 2023',
-    image: 'https://images.unsplash.com/photo-1580273916550-e323be2ae537?auto=format&fit=crop&q=80&w=600',
+    image: '/assets/images/blog-fails.jpg',
     content: `
       <p>When preparing for your driving test, having the right mentor makes all the difference. A certified driving instructor brings a unique set of professional tools, psychology, and technical expertise that informal teachers simply cannot match.</p>
       

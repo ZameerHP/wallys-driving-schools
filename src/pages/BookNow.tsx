@@ -34,6 +34,7 @@ import { cn } from '../lib/utils';
 import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
 import PaymentsStep from '../components/booking/PaymentsStep';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { validateAustralianPhone, validateWorkingEmail } from '../lib/validation';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -180,11 +181,13 @@ const NSW_SUBURBS = [
 ];
 
 const TEST_CENTRES = [
-  'St Marys NSW 2760',
-  'Penrith NSW 2164',
-  'Blacktown NSW 2148',
-  'Glenmore Park NSW 2761',
-  'Wetherill Park NSW 2164'
+  { centre: 'St Marys', state: 'NSW', postcode: '2760' },
+  { centre: 'Penrith', state: 'NSW', postcode: '2750' },
+  { centre: 'Blacktown', state: 'NSW', postcode: '2148' },
+  { centre: 'Glenmore Park', state: 'NSW', postcode: '2745' },
+  { centre: 'Wetherill Park', state: 'NSW', postcode: '2164' },
+  { centre: 'Richmond', state: 'NSW', postcode: '2753' },
+  { centre: 'Castle Hill', state: 'NSW', postcode: '2154' }
 ];
 
 const TIME_SLOTS = [
@@ -203,12 +206,7 @@ const TIME_SLOTS = [
 ];
 
 const COUNTRY_CODES = [
-  { code: '+61', country: 'AU', label: 'Australia (+61)' },
-  { code: '+64', country: 'NZ', label: 'New Zealand (+64)' },
-  { code: '+1', country: 'US', label: 'USA / Canada (+1)' },
-  { code: '+44', country: 'GB', label: 'UK (+44)' },
-  { code: '+91', country: 'IN', label: 'India (+91)' },
-  { code: '+63', country: 'PH', label: 'Philippines (+63)' }
+  { code: '+61', country: 'AU', label: 'Australia (+61)' }
 ];
 
 export interface CartItem {
@@ -309,7 +307,8 @@ export function BookNow() {
   const [address, setAddress] = useState('');
   const [suburbSearch, setSuburbSearch] = useState('Rooty Hill NSW 2766');
   const [suburbDropdownOpen, setSuburbDropdownOpen] = useState(false);
-  const [selectedTestCentre, setSelectedTestCentre] = useState(TEST_CENTRES[0]);
+  const [selectedTestCentre, setSelectedTestCentre] = useState('St Marys NSW 2760');
+  const [testCentreDropdownOpen, setTestCentreDropdownOpen] = useState(false);
   const [testTime, setTestTime] = useState('');
   const [infoErrors, setInfoErrors] = useState<{ [key: string]: string }>({});
 
@@ -436,15 +435,33 @@ export function BookNow() {
       const errors: { [key: string]: string } = {};
       if (!firstName.trim()) errors.firstName = 'First name is required';
       if (!lastName.trim()) errors.lastName = 'Last name is required';
-      if (!email.trim() || !email.includes('@')) errors.email = 'Valid email is required';
-      if (!phone.trim()) errors.phone = 'Phone number is required';
+
+      // Strict real working email check
+      const emailCheck = validateWorkingEmail(email);
+      if (!emailCheck.isValid) {
+        errors.email = emailCheck.error || 'Please enter a valid working email address';
+      }
+
+      // Strict Australian phone number check
+      const phoneCheck = validateAustralianPhone(phone);
+      if (!phoneCheck.isValid) {
+        errors.phone = phoneCheck.error || 'Only Australian phone numbers are allowed (e.g. 0412 345 678)';
+      }
+
       if (!address.trim()) errors.address = 'Pickup address is required';
       if (!suburbSearch.trim()) errors.suburb = 'Service suburb is required';
+      if (!selectedTestCentre || !selectedTestCentre.trim()) {
+        errors.testCentre = 'Please select your RMS test centre';
+      }
 
       if (Object.keys(errors).length > 0) {
         setInfoErrors(errors);
         return;
       }
+
+      // Standardize clean values
+      setEmail(emailCheck.email);
+      setPhone(phoneCheck.formatted);
       setInfoErrors({});
       setActiveStepId('payment');
     }
@@ -482,6 +499,17 @@ export function BookNow() {
       s.postcode.includes(q)
     );
   }, [suburbSearch]);
+
+  // Test Centre Filter
+  const filteredTestCentres = useMemo(() => {
+    if (!selectedTestCentre.trim()) return TEST_CENTRES;
+    const q = selectedTestCentre.toLowerCase();
+    const matched = TEST_CENTRES.filter(c => 
+      c.centre.toLowerCase().includes(q) || 
+      c.postcode.includes(q)
+    );
+    return matched.length > 0 ? matched : TEST_CENTRES;
+  }, [selectedTestCentre]);
 
   // Calendar Day Generation
   const calendarDays = useMemo(() => {
@@ -965,6 +993,9 @@ export function BookNow() {
                                 <img 
                                   src={srv.image} 
                                   alt={srv.name}
+                                  onError={(e) => {
+                                    e.currentTarget.src = "/assets/images/about-driving-lesson.jpg";
+                                  }}
                                   className="w-14 h-14 rounded-xl object-cover shrink-0 border border-black/10" 
                                 />
                                 <div className="min-w-0">
@@ -1253,6 +1284,9 @@ export function BookNow() {
                                   <img 
                                     src={item.image} 
                                     alt={item.title} 
+                                    onError={(e) => {
+                                      e.currentTarget.src = "/assets/images/about-driving-lesson.jpg";
+                                    }}
                                     className="w-14 h-14 rounded-xl object-cover border border-black/10"
                                   />
                                   <div>
@@ -1373,49 +1407,78 @@ export function BookNow() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {/* Email */}
                         <div>
-                          <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
-                            Email <span className="text-brand-red">*</span>
-                          </label>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider">
+                              Working Email <span className="text-brand-red">*</span>
+                            </label>
+                            <span className="text-[10px] text-brand-black/45 font-medium">Real email required</span>
+                          </div>
                           <input 
                             type="email"
                             value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            placeholder="e.g. john.smith@example.com"
+                            onChange={(e) => {
+                              setEmail(e.target.value);
+                              if (infoErrors.email) {
+                                setInfoErrors(prev => {
+                                  const copy = { ...prev };
+                                  delete copy.email;
+                                  return copy;
+                                });
+                              }
+                            }}
+                            placeholder="e.g. john.smith@gmail.com"
                             className={cn(
                               "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
-                              infoErrors.email ? "border-brand-red" : "border-black/10 focus:border-brand-red"
+                              infoErrors.email ? "border-brand-red ring-2 ring-brand-red/20" : "border-black/10 focus:border-brand-red"
                             )}
                           />
-                          {infoErrors.email && <span className="text-[10px] text-brand-red font-semibold">{infoErrors.email}</span>}
+                          {infoErrors.email ? (
+                            <span className="text-[10px] text-brand-red font-semibold block mt-1">{infoErrors.email}</span>
+                          ) : (
+                            <span className="text-[10px] text-brand-black/45 block mt-1">Invoice & confirmation will be sent here</span>
+                          )}
                         </div>
 
-                        {/* Phone with Country Code */}
+                        {/* Phone with Country Code (Australian Only) */}
                         <div>
-                          <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
-                            Phone <span className="text-brand-red">*</span>
-                          </label>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider">
+                              Australian Phone <span className="text-brand-red">*</span>
+                            </label>
+                            <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                              AU Only
+                            </span>
+                          </div>
                           <div className="flex gap-2">
-                            <select 
-                              value={countryCode}
-                              onChange={(e) => setCountryCode(e.target.value)}
-                              className="bg-brand-offwhite border border-black/10 rounded-xl px-2 py-2.5 text-xs font-bold focus:outline-none focus:border-brand-red"
-                            >
-                              {COUNTRY_CODES.map((c) => (
-                                <option key={c.code} value={c.code}>{c.code} ({c.country})</option>
-                              ))}
-                            </select>
+                            <div className="flex items-center gap-1 bg-brand-offwhite border border-black/10 rounded-xl px-3 py-2.5 text-xs font-bold text-brand-black shrink-0 select-none shadow-sm">
+                              <span>🇦🇺</span>
+                              <span>+61</span>
+                            </div>
                             <input 
                               type="tel"
                               value={phone}
-                              onChange={(e) => setPhone(e.target.value)}
+                              onChange={(e) => {
+                                setPhone(e.target.value);
+                                if (infoErrors.phone) {
+                                  setInfoErrors(prev => {
+                                    const copy = { ...prev };
+                                    delete copy.phone;
+                                    return copy;
+                                  });
+                                }
+                              }}
                               placeholder="0412 345 678"
                               className={cn(
                                 "flex-1 bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
-                                infoErrors.phone ? "border-brand-red" : "border-black/10 focus:border-brand-red"
+                                infoErrors.phone ? "border-brand-red ring-2 ring-brand-red/20" : "border-black/10 focus:border-brand-red"
                               )}
                             />
                           </div>
-                          {infoErrors.phone && <span className="text-[10px] text-brand-red font-semibold">{infoErrors.phone}</span>}
+                          {infoErrors.phone ? (
+                            <span className="text-[10px] text-brand-red font-semibold block mt-1">{infoErrors.phone}</span>
+                          ) : (
+                            <span className="text-[10px] text-brand-black/45 block mt-1">Australian 10-digit mobile (04xx xxx xxx) or landline</span>
+                          )}
                         </div>
                       </div>
 
@@ -1447,6 +1510,7 @@ export function BookNow() {
                             type="text"
                             value={suburbSearch}
                             onFocus={() => setSuburbDropdownOpen(true)}
+                            onBlur={() => setTimeout(() => setSuburbDropdownOpen(false), 200)}
                             onChange={(e) => {
                               setSuburbSearch(e.target.value);
                               setSuburbDropdownOpen(true);
@@ -1474,20 +1538,59 @@ export function BookNow() {
                           )}
                         </div>
 
-                        {/* Test Centre Dropdown */}
-                        <div>
+                        {/* Test Centre Searchable Dropdown */}
+                        <div className="relative">
                           <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
                             Test Centre <span className="text-brand-red">*</span>
                           </label>
-                          <select
+                          <input 
+                            type="text"
                             value={selectedTestCentre}
-                            onChange={(e) => setSelectedTestCentre(e.target.value)}
-                            className="w-full bg-brand-offwhite border border-black/10 rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:border-brand-red focus:bg-white"
-                          >
-                            {TEST_CENTRES.map((centre) => (
-                              <option key={centre} value={centre}>{centre}</option>
-                            ))}
-                          </select>
+                            onFocus={() => setTestCentreDropdownOpen(true)}
+                            onBlur={() => setTimeout(() => setTestCentreDropdownOpen(false), 200)}
+                            onChange={(e) => {
+                              setSelectedTestCentre(e.target.value);
+                              setTestCentreDropdownOpen(true);
+                              if (infoErrors.testCentre) {
+                                setInfoErrors(prev => {
+                                  const copy = { ...prev };
+                                  delete copy.testCentre;
+                                  return copy;
+                                });
+                              }
+                            }}
+                            placeholder="Type test centre or postcode (e.g. St Marys)"
+                            className={cn(
+                              "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
+                              infoErrors.testCentre ? "border-brand-red ring-2 ring-brand-red/20" : "border-black/10 focus:border-brand-red"
+                            )}
+                          />
+                          {infoErrors.testCentre && <span className="text-[10px] text-brand-red font-semibold">{infoErrors.testCentre}</span>}
+                          
+                          {testCentreDropdownOpen && (
+                            <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-black/10 rounded-xl shadow-xl max-h-48 overflow-y-auto z-30">
+                              {filteredTestCentres.map((tc, idx) => (
+                                <div 
+                                  key={idx}
+                                  onClick={() => {
+                                    setSelectedTestCentre(`${tc.centre} NSW ${tc.postcode}`);
+                                    setTestCentreDropdownOpen(false);
+                                    if (infoErrors.testCentre) {
+                                      setInfoErrors(prev => {
+                                        const copy = { ...prev };
+                                        delete copy.testCentre;
+                                        return copy;
+                                      });
+                                    }
+                                  }}
+                                  className="px-4 py-2 text-xs hover:bg-black/5 cursor-pointer flex justify-between"
+                                >
+                                  <span className="font-semibold text-brand-black">{tc.centre}</span>
+                                  <span className="text-brand-black/50">{tc.postcode}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1615,6 +1718,9 @@ export function BookNow() {
               <img 
                 src={serviceLearnMoreModal.image} 
                 alt={serviceLearnMoreModal.name} 
+                onError={(e) => {
+                  e.currentTarget.src = "/assets/images/about-driving-lesson.jpg";
+                }}
                 className="w-full h-44 object-cover rounded-2xl mb-4"
               />
               <span className="text-[10px] font-bold uppercase tracking-wider text-brand-red px-2 py-0.5 rounded-full bg-brand-red/10">

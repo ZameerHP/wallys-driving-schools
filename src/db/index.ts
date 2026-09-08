@@ -59,9 +59,22 @@ try {
     update: async (d: any) => d?.data ?? {}, 
     delete: async () => ({}) 
   };
+  const chainable: any = new Proxy(() => {}, {
+    get: (_, prop) => {
+      if (prop === 'then') {
+        return (resolve: any) => resolve([]);
+      }
+      return chainable;
+    },
+    apply: () => chainable,
+  });
   dbInstance = new Proxy({}, {
-    get: (_, prop) => prop === 'query'
-      ? new Proxy({}, { get: () => noOp }) : async () => [],
+    get: (_, prop) => {
+      if (prop === 'query') {
+        return new Proxy({}, { get: () => noOp });
+      }
+      return chainable;
+    },
   });
 }
 
