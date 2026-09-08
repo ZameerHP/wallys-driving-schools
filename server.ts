@@ -1178,7 +1178,7 @@ async function startServer() {
   });
 }
 
-if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+if (!process.env.VERCEL && !process.env.VERCEL_ENV && !process.env.AWS_LAMBDA_FUNCTION_NAME && !process.env.NOW_REGION) {
   startServer().catch(err => console.error("Server start error:", err));
 }
 
