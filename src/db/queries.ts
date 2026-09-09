@@ -326,6 +326,19 @@ export async function getPendingBookingForCustomer(
 }
 
 // Check if a time slot on a specific date is already taken by an active booking (prevent double-booking)
+
+function parseTimeToMinutes(timeStr: string): { start: number, end: number } | null {
+  const match = timeStr.match(/(\d+):(\d+)\s+(AM|PM)\s*[-–]\s*(\d+):(\d+)\s+(AM|PM)/i);
+  if (!match) return null;
+  const parse = (h: string, m: string, ampm: string) => {
+    let hours = parseInt(h, 10);
+    if (ampm.toUpperCase() === 'PM' && hours < 12) hours += 12;
+    if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    return hours * 60 + parseInt(m, 10);
+  };
+  return { start: parse(match[1], match[2], match[3]), end: parse(match[4], match[5], match[6]) };
+}
+
 export async function checkSlotBooked(
   date: string, 
   time: string, 
@@ -345,8 +358,21 @@ export async function checkSlotBooked(
       return false;
     }
 
-    if (r.date !== normalizedDate || r.time !== normalizedTime) {
-      return false;
+    if (r.date !== normalizedDate) return false;
+    
+    // Check overlap with 30 minute buffer
+    const t1 = parseTimeToMinutes(normalizedTime);
+    const t2 = parseTimeToMinutes(r.time);
+    
+    if (t1 && t2) {
+      const buffer = 30;
+      // Is newStart < oldEnd + buffer AND newEnd > oldStart - buffer ?
+      if (!(t1.start < t2.end + buffer && t1.end > t2.start - buffer)) {
+        return false;
+      }
+    } else {
+      // Fallback
+      if (r.time !== normalizedTime) return false;
     }
 
     if (r.status === 'Cancelled') {

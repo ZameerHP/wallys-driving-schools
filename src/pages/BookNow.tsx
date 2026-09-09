@@ -37,104 +37,11 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import { validateInternationalPhone, validateWorkingEmail } from '../lib/validation';
 import { Country, DEFAULT_COUNTRY } from '../lib/countries';
 import { PhoneInputWithCountry } from '../components/PhoneInputWithCountry';
+import { PACKAGES } from '../lib/content';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
-export interface DrivingService {
-  id: string;
-  name: string;
-  category: string;
-  duration: string;
-  capacity: string;
-  price: number;
-  image: string;
-  description: string;
-  hasLinkedPackages: boolean;
-}
 
-export interface ServicePackage {
-  id: string;
-  name: string;
-  includesText: string;
-  lessonName: string;
-  quantity: number;
-  price: number;
-  logbookHours: number;
-  savings: number;
-  description: string;
-}
-
-const SERVICES: DrivingService[] = [
-  {
-    id: 'srv-1hr',
-    name: '1 Hour Driving Lesson',
-    category: 'Driving Lessons',
-    duration: '1h',
-    capacity: '1 person',
-    price: 65.00,
-    image: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=400',
-    description: 'Comprehensive 1-hour driving lesson with dual-control vehicle. Perfect for logbook hour accumulation, test route familiarization, and parking techniques.',
-    hasLinkedPackages: true
-  },
-  {
-    id: 'srv-2hr',
-    name: '2 Hour Driving Lesson',
-    category: 'Driving Lessons',
-    duration: '2h',
-    capacity: '1 person',
-    price: 130.00,
-    image: 'https://images.unsplash.com/photo-1508974239320-0a029497e820?auto=format&fit=crop&q=80&w=400',
-    description: 'Intensive 2-hour road coaching covering roundabouts, lane changing on motorways, emergency braking, and RMS test maneuvers.',
-    hasLinkedPackages: true
-  },
-  {
-    id: 'srv-car-1hr',
-    name: 'Car Hire + 1 Hour Lesson',
-    category: 'Driving Test Package',
-    duration: '2h30m',
-    capacity: '1 person',
-    price: 200.00,
-    image: 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&q=80&w=400',
-    description: 'Includes 1-hour pre-test warm-up lesson plus car hire for your RMS practical driving test at your chosen test centre.',
-    hasLinkedPackages: false
-  },
-  {
-    id: 'srv-car-2hr',
-    name: 'Car Hire + 2 Hour Lesson',
-    category: 'Driving Test Package',
-    duration: '2h',
-    capacity: '1 person',
-    price: 250.00,
-    image: 'https://images.unsplash.com/photo-1580273916550-e323be2ae537?auto=format&fit=crop&q=80&w=400',
-    description: 'Full 2-hour pre-test warm-up lesson covering local RMS test routes, maneuvers, plus vehicle hire for the RMS exam.',
-    hasLinkedPackages: false
-  }
-];
-
-const PACKAGES: ServicePackage[] = [
-  {
-    id: 'pkg-10hr',
-    name: '10 Hours Package',
-    includesText: '1 Hour Driving Lesson x10',
-    lessonName: '1 Hour Driving Lesson',
-    quantity: 10,
-    price: 620.00,
-    logbookHours: 30,
-    savings: 30.00,
-    description: 'Complete 10-lesson mastery package. 10 hours with an instructor counts as 30 logbook hours under NSW 3-for-1 scheme.'
-  },
-  {
-    id: 'pkg-5hr',
-    name: '5 Hours Package',
-    includesText: '1 Hour Driving Lesson x5',
-    lessonName: '1 Hour Driving Lesson',
-    quantity: 5,
-    price: 315.00,
-    logbookHours: 15,
-    savings: 10.00,
-    description: 'Popular 5-lesson bundle. Count 5 instructor hours as 15 logbook hours. Flexible scheduling with no expiration date.'
-  }
-];
 
 const NSW_SUBURBS = [
   { suburb: 'Rooty Hill', postcode: '2766' },
@@ -272,8 +179,7 @@ export function BookNow() {
   const [serviceSearch, setServiceSearch] = useState('');
   
   // Selections
-  const [selectedService, setSelectedService] = useState<DrivingService | null>(SERVICES[0]);
-  const [selectedPackage, setSelectedPackage] = useState<ServicePackage | null>(null);
+  const [selectedPackage, setSelectedPackage] = useState<any>(PACKAGES[0]);
   
   // Date & Time
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
@@ -314,6 +220,50 @@ export function BookNow() {
   const [testCentreDropdownOpen, setTestCentreDropdownOpen] = useState(false);
   const [testTime, setTestTime] = useState('');
   const [infoErrors, setInfoErrors] = useState<{ [key: string]: string }>({});
+  const [bookedSlots, setBookedSlots] = useState<{date: string, time: string}[]>([]);
+
+  useEffect(() => {
+    fetch('/api/availability')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setBookedSlots(data);
+      })
+      .catch(console.error);
+  }, []);
+  
+  // Parse time helper for buffer calculation
+  const parseTime = (timeStr: string) => {
+    const match = timeStr.match(/(\d+):(\d+)\s+(AM|PM)\s*[-–]\s*(\d+):(\d+)\s+(AM|PM)/i);
+    if (!match) return null;
+    const p = (h: string, m: string, ampm: string) => {
+      let hrs = parseInt(h, 10);
+      if (ampm.toUpperCase() === 'PM' && hrs < 12) hrs += 12;
+      if (ampm.toUpperCase() === 'AM' && hrs === 12) hrs = 0;
+      return hrs * 60 + parseInt(m, 10);
+    };
+    return { start: p(match[1], match[2], match[3]), end: p(match[4], match[5], match[6]) };
+  };
+  
+  // Determine if a slot is available based on DB bookings + 30 min buffer
+  const isSlotAvailable = (date: string, time: string) => {
+    const t1 = parseTime(time);
+    if (!t1) return true;
+    for (const b of bookedSlots) {
+      if (b.date === date) {
+        const t2 = parseTime(b.time);
+        if (t2) {
+          const buffer = 30;
+          if (t1.start < t2.end + buffer && t1.end > t2.start - buffer) {
+            return false;
+          }
+        } else if (b.time === time) {
+          return false; // Exact match fallback
+        }
+      }
+    }
+    return true;
+  };
+
 
   // URL params for Stripe redirection
   const [searchParams] = useSearchParams();
@@ -342,7 +292,7 @@ export function BookNow() {
 
   // Success / Confirmation
   const [confirmedBooking, setConfirmedBooking] = useState<BookingItem | null>(null);
-  const [serviceLearnMoreModal, setServiceLearnMoreModal] = useState<DrivingService | null>(null);
+  const [serviceLearnMoreModal, setServiceLearnMoreModal] = useState<any | null>(null);
 
   // Query backend Stripe status and verify return sessions
   useEffect(() => {
@@ -413,20 +363,20 @@ export function BookNow() {
       setActiveStepId('datetime');
     } else if (activeStepId === 'datetime') {
       // Sync or update cart item
-      const itemTitle = selectedPackage ? selectedPackage.name : (selectedService?.name || '1 Hour Driving Lesson');
-      const itemPrice = selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00);
-      const itemImg = selectedService?.image || 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=400';
+      const itemTitle = selectedPackage?.title || '1 Hour Driving Lesson';
+      const itemPrice = selectedPackage?.price || 65.00;
+      const itemImg = 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=400';
       
       const updatedCart: CartItem[] = [
         {
           id: `item-${Date.now()}`,
           title: itemTitle,
-          subtitle: selectedPackage ? selectedPackage.includesText : (selectedService?.category || 'Driving Lessons'),
+          subtitle: selectedPackage?.category || 'Driving Lessons',
           price: itemPrice,
           date: selectedDate,
           time: selectedTimeSlot,
           image: itemImg,
-          isPackage: !!selectedPackage
+          isPackage: true
         }
       ];
       setCartItems(updatedCart);
@@ -434,6 +384,7 @@ export function BookNow() {
     } else if (activeStepId === 'cart') {
       setActiveStepId('info');
     } else if (activeStepId === 'info') {
+      const isCarHire = selectedPackage?.id?.includes('test');
       // Validate mandatory fields
       const errors: { [key: string]: string } = {};
       if (!firstName.trim()) errors.firstName = 'First name is required';
@@ -453,7 +404,7 @@ export function BookNow() {
 
       if (!address.trim()) errors.address = 'Pickup address is required';
       if (!suburbSearch.trim()) errors.suburb = 'Service suburb is required';
-      if (!selectedTestCentre || !selectedTestCentre.trim()) {
+      if (isCarHire && (!selectedTestCentre || !selectedTestCentre.trim())) {
         errors.testCentre = 'Please select your RMS test centre';
       }
 
@@ -464,6 +415,10 @@ export function BookNow() {
 
       // Standardize clean values
       setEmail(emailCheck.email);
+      if (!isCarHire) {
+        setSelectedTestCentre('');
+        setTestTime('');
+      }
       setPhone(phoneCheck.formatted);
       setInfoErrors({});
       setActiveStepId('payment');
@@ -477,17 +432,16 @@ export function BookNow() {
   };
 
   // Service Selection Handlers
-  const handleSelectService = (srv: DrivingService) => {
-    setSelectedService(srv);
-    setSelectedPackage(null);
+  const handleSelectService = (srv: any) => {
+    setSelectedPackage(srv);
   };
 
   // Filtered Services
   const filteredServices = useMemo(() => {
-    if (!serviceSearch.trim()) return SERVICES;
+    if (!serviceSearch.trim()) return PACKAGES;
     const q = serviceSearch.toLowerCase();
-    return SERVICES.filter(s => 
-      s.name.toLowerCase().includes(q) || 
+    return PACKAGES.filter(s => 
+      s.title.toLowerCase().includes(q) || 
       s.category.toLowerCase().includes(q) ||
       s.description.toLowerCase().includes(q)
     );
@@ -557,7 +511,7 @@ export function BookNow() {
     setStripeNotice(null);
 
     const primaryItem = cartItems[0] || {
-      title: selectedService?.name || '1 Hour Driving Lesson',
+      title: selectedPackage?.title || '1 Hour Driving Lesson',
       price: 65,
       date: selectedDate,
       time: selectedTimeSlot
@@ -624,7 +578,7 @@ export function BookNow() {
         date: primaryItem.date || selectedDate,
         time: primaryItem.time || selectedTimeSlot,
         status: 'Pending',
-        notes: `Pickup: ${address || 'Home pickup'}. Test Centre: ${selectedTestCentre}. Test Time: ${testTime || 'Not set'}. Payment: ${simulateMock ? 'MOCK CARD (TEST)' : paymentMethod.toUpperCase()}`
+        notes: `Pickup: ${address || 'Home pickup'}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}. Payment: ${simulateMock ? 'MOCK CARD (TEST)' : paymentMethod.toUpperCase()}`
       });
 
       setConfirmedBooking(newBooking);
@@ -633,11 +587,11 @@ export function BookNow() {
 
   // Step Summaries for Sidebar
   const getStepSummary = (stepId: string) => {
-    if (stepId === 'service' && selectedService) {
-      return selectedPackage ? selectedPackage.name : selectedService.name;
+    if (stepId === 'service' && selectedPackage) {
+      return selectedPackage.title;
     }
     if (stepId === 'package' && selectedPackage) {
-      return `${selectedPackage.name} ($${selectedPackage.price.toFixed(2)})`;
+      return `${selectedPackage?.title} ($${selectedPackage.price.toFixed(2)})`;
     }
     if (stepId === 'datetime') {
       return `${selectedDate}, ${selectedTimeSlot.split('–')[0].trim()}`;
@@ -979,7 +933,7 @@ export function BookNow() {
                       {/* Responsive Grid of Service Cards */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {filteredServices.map((srv) => {
-                          const isSelected = selectedService?.id === srv.id && !selectedPackage;
+                          const isSelected = selectedPackage?.id === srv.id;
 
                           return (
                             <div 
@@ -994,8 +948,8 @@ export function BookNow() {
                             >
                               <div className="flex items-center gap-3 min-w-0">
                                 <img 
-                                  src={srv.image} 
-                                  alt={srv.name}
+                                  src={'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=400'} 
+                                  alt={srv.title}
                                   onError={(e) => {
                                     e.currentTarget.src = "/assets/images/about-driving-lesson.jpg";
                                   }}
@@ -1006,13 +960,13 @@ export function BookNow() {
                                     {srv.category}
                                   </span>
                                   <h4 className="text-xs sm:text-sm font-bold text-brand-black truncate leading-tight">
-                                    {srv.name}
+                                    {srv.title}
                                   </h4>
                                   
                                   <div className="flex items-center gap-2.5 text-[11px] text-brand-black/60 mt-1">
                                     <span className="flex items-center gap-1">
                                       <Clock className="w-3 h-3 text-brand-red" />
-                                      {srv.duration}
+                                      {srv.label}
                                     </span>
                                     <button
                                       type="button"
@@ -1057,7 +1011,7 @@ export function BookNow() {
                               Without expiration
                             </span>
                             <h4 className="text-2xl font-display font-bold text-brand-black mt-2">
-                              {selectedPackage.name}
+                              {selectedPackage?.title}
                             </h4>
                             <p className="text-xs sm:text-sm text-brand-black/70 mt-1">
                               {selectedPackage.description}
@@ -1074,7 +1028,7 @@ export function BookNow() {
                         {/* Package Includes List */}
                         <div className="pt-5">
                           <h5 className="text-xs font-bold uppercase tracking-wider text-brand-black/70 mb-3">
-                            {selectedPackage.name} Includes:
+                            {selectedPackage?.title} Includes:
                           </h5>
                           <div className="bg-white rounded-xl p-4 border border-black/5 flex items-center justify-between">
                             <div className="flex items-center gap-3">
@@ -1222,19 +1176,20 @@ export function BookNow() {
                             </span>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5 max-h-[250px] overflow-y-auto pr-1">
                               {TIME_SLOTS.map((slotObj, idx) => {
-                                const isSelected = selectedTimeSlot === slotObj.slot;
+    const isAvailable = isSlotAvailable(selectedDate, slotObj.slot);
+    const isSelected = selectedTimeSlot === slotObj.slot;
 
                                 return (
                                   <button
                                     key={idx}
                                     type="button"
-                                    disabled={!slotObj.available}
+                                    disabled={!isAvailable}
                                     onClick={() => setSelectedTimeSlot(slotObj.slot)}
                                     className={cn(
                                       "px-3 py-2 rounded-xl text-xs font-bold border transition-all text-left flex items-center justify-between",
                                       isSelected
                                         ? "bg-brand-red text-white border-brand-red shadow-md"
-                                        : !slotObj.available
+                                        : !isAvailable
                                         ? "bg-black/5 text-black/30 border-black/5 cursor-not-allowed line-through"
                                         : "bg-white border-black/10 hover:border-brand-red/50 text-brand-black"
                                     )}
@@ -1526,6 +1481,7 @@ export function BookNow() {
                         </div>
 
                         {/* Test Centre Searchable Dropdown */}
+                        {(selectedPackage?.id?.includes('test')) && (
                         <div className="relative">
                           <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
                             Test Centre <span className="text-brand-red">*</span>
@@ -1549,11 +1505,11 @@ export function BookNow() {
                             placeholder="Type test centre or postcode (e.g. St Marys)"
                             className={cn(
                               "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
-                              infoErrors.testCentre ? "border-brand-red ring-2 ring-brand-red/20" : "border-black/10 focus:border-brand-red"
+                              infoErrors.testCentre ? "border-brand-red" : "border-black/10 focus:border-brand-red"
                             )}
                           />
                           {infoErrors.testCentre && <span className="text-[10px] text-brand-red font-semibold">{infoErrors.testCentre}</span>}
-                          
+
                           {testCentreDropdownOpen && (
                             <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-black/10 rounded-xl shadow-xl max-h-48 overflow-y-auto z-30">
                               {filteredTestCentres.map((tc, idx) => (
@@ -1579,9 +1535,11 @@ export function BookNow() {
                             </div>
                           )}
                         </div>
+                        )}
                       </div>
 
                       {/* Test Time (Optional) */}
+                      {(selectedPackage?.id?.includes('test')) && (
                       <div>
                         <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
                           Test Time <span className="text-brand-black/40 font-normal">(optional - if RMS test is booked)</span>
@@ -1594,7 +1552,8 @@ export function BookNow() {
                           className="w-full bg-brand-offwhite border border-black/10 rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:border-brand-red focus:bg-white transition-all"
                         />
                       </div>
-
+                      )}
+                      
                       {/* Mandatory Disclaimer text */}
                       <p className="text-[11px] text-brand-black/60 italic pt-1">
                         We currently operate only in the suburbs listed above. For other suburbs, please contact us.
@@ -1625,10 +1584,10 @@ export function BookNow() {
                             lineTotal: it.price
                           })) : [{
                             id: 'default-lesson',
-                            name: selectedPackage ? selectedPackage.name : (selectedService?.name || '1 Hour Driving Lesson'),
-                            unitPrice: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00),
+                            name: selectedPackage ? selectedPackage?.title : (selectedPackage?.title || '1 Hour Driving Lesson'),
+                            unitPrice: selectedPackage ? selectedPackage.price : (selectedPackage?.price || 65.00),
                             quantity: 1,
-                            lineTotal: selectedPackage ? selectedPackage.price : (selectedService?.price || 65.00)
+                            lineTotal: selectedPackage ? selectedPackage.price : (selectedPackage?.price || 65.00)
                           }]}
                           customerInfo={{
                             name: `${firstName || 'Learner'} ${lastName || 'Driver'}`.trim(),
@@ -1643,9 +1602,9 @@ export function BookNow() {
                             time: selectedTimeSlot,
                             bookingDate: selectedDate,
                             bookingTime: selectedTimeSlot,
-                            notes: `Pickup: ${address}. Test Centre: ${selectedTestCentre}. Test Time: ${testTime || 'Not set'}.`,
-                            packageTitle: cartItems[0]?.title || selectedPackage?.name || selectedService?.name || 'Driving Lesson',
-                            packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedService?.price || 65.00)
+                            notes: `Pickup: ${address}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}.`,
+                            packageTitle: cartItems[0]?.title || selectedPackage?.name || selectedPackage?.title || 'Driving Lesson',
+                            packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedPackage?.price || 65.00)
                           }}
                           onBack={() => setActiveStepId('info')}
                           onPaymentSuccess={(booking) => {
@@ -1738,7 +1697,7 @@ export function BookNow() {
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedService(serviceLearnMoreModal);
+                  setSelectedPackage(serviceLearnMoreModal);
                   setServiceLearnMoreModal(null);
                 }}
                 className="w-full bg-brand-red text-white py-3 rounded-xl font-bold text-xs sm:text-sm hover:bg-[#c41a21] transition-colors"

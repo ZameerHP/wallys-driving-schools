@@ -24,6 +24,27 @@ dotenv.config();
 // In-memory store for simulated Stripe checkout sessions when API keys are not provided
 const simulatedCheckoutSessions = new Map<string, any>();
 
+
+function getBookingTimestamp(date: string, time: string): number {
+  const [day, month, year] = date.split('/').map(Number);
+  const timeMatch = time.match(/(\d+):(\d+)\s+(AM|PM)/i);
+  if (!timeMatch) return new Date().getTime();
+  let [_, h, m, ampm] = timeMatch;
+  let hours = parseInt(h, 10);
+  if (ampm.toUpperCase() === 'PM' && hours < 12) hours += 12;
+  if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+  
+  // Try mapping parsing (assuming MM/DD/YYYY or DD/MM/YYYY based on the common formats, but usually driving school uses DD/MM/YYYY)
+  // Let's assume date string is properly formatted. A safe way is to construct a date
+  // e.g., "16 Nov 2024" or "16/11/2024"
+  const d = new Date(date);
+  if (!isNaN(d.getTime())) {
+    d.setHours(hours, parseInt(m, 10), 0, 0);
+    return d.getTime();
+  }
+  return new Date().getTime(); // fallback
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -1011,6 +1032,21 @@ app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
 });
 
 // Fetch bookings (all, or filtered by email/user) - only paid bookings for customer facing views
+
+// Fetch availability (booked slots only, no PII)
+app.get("/api/availability", async (req, res) => {
+  try {
+    const list = await getBookings({ includeUnpaid: false });
+    const bookedSlots = list
+      .filter(b => b.status !== 'Cancelled')
+      .map(b => ({ date: b.date, time: b.time }));
+    res.json(bookedSlots);
+  } catch (error: any) {
+    console.error("Error fetching availability:", error);
+    res.status(500).json({ error: "Failed to fetch availability" });
+  }
+});
+
 app.get("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const email = (req.query.email as string) || undefined;
@@ -1129,6 +1165,40 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
       return res.status(400).json({ error: "Invalid booking ID" });
     }
 
+    if (req.body.status === 'Cancelled') {
+      // Need to fetch existing first
+      const bookings = await getBookings({ includeUnpaid: true });
+      const existing = bookings.find(b => b.id === id);
+      if (existing && existing.status !== 'Cancelled') {
+        const timestamp = getBookingTimestamp(existing.date, existing.time);
+        const hoursUntilBooking = (timestamp - Date.now()) / (1000 * 60 * 60);
+        
+        if (hoursUntilBooking > 24) {
+          // Process Stripe refund
+          if (existing.stripeSessionId && process.env.STRIPE_SECRET_KEY) {
+            const stripe = getStripe();
+            try {
+              if (existing.stripeSessionId.startsWith('pi_')) {
+                await stripe.refunds.create({ payment_intent: existing.stripeSessionId });
+              } else if (existing.stripeSessionId.startsWith('cs_')) {
+                const session = await stripe.checkout.sessions.retrieve(existing.stripeSessionId);
+                if (session.payment_intent && typeof session.payment_intent === 'string') {
+                  await stripe.refunds.create({ payment_intent: session.payment_intent });
+                }
+              }
+              req.body.notes = (req.body.notes || existing.notes || '') + ' [Refund issued]';
+              req.body.paymentStatus = 'refunded';
+            } catch (err: any) {
+              console.error("Stripe refund failed:", err);
+            }
+          }
+        } else {
+          // Within 24 hours
+          req.body.notes = (req.body.notes || existing.notes || '') + ' [Late cancellation - no refund]';
+        }
+      }
+    }
+
     const updated = await updateBooking(id, req.body);
     res.json(updated);
   } catch (error: any) {
@@ -1141,6 +1211,41 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
 app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
   try {
     const ref = sanitizeText(req.params.ref);
+    
+    // Check if it's a cancellation
+    if (req.body.status === 'Cancelled') {
+      const existing = await getBookingByRef(ref, { allowUnpaid: true });
+      if (existing && existing.status !== 'Cancelled') {
+        const timestamp = getBookingTimestamp(existing.date, existing.time);
+        const hoursUntilBooking = (timestamp - Date.now()) / (1000 * 60 * 60);
+        
+        if (hoursUntilBooking > 24) {
+          // Process Stripe refund if there is a session/intent id
+          if (existing.stripeSessionId && process.env.STRIPE_SECRET_KEY) {
+            const stripe = getStripe();
+            try {
+              // Note: stripeSessionId could be a checkout session or a payment intent
+              if (existing.stripeSessionId.startsWith('pi_')) {
+                await stripe.refunds.create({ payment_intent: existing.stripeSessionId });
+              } else if (existing.stripeSessionId.startsWith('cs_')) {
+                const session = await stripe.checkout.sessions.retrieve(existing.stripeSessionId);
+                if (session.payment_intent && typeof session.payment_intent === 'string') {
+                  await stripe.refunds.create({ payment_intent: session.payment_intent });
+                }
+              }
+              req.body.notes = (req.body.notes || existing.notes || '') + ' [Refund issued]';
+              req.body.paymentStatus = 'refunded';
+            } catch (err: any) {
+              console.error("Stripe refund failed:", err);
+            }
+          }
+        } else {
+          // Within 24 hours, no refund
+          req.body.notes = (req.body.notes || existing.notes || '') + ' [Late cancellation - no refund]';
+        }
+      }
+    }
+    
     const updated = await updateBookingByRef(ref, req.body);
     res.json(updated);
   } catch (error: any) {
@@ -1256,7 +1361,36 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  
+// Automated 24-Hour Reminders
+// Runs every hour to check for bookings happening exactly tomorrow
+setInterval(async () => {
+  try {
+    const bookings = await getBookings({ includeUnpaid: false });
+    const now = Date.now();
+    const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+    
+    for (const booking of bookings) {
+      if (booking.status === 'Confirmed' && !booking.notes?.includes('[Reminder Sent]')) {
+        const timestamp = getBookingTimestamp(booking.date, booking.time);
+        const timeUntilBooking = timestamp - now;
+        
+        // If booking is between 24 and 25 hours away, send reminder
+        if (timeUntilBooking > 0 && timeUntilBooking <= TWENTY_FOUR_HOURS_MS && timeUntilBooking > (TWENTY_FOUR_HOURS_MS - 60 * 60 * 1000)) {
+          console.log(`[Automated Reminder] Sending 24h reminder to ${booking.studentName} (${booking.email}) for booking ${booking.bookingRef} on ${booking.date} at ${booking.time}`);
+          
+          // Update booking to mark reminder as sent
+          const updatedNotes = (booking.notes || '') + ' [Reminder Sent]';
+          await updateBooking(booking.id as number, { notes: updatedNotes });
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[Automated Reminder] Error checking reminders:", err);
+  }
+}, 60 * 60 * 1000); // Run every hour
+
+app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
   });
 }

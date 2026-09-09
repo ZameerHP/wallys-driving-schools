@@ -111,31 +111,15 @@ export function About() {
             </p>
           </motion.div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="flex justify-center">
             {[
               {
-                id: 'alvert-tine',
-                name: 'Alvert Tine',
-                role: 'Senior Driving Instructor',
-                image: '/assets/images/instructor-alvert.jpg',
-                fallback: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=600',
-                exp: '5+ Years Experience'
-              },
-              {
-                id: 'sara-liner',
-                name: 'Sara Liner',
-                role: 'Driving Instructor & Safety Specialist',
-                image: '/assets/images/instructor-sara.jpg',
-                fallback: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=600',
-                exp: '7+ Years Experience'
-              },
-              {
-                id: 'mark-wood',
-                name: 'Mark Wood',
-                role: 'RMS Driving Test Specialist',
-                image: '/assets/images/instructor-mark.jpg',
-                fallback: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=600',
-                exp: '8+ Years Experience'
+                id: 'wallsy',
+                name: 'Wallsy',
+                role: "Wally's Driving School Instructor",
+                image: '/assets/images/about-instructor.jpg',
+                fallback: 'https://images.unsplash.com/photo-1541899481282-d53bffe3c35d?auto=format&fit=crop&q=80&w=800',
+                exp: 'Expert Instructor'
               }
             ].map((instructor, index) => (
               <motion.div
@@ -145,7 +129,7 @@ export function About() {
                 viewport={{ once: true }}
                 transition={{ delay: index * 0.1 }}
                 whileHover={{ y: -8 }}
-                className="bg-white rounded-[36px] overflow-hidden shadow-sm hover:shadow-2xl transition-all duration-500 border border-black/5 flex flex-col group"
+                className="bg-white rounded-[36px] overflow-hidden shadow-sm hover:shadow-2xl transition-all duration-500 border border-black/5 flex flex-col group max-w-md w-full"
               >
                 <div className="h-72 w-full overflow-hidden relative">
                   <img 

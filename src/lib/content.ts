@@ -1,21 +1,9 @@
 export const INSTRUCTORS = [
   {
-    id: 'alvert-tine',
-    name: 'Alvert Tine',
-    role: 'Senior Driving Instructor',
-    image: '/assets/images/instructor-alvert.jpg'
-  },
-  {
-    id: 'sara-liner',
-    name: 'Sara Liner',
-    role: 'Driving Instructor',
-    image: '/assets/images/instructor-sara.jpg'
-  },
-  {
-    id: 'mark-wood',
-    name: 'Mark Wood',
-    role: 'Driving Instructor',
-    image: '/assets/images/instructor-mark.jpg'
+    id: 'wallsy',
+    name: 'Wallsy',
+    role: "Wally's Driving School Instructor",
+    image: '/assets/images/about-instructor.jpg'
   }
 ];
 
