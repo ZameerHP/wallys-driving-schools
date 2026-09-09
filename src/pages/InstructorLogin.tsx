@@ -316,8 +316,15 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       >
         <div>
           <div className="flex items-center gap-3 mb-8">
-            <div className="w-9 h-9 rounded-2xl bg-brand-red flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(227,34,42,0.5)]">
-              <span className="text-white font-display font-bold text-sm">W</span>
+            <div className="w-11 h-11 rounded-2xl overflow-hidden shrink-0 border-2 border-brand-red shadow-[0_0_15px_rgba(227,34,42,0.4)] bg-neutral-900">
+              <img 
+                src="/instructor.jpg" 
+                alt="Wally" 
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+                className="w-full h-full object-cover" 
+              />
             </div>
             <div className="flex flex-col">
               <span className="font-display font-bold text-base leading-none tracking-tight">Wally (Owner)</span>

@@ -13,7 +13,9 @@ import {
   createContactMessage,
   getOrCreateUser,
   checkSlotBooked,
-  getPendingBookingForCustomer
+  getPendingBookingForCustomer,
+  normalizeDate,
+  bookingLock
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
@@ -26,23 +28,36 @@ const simulatedCheckoutSessions = new Map<string, any>();
 
 
 function getBookingTimestamp(date: string, time: string): number {
-  const [day, month, year] = date.split('/').map(Number);
-  const timeMatch = time.match(/(\d+):(\d+)\s+(AM|PM)/i);
-  if (!timeMatch) return new Date().getTime();
-  let [_, h, m, ampm] = timeMatch;
-  let hours = parseInt(h, 10);
-  if (ampm.toUpperCase() === 'PM' && hours < 12) hours += 12;
-  if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
-  
-  // Try mapping parsing (assuming MM/DD/YYYY or DD/MM/YYYY based on the common formats, but usually driving school uses DD/MM/YYYY)
-  // Let's assume date string is properly formatted. A safe way is to construct a date
-  // e.g., "16 Nov 2024" or "16/11/2024"
+  let hours = 9;
+  let minutes = 0;
+  const timeMatch = time.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+  if (timeMatch) {
+    let [_, h, m, ampm] = timeMatch;
+    hours = parseInt(h, 10);
+    minutes = parseInt(m, 10) || 0;
+    if (ampm) {
+      if (ampm.toUpperCase() === 'PM' && hours < 12) hours += 12;
+      if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    }
+  }
+
+  // Handle DD/MM/YYYY
+  if (date.includes('/')) {
+    const parts = date.split('/').map(Number);
+    if (parts.length === 3 && parts[0] <= 31 && parts[1] <= 12) {
+      const [day, month, year] = parts;
+      const d = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+  }
+
+  // Handle YYYY-MM-DD or standard date string
   const d = new Date(date);
   if (!isNaN(d.getTime())) {
-    d.setHours(hours, parseInt(m, 10), 0, 0);
+    d.setHours(hours, minutes, 0, 0);
     return d.getTime();
   }
-  return new Date().getTime(); // fallback
+  return Date.now();
 }
 
 const app = express();
@@ -350,6 +365,17 @@ app.post("/api/create-checkout-session", async (req, res) => {
     const amountInCents = Math.round(effectiveTotal * 100);
     const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : `http://localhost:${PORT}`);
     const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // Authoritative slot check before creating checkout session
+    if (bookingDate && bookingTime) {
+      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef, studentEmail, studentPhone);
+      if (isTaken) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: "This time slot is no longer available. Please select another time."
+        });
+      }
+    }
 
     if (!process.env.STRIPE_SECRET_KEY) {
       // Sandbox fallback: generate simulated checkout session
@@ -1033,17 +1059,77 @@ app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
 
 // Fetch bookings (all, or filtered by email/user) - only paid bookings for customer facing views
 
-// Fetch availability (booked slots only, no PII)
+// Fetch availability (booked slots only, no PII, real-time with zero caching)
 app.get("/api/availability", async (req, res) => {
   try {
-    const list = await getBookings({ includeUnpaid: false });
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    const targetDate = req.query.date ? normalizeDate(String(req.query.date)) : undefined;
+    const list = await getBookings({ includeUnpaid: true });
+    const now = Date.now();
+    const PENDING_TIMEOUT_MS = 20 * 60 * 1000;
+
     const bookedSlots = list
-      .filter(b => b.status !== 'Cancelled')
-      .map(b => ({ date: b.date, time: b.time }));
+      .filter(b => {
+        if (b.status === 'Cancelled') return false;
+        // If pending and unpaid, check if timed out
+        if ((b.status === 'Pending' || b.paymentStatus === 'unpaid') && b.paymentStatus !== 'paid') {
+          const createdAtMs = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          if (createdAtMs > 0 && (now - createdAtMs) > PENDING_TIMEOUT_MS) {
+            return false;
+          }
+        }
+        if (targetDate) {
+          return normalizeDate(b.date) === targetDate;
+        }
+        return true;
+      })
+      .map(b => ({
+        date: b.date,
+        time: b.time,
+        status: b.status
+      }));
+
     res.json(bookedSlots);
   } catch (error: any) {
     console.error("Error fetching availability:", error);
     res.status(500).json({ error: "Failed to fetch availability" });
+  }
+});
+
+// Fast real-time check for a single date & time slot
+app.get("/api/check-slot", async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    const date = req.query.date as string;
+    const time = req.query.time as string;
+    const excludeRef = (req.query.excludeRef as string) || undefined;
+    const email = (req.query.email as string) || undefined;
+    const phone = (req.query.phone as string) || undefined;
+
+    if (!date || !time) {
+      return res.status(400).json({ error: "Missing date or time parameter" });
+    }
+
+    const isBooked = await checkSlotBooked(date, time, excludeRef, email, phone);
+    res.json({
+      available: !isBooked,
+      date,
+      time,
+      message: isBooked ? "This time slot is no longer available. Please select another time." : "Slot available"
+    });
+  } catch (error: any) {
+    console.error("Error checking slot:", error);
+    res.status(500).json({ error: "Failed to check slot" });
   }
 });
 
@@ -1115,14 +1201,15 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
     if (isSlotTaken) {
       return res.status(409).json({
         error: "SLOT_ALREADY_BOOKED",
-        message: `The ${time} slot on ${date} is already reserved by another student. Please select an alternate time.`
+        message: "This time slot is no longer available. Please select another time."
       });
     }
 
-    // Enforce that bookings must have successful payment before being added to database
+    // Enforce that bookings must have successful payment or be marked pending (e.g. cash in car)
     const isInstructor = Boolean((req as any).instructor);
     const finalPaymentStatus = paymentStatus || (isInstructor ? "paid" : "unpaid");
-    if (finalPaymentStatus !== "paid" && !isInstructor) {
+    const isPendingOrCash = (status === "Pending" || req.body.paymentMethod === "cash" || finalPaymentStatus === "unpaid");
+    if (finalPaymentStatus !== "paid" && !isInstructor && !isPendingOrCash) {
       return res.status(400).json({
         error: "PAYMENT_REQUIRED",
         message: "Lesson bookings require successful online payment via Stripe before they can be booked."
@@ -1144,14 +1231,20 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       packagePrice: Number(packagePrice) || 70,
       date: sanitizeText(date),
       time: sanitizeText(time),
-      status: status || "Confirmed",
+      status: status || (finalPaymentStatus === "paid" ? "Confirmed" : "Pending"),
       notes: sanitizeText(notes) || null,
-      paymentStatus: "paid",
+      paymentStatus: finalPaymentStatus,
       stripeSessionId: stripeSessionId || null,
     });
 
     res.status(201).json(newBooking);
   } catch (error: any) {
+    if (error.code === 'SLOT_ALREADY_BOOKED' || error.status === 409) {
+      return res.status(409).json({
+        error: "SLOT_ALREADY_BOOKED",
+        message: "This time slot was just booked by another customer. Please select another time."
+      });
+    }
     console.error("Error creating booking:", error);
     res.status(500).json({ error: error.message || "Failed to create booking" });
   }
@@ -1191,11 +1284,25 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
             } catch (err: any) {
               console.error("Stripe refund failed:", err);
             }
+          } else if (existing.paymentStatus === 'paid') {
+            // For bookings recorded as paid in demo/preview or without active Stripe keys
+            req.body.notes = (req.body.notes || existing.notes || '') + ' [Refund issued]';
+            req.body.paymentStatus = 'refunded';
           }
         } else {
           // Within 24 hours
           req.body.notes = (req.body.notes || existing.notes || '') + ' [Late cancellation - no refund]';
         }
+      }
+    }
+
+    if (req.body.date && req.body.time) {
+      const isTaken = await checkSlotBooked(req.body.date, req.body.time, String(id));
+      if (isTaken) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: "The selected reschedule time slot is already booked. Please choose another time."
+        });
       }
     }
 
@@ -1238,6 +1345,10 @@ app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
             } catch (err: any) {
               console.error("Stripe refund failed:", err);
             }
+          } else if (existing.paymentStatus === 'paid') {
+            // For bookings recorded as paid in demo/preview or without active Stripe keys
+            req.body.notes = (req.body.notes || existing.notes || '') + ' [Refund issued]';
+            req.body.paymentStatus = 'refunded';
           }
         } else {
           // Within 24 hours, no refund
@@ -1246,6 +1357,16 @@ app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
       }
     }
     
+    if (req.body.date && req.body.time) {
+      const isTaken = await checkSlotBooked(req.body.date, req.body.time, ref);
+      if (isTaken) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: "The selected reschedule time slot is already booked. Please choose another time."
+        });
+      }
+    }
+
     const updated = await updateBookingByRef(ref, req.body);
     res.json(updated);
   } catch (error: any) {

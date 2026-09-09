@@ -327,18 +327,166 @@ export async function getPendingBookingForCustomer(
 
 // Check if a time slot on a specific date is already taken by an active booking (prevent double-booking)
 
-function parseTimeToMinutes(timeStr: string): { start: number, end: number } | null {
-  const match = timeStr.match(/(\d+):(\d+)\s+(AM|PM)\s*[-–]\s*(\d+):(\d+)\s+(AM|PM)/i);
-  if (!match) return null;
-  const parse = (h: string, m: string, ampm: string) => {
-    let hours = parseInt(h, 10);
-    if (ampm.toUpperCase() === 'PM' && hours < 12) hours += 12;
-    if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
-    return hours * 60 + parseInt(m, 10);
+// Helper to normalize any date format into canonical YYYY-MM-DD
+export function normalizeDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const trimmed = dateStr.trim();
+  
+  // Format: YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  
+  // Format: DD/MM/YYYY or DD-MM-YYYY
+  const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmyMatch) {
+    const day = dmyMatch[1].padStart(2, '0');
+    const month = dmyMatch[2].padStart(2, '0');
+    const year = dmyMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Format: "15 September 2026", "15 Sep 2026", "September 15, 2026"
+  const MONTHS: Record<string, string> = {
+    jan: '01', january: '01',
+    feb: '02', february: '02',
+    mar: '03', march: '03',
+    apr: '04', april: '04',
+    may: '05',
+    jun: '06', june: '06',
+    jul: '07', july: '07',
+    aug: '08', august: '08',
+    sep: '09', september: '09',
+    oct: '10', october: '10',
+    nov: '11', november: '11',
+    dec: '12', december: '12'
   };
-  return { start: parse(match[1], match[2], match[3]), end: parse(match[4], match[5], match[6]) };
+
+  const textMatch = trimmed.match(/^(\d{1,2})\s+([a-zA-Z]+)(?:,?\s+(\d{4}))?$/i);
+  if (textMatch) {
+    const day = textMatch[1].padStart(2, '0');
+    const mon = textMatch[2].toLowerCase();
+    const month = MONTHS[mon];
+    const year = textMatch[3] || new Date().getFullYear().toString();
+    if (month) {
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  // Fallback: Date.parse
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return trimmed.toLowerCase();
 }
 
+// Parse time string into start and end minutes from midnight (handles ranges & single times)
+export function parseTimeInterval(timeStr: string, defaultDurationMinutes = 60): { start: number; end: number } | null {
+  if (!timeStr) return null;
+  const trimmed = timeStr.trim();
+
+  // 1. Range match: "10:00 AM – 11:00 AM" or "10:00 AM - 11:00 AM" or "8:00 AM – 9:00 AM"
+  const rangeMatch = trimmed.match(/(\d{1,2}):?(\d{2})?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2}):?(\d{2})?\s*(AM|PM)/i);
+  if (rangeMatch) {
+    const parsePart = (hStr: string, mStr: string | undefined, ampmStr: string | undefined) => {
+      let h = parseInt(hStr, 10);
+      const m = mStr ? parseInt(mStr, 10) : 0;
+      const ampm = (ampmStr || '').toUpperCase();
+      if (ampm === 'PM' && h < 12) h += 12;
+      if (ampm === 'AM' && h === 12) h = 0;
+      return h * 60 + m;
+    };
+
+    let startAmpm = rangeMatch[3];
+    const endAmpm = rangeMatch[6];
+    if (!startAmpm && endAmpm) {
+      const startH = parseInt(rangeMatch[1], 10);
+      const endH = parseInt(rangeMatch[4], 10);
+      if (endAmpm.toUpperCase() === 'PM' && startH <= endH && startH >= 12) {
+        startAmpm = 'PM';
+      } else if (endAmpm.toUpperCase() === 'PM' && startH > endH && startH <= 12) {
+        startAmpm = 'AM';
+      } else {
+        startAmpm = endAmpm;
+      }
+    }
+
+    const start = parsePart(rangeMatch[1], rangeMatch[2], startAmpm);
+    const end = parsePart(rangeMatch[4], rangeMatch[5], endAmpm);
+    return { start, end: end > start ? end : start + defaultDurationMinutes };
+  }
+
+  // 2. Single time match: "10:00 AM", "10:00AM", "10:00"
+  const singleMatch = trimmed.match(/(\d{1,2}):?(\d{2})?\s*(AM|PM)?/i);
+  if (singleMatch) {
+    let h = parseInt(singleMatch[1], 10);
+    const m = singleMatch[2] ? parseInt(singleMatch[2], 10) : 0;
+    const ampm = (singleMatch[3] || '').toUpperCase();
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    const start = h * 60 + m;
+    return { start, end: start + defaultDurationMinutes };
+  }
+
+  return null;
+}
+
+// Determines if two time intervals overlap when taking the buffer into account
+export function isTimeSlotConflicting(
+  slot1: { start: number; end: number },
+  slot2: { start: number; end: number },
+  bufferMinutes = 30
+): boolean {
+  // With buffer: slot1 conflicts with slot2 if slot1 overlaps the protected window [slot2.start - buffer, slot2.end + buffer]
+  // i.e. slot1.start < slot2.end + buffer AND slot1.end > slot2.start - buffer
+  return (slot1.start < slot2.end + bufferMinutes) && (slot1.end > slot2.start - bufferMinutes);
+}
+
+// Async mutex lock manager to guarantee zero race condition double bookings
+export class BookingLockManager {
+  private locks = new Map<string, Promise<void>>();
+
+  async acquire(key: string): Promise<() => void> {
+    const normalizedKey = key.trim().toLowerCase();
+    while (this.locks.has(normalizedKey)) {
+      try {
+        await this.locks.get(normalizedKey);
+      } catch {}
+    }
+
+    let release: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    this.locks.set(normalizedKey, promise);
+
+    return () => {
+      if (this.locks.get(normalizedKey) === promise) {
+        this.locks.delete(normalizedKey);
+      }
+      release();
+    };
+  }
+
+  async runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const release = await this.acquire(key);
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+}
+
+export const bookingLock = new BookingLockManager();
+
+// Check if a time slot on a specific date is already taken by an active booking (authoritative double-booking prevention)
 export async function checkSlotBooked(
   date: string, 
   time: string, 
@@ -346,67 +494,77 @@ export async function checkSlotBooked(
   customerEmail?: string,
   customerPhone?: string
 ): Promise<boolean> {
-  const normalizedDate = date.trim();
-  const normalizedTime = time.trim();
+  const normTargetDate = normalizeDate(date);
+  const targetInterval = parseTimeInterval(time);
   const cleanEmail = customerEmail?.trim().toLowerCase();
   const cleanPhone = customerPhone?.replace(/\D/g, '');
   const now = Date.now();
   const PENDING_TIMEOUT_MS = 20 * 60 * 1000;
 
-  const isConflict = (r: any): boolean => {
+  // Authoritative check must examine ALL non-cancelled bookings including unpaid/pending
+  const currentBookings = await getBookings({ includeUnpaid: true });
+
+  for (const r of currentBookings) {
+    // 1. Exclude self if customer is updating their own booking reference
     if (excludeRef && r.bookingRef && r.bookingRef.toUpperCase() === excludeRef.toUpperCase()) {
-      return false;
+      continue;
     }
 
-    if (r.date !== normalizedDate) return false;
-    
-    // Check overlap with 30 minute buffer
-    const t1 = parseTimeToMinutes(normalizedTime);
-    const t2 = parseTimeToMinutes(r.time);
-    
-    if (t1 && t2) {
-      const buffer = 30;
-      // Is newStart < oldEnd + buffer AND newEnd > oldStart - buffer ?
-      if (!(t1.start < t2.end + buffer && t1.end > t2.start - buffer)) {
-        return false;
-      }
-    } else {
-      // Fallback
-      if (r.time !== normalizedTime) return false;
-    }
-
+    // 2. Ignore cancelled bookings (both inside and outside 24h release the instructor's schedule)
     if (r.status === 'Cancelled') {
-      return false;
+      continue;
     }
 
+    // 3. Match date using canonical date normalization
+    const bookingNormDate = normalizeDate(r.date);
+    if (normTargetDate && bookingNormDate && normTargetDate !== bookingNormDate) {
+      continue;
+    }
+
+    // 4. Overlap & 30-minute buffer calculation
+    const existingInterval = parseTimeInterval(r.time);
+    let timeConflicts = false;
+
+    if (targetInterval && existingInterval) {
+      timeConflicts = isTimeSlotConflicting(targetInterval, existingInterval, 30);
+    } else {
+      // Fallback exact match if parsing fails
+      const cleanT1 = time.replace(/\s+/g, ' ').toLowerCase();
+      const cleanT2 = (r.time || '').replace(/\s+/g, ' ').toLowerCase();
+      timeConflicts = cleanT1 === cleanT2;
+    }
+
+    if (!timeConflicts) {
+      continue;
+    }
+
+    // 5. Confirmed or paid bookings unconditionally block the slot
     if (r.status === 'Confirmed' || r.paymentStatus === 'paid') {
       return true;
     }
 
+    // 6. Pending bookings block the slot unless it is the same customer resuming checkout or timed out
     if (r.status === 'Pending' || r.paymentStatus === 'unpaid') {
       if (cleanEmail && r.email && r.email.toLowerCase() === cleanEmail) {
-        return false;
+        continue;
       }
       if (cleanPhone && r.phone && r.phone.replace(/\D/g, '') === cleanPhone) {
-        return false;
+        continue;
       }
 
       const createdAtMs = r.createdAt ? new Date(r.createdAt).getTime() : 0;
       if (createdAtMs > 0 && (now - createdAtMs) > PENDING_TIMEOUT_MS) {
-        return false;
+        continue;
       }
 
       return true;
     }
+  }
 
-    return false;
-  };
-
-  const currentBookings = await getBookings();
-  return currentBookings.some(isConflict);
+  return false;
 }
 
-// Insert new driving lesson booking
+// Insert new driving lesson booking with atomic locking and authoritative double-booking check
 export async function createBooking(data: {
   bookingRef: string;
   userId?: string | null;
@@ -424,108 +582,129 @@ export async function createBooking(data: {
   paymentStatus?: string;
   stripeSessionId?: string | null;
 }) {
-  const newBooking = {
-    id: nextBookingId++,
-    bookingRef: data.bookingRef,
-    userId: data.userId || null,
-    studentName: data.studentName,
-    phone: data.phone,
-    email: data.email,
-    suburb: data.suburb,
-    pickupAddress: data.pickupAddress || null,
-    packageTitle: data.packageTitle,
-    packagePrice: data.packagePrice,
-    date: data.date,
-    time: data.time,
-    status: data.status || 'Pending',
-    notes: data.notes || null,
-    paymentStatus: data.paymentStatus || 'unpaid',
-    stripeSessionId: data.stripeSessionId || null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
+  const normDate = normalizeDate(data.date);
 
-  // 1. Save to Supabase
-  const supabase = getSupabaseServerClient();
-  if (supabase) {
-    try {
-      let studentId: any = null;
-      if (data.studentName) {
-        try {
-          const { data: stdData } = await supabase
-            .from('students')
-            .upsert({
-              full_name: data.studentName,
-              phone: data.phone,
-              email: data.email,
-            })
-            .select('id')
-            .single();
-          if (stdData?.id) studentId = stdData.id;
-        } catch {}
-      }
+  // Run check-and-insert under mutual exclusion lock for this date to prevent race conditions
+  return await bookingLock.runExclusive(normDate || 'all-dates', async () => {
+    // 1. Authoritative double-booking verification inside the lock
+    const isTaken = await checkSlotBooked(
+      data.date, 
+      data.time, 
+      data.bookingRef, 
+      data.email, 
+      data.phone
+    );
 
-      const formattedNotes = `[BookingRef: ${data.bookingRef}] [Price: $${data.packagePrice}] [Suburb: ${data.suburb}] ${data.pickupAddress ? `[Pickup: ${data.pickupAddress}]` : ''} ${data.notes || ''}`.trim();
-
-      const { data: sbRow, error: sbErr } = await supabase
-        .from('bookings')
-        .insert({
-          student_id: studentId,
-          lesson_type: data.packageTitle,
-          lesson_date: data.date,
-          start_time: data.time,
-          status: data.status || 'Pending',
-          notes: formattedNotes,
-        })
-        .select('*, students(*), instructors(*)')
-        .single();
-
-      if (!sbErr && sbRow) {
-        const mapped = mapSupabaseRowToBooking(sbRow);
-        inMemoryBookings.unshift(mapped);
-        return mapped;
-      }
-    } catch (err: any) {
-      console.warn('[Supabase Server] createBooking fallback:', err?.message || err);
+    if (isTaken) {
+      const err: any = new Error("This time slot is no longer available. Please select another time.");
+      err.code = "SLOT_ALREADY_BOOKED";
+      err.status = 409;
+      throw err;
     }
-  }
 
-  // 2. Save to Cloud SQL if configured
-  if (isSqlConfigured && db) {
-    try {
-      const result = await db
-        .insert(bookings)
-        .values({
-          bookingRef: data.bookingRef,
-          userId: data.userId || null,
-          studentName: data.studentName,
-          phone: data.phone,
-          email: data.email,
-          suburb: data.suburb,
-          pickupAddress: data.pickupAddress || null,
-          packageTitle: data.packageTitle,
-          packagePrice: data.packagePrice,
-          date: data.date,
-          time: data.time,
-          status: data.status || 'Confirmed',
-          notes: data.notes || null,
-          paymentStatus: data.paymentStatus || 'unpaid',
-          stripeSessionId: data.stripeSessionId || null,
-        })
-        .returning();
+    const newBooking = {
+      id: nextBookingId++,
+      bookingRef: data.bookingRef,
+      userId: data.userId || null,
+      studentName: data.studentName,
+      phone: data.phone,
+      email: data.email,
+      suburb: data.suburb,
+      pickupAddress: data.pickupAddress || null,
+      packageTitle: data.packageTitle,
+      packagePrice: data.packagePrice,
+      date: data.date,
+      time: data.time,
+      status: data.status || 'Pending',
+      notes: data.notes || null,
+      paymentStatus: data.paymentStatus || 'unpaid',
+      stripeSessionId: data.stripeSessionId || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
 
-      if (result[0]) {
-        inMemoryBookings.unshift(result[0]);
-        return result[0];
+    // 2. Save to Supabase if configured
+    const supabase = getSupabaseServerClient();
+    if (supabase) {
+      try {
+        let studentId: any = null;
+        if (data.studentName) {
+          try {
+            const { data: stdData } = await supabase
+              .from('students')
+              .upsert({
+                full_name: data.studentName,
+                phone: data.phone,
+                email: data.email,
+              })
+              .select('id')
+              .single();
+            if (stdData?.id) studentId = stdData.id;
+          } catch {}
+        }
+
+        const formattedNotes = `[BookingRef: ${data.bookingRef}] [Price: $${data.packagePrice}] [Suburb: ${data.suburb}] ${data.pickupAddress ? `[Pickup: ${data.pickupAddress}]` : ''} ${data.notes || ''}`.trim();
+
+        const { data: sbRow, error: sbErr } = await supabase
+          .from('bookings')
+          .insert({
+            student_id: studentId,
+            lesson_type: data.packageTitle,
+            lesson_date: data.date,
+            start_time: data.time,
+            status: data.status || 'Pending',
+            notes: formattedNotes,
+          })
+          .select('*, students(*), instructors(*)')
+          .single();
+
+        if (!sbErr && sbRow) {
+          const mapped = mapSupabaseRowToBooking(sbRow);
+          inMemoryBookings.unshift(mapped);
+          return mapped;
+        }
+      } catch (err: any) {
+        console.warn('[Supabase Server] createBooking fallback:', err?.message || err);
       }
-    } catch (error: any) {
-      console.warn('[AI Studio] PostgreSQL createBooking fallback:', error?.message);
     }
-  }
 
-  // 3. Fallback to in-memory store
-  inMemoryBookings.unshift(newBooking);
-  return newBooking;
+    // 3. Save to Cloud SQL if configured
+    if (isSqlConfigured && db) {
+      try {
+        const result = await db
+          .insert(bookings)
+          .values({
+            bookingRef: data.bookingRef,
+            userId: data.userId || null,
+            studentName: data.studentName,
+            phone: data.phone,
+            email: data.email,
+            suburb: data.suburb,
+            pickupAddress: data.pickupAddress || null,
+            packageTitle: data.packageTitle,
+            packagePrice: data.packagePrice,
+            date: data.date,
+            time: data.time,
+            status: data.status || 'Confirmed',
+            notes: data.notes || null,
+            paymentStatus: data.paymentStatus || 'unpaid',
+            stripeSessionId: data.stripeSessionId || null,
+          })
+          .returning();
+
+        if (result[0]) {
+          inMemoryBookings.unshift(result[0]);
+          return result[0];
+        }
+      } catch (error: any) {
+        console.warn('[AI Studio] PostgreSQL createBooking fallback:', error?.message);
+      }
+    }
+
+    // 4. Fallback to in-memory store
+    inMemoryBookings.unshift(newBooking);
+    return newBooking;
+  });
 }
 
 // Update existing booking by ID

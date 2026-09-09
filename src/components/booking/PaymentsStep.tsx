@@ -1001,7 +1001,9 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
     errorMessage && (
       errorMessage.toLowerCase().includes('already reserved') ||
       errorMessage.toLowerCase().includes('already booked') ||
-      errorMessage.toLowerCase().includes('select another slot')
+      errorMessage.toLowerCase().includes('select another') ||
+      errorMessage.toLowerCase().includes('no longer available') ||
+      errorMessage.toLowerCase().includes('time slot')
     )
   );
 

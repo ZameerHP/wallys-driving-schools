@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useSearchParams } from 'react-router-dom';
 import { 
@@ -17,6 +17,7 @@ import {
   Trash2, 
   CreditCard, 
   Check, 
+  Calendar,
   Calendar as CalendarIcon, 
   Package as PackageIcon, 
   Layers, 
@@ -105,7 +106,7 @@ const TIME_SLOTS = [
   { slot: '9:00 AM – 10:00 AM', available: true },
   { slot: '9:30 AM – 10:30 AM', available: true },
   { slot: '10:00 AM – 11:00 AM', available: true },
-  { slot: '10:30 AM – 11:30 AM', available: false }, // booked demo
+  { slot: '10:30 AM – 11:30 AM', available: true },
   { slot: '11:00 AM – 12:00 PM', available: true },
   { slot: '1:00 PM – 2:00 PM', available: true },
   { slot: '2:30 PM – 3:30 PM', available: true },
@@ -220,49 +221,135 @@ export function BookNow() {
   const [testCentreDropdownOpen, setTestCentreDropdownOpen] = useState(false);
   const [testTime, setTestTime] = useState('');
   const [infoErrors, setInfoErrors] = useState<{ [key: string]: string }>({});
-  const [bookedSlots, setBookedSlots] = useState<{date: string, time: string}[]>([]);
+  const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string; status?: string }[]>([]);
+  const [isRefreshingSlots, setIsRefreshingSlots] = useState(false);
+  const [slotConflictError, setSlotConflictError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch('/api/availability')
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setBookedSlots(data);
-      })
-      .catch(console.error);
-  }, []);
-  
-  // Parse time helper for buffer calculation
-  const parseTime = (timeStr: string) => {
-    const match = timeStr.match(/(\d+):(\d+)\s+(AM|PM)\s*[-–]\s*(\d+):(\d+)\s+(AM|PM)/i);
-    if (!match) return null;
-    const p = (h: string, m: string, ampm: string) => {
-      let hrs = parseInt(h, 10);
-      if (ampm.toUpperCase() === 'PM' && hrs < 12) hrs += 12;
-      if (ampm.toUpperCase() === 'AM' && hrs === 12) hrs = 0;
-      return hrs * 60 + parseInt(m, 10);
-    };
-    return { start: p(match[1], match[2], match[3]), end: p(match[4], match[5], match[6]) };
+  // Helper to normalize any date format (YYYY-MM-DD, DD/MM/YYYY, '15 September 2026')
+  const normalizeDateStr = (rawDate: string): string => {
+    if (!rawDate) return '';
+    const trimmed = rawDate.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+
+    if (trimmed.includes('/')) {
+      const parts = trimmed.split('/').map(p => p.trim());
+      if (parts.length === 3) {
+        if (parts[0].length === 4) {
+          return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+        }
+        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+    }
+
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime())) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return trimmed;
   };
+
+  // Robust time parser handling ranges & single timestamps
+  const parseTime = (timeStr: string): { start: number; end: number } | null => {
+    if (!timeStr) return null;
+    const clean = timeStr.trim().replace(/\s+/g, ' ');
+
+    const rangeMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+    if (rangeMatch) {
+      let [_, h1, m1, ap1, h2, m2, ap2] = rangeMatch;
+      let startHours = parseInt(h1, 10);
+      const startMins = parseInt(m1 || '0', 10);
+      let endHours = parseInt(h2, 10);
+      const endMins = parseInt(m2 || '0', 10);
+
+      if (!ap1 && ap2) ap1 = ap2;
+
+      if (ap1) {
+        if (ap1.toUpperCase() === 'PM' && startHours < 12) startHours += 12;
+        if (ap1.toUpperCase() === 'AM' && startHours === 12) startHours = 0;
+      }
+      if (ap2) {
+        if (ap2.toUpperCase() === 'PM' && endHours < 12) endHours += 12;
+        if (ap2.toUpperCase() === 'AM' && endHours === 12) endHours = 0;
+      }
+
+      return {
+        start: startHours * 60 + startMins,
+        end: endHours * 60 + endMins
+      };
+    }
+
+    const singleMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+    if (singleMatch) {
+      let [_, h, m, ap] = singleMatch;
+      let hours = parseInt(h, 10);
+      const mins = parseInt(m || '0', 10);
+      if (ap) {
+        if (ap.toUpperCase() === 'PM' && hours < 12) hours += 12;
+        if (ap.toUpperCase() === 'AM' && hours === 12) hours = 0;
+      }
+      const start = hours * 60 + mins;
+      return { start, end: start + 60 };
+    }
+
+    return null;
+  };
+
+  // Real-time availability loader with zero cache
+  const refreshAvailability = useCallback(async (targetDate?: string) => {
+    try {
+      setIsRefreshingSlots(true);
+      const url = targetDate 
+        ? `/api/availability?date=${encodeURIComponent(targetDate)}&_t=${Date.now()}`
+        : `/api/availability?_t=${Date.now()}`;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setBookedSlots(data);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to refresh availability:', err);
+    } finally {
+      setIsRefreshingSlots(false);
+    }
+  }, []);
+
+  // Poll availability every 10s to keep slot view real-time
+  useEffect(() => {
+    refreshAvailability();
+    const timer = setInterval(() => {
+      refreshAvailability();
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [refreshAvailability]);
   
   // Determine if a slot is available based on DB bookings + 30 min buffer
-  const isSlotAvailable = (date: string, time: string) => {
+  const isSlotAvailable = useCallback((date: string, time: string) => {
     const t1 = parseTime(time);
     if (!t1) return true;
+    const targetNorm = normalizeDateStr(date);
+
     for (const b of bookedSlots) {
-      if (b.date === date) {
+      if (b.status === 'Cancelled') continue;
+      const bNorm = normalizeDateStr(b.date);
+      if (bNorm === targetNorm) {
         const t2 = parseTime(b.time);
         if (t2) {
           const buffer = 30;
           if (t1.start < t2.end + buffer && t1.end > t2.start - buffer) {
             return false;
           }
-        } else if (b.time === time) {
-          return false; // Exact match fallback
+        } else if (b.time.trim().toLowerCase() === time.trim().toLowerCase()) {
+          return false;
         }
       }
     }
     return true;
-  };
+  }, [bookedSlots]);
 
 
   // URL params for Stripe redirection
@@ -358,10 +445,17 @@ export function BookNow() {
   const currentStepIndex = steps.findIndex(s => s.id === activeStepId);
 
   // Helper to step forward/backward
-  const goToNextStep = () => {
+  const goToNextStep = async () => {
     if (activeStepId === 'service') {
       setActiveStepId('datetime');
     } else if (activeStepId === 'datetime') {
+      // Validate slot availability before allowing forward movement
+      if (!isSlotAvailable(selectedDate, selectedTimeSlot)) {
+        setSlotConflictError("This time slot is no longer available. Please select another time.");
+        refreshAvailability(selectedDate);
+        return;
+      }
+
       // Sync or update cart item
       const itemTitle = selectedPackage?.title || '1 Hour Driving Lesson';
       const itemPrice = selectedPackage?.price || 65.00;
@@ -411,6 +505,26 @@ export function BookNow() {
       if (Object.keys(errors).length > 0) {
         setInfoErrors(errors);
         return;
+      }
+
+      // Authoritative database check right before proceeding to Payment
+      const primaryItem = cartItems[0];
+      const targetDate = primaryItem?.date || selectedDate;
+      const targetTime = primaryItem?.time || selectedTimeSlot;
+
+      try {
+        const checkRes = await fetch(`/api/check-slot?date=${encodeURIComponent(targetDate)}&time=${encodeURIComponent(targetTime)}&_t=${Date.now()}`, { cache: 'no-store' });
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (!checkData.available) {
+            setSlotConflictError("This time slot is no longer available. Please select another time.");
+            refreshAvailability(targetDate);
+            setActiveStepId('datetime');
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Real-time check error:', err);
       }
 
       // Standardize clean values
@@ -509,6 +623,7 @@ export function BookNow() {
     setIsProcessing(true);
     setStripeError(null);
     setStripeNotice(null);
+    setSlotConflictError(null);
 
     const primaryItem = cartItems[0] || {
       title: selectedPackage?.title || '1 Hour Driving Lesson',
@@ -516,6 +631,26 @@ export function BookNow() {
       date: selectedDate,
       time: selectedTimeSlot
     };
+
+    const targetDate = primaryItem.date || selectedDate;
+    const targetTime = primaryItem.time || selectedTimeSlot;
+
+    // 1. Authoritative real-time check against database immediately before charging or creating booking
+    try {
+      const checkRes = await fetch(`/api/check-slot?date=${encodeURIComponent(targetDate)}&time=${encodeURIComponent(targetTime)}&_t=${Date.now()}`, { cache: 'no-store' });
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        if (!checkData.available) {
+          setIsProcessing(false);
+          setSlotConflictError("This time slot is no longer available. Please select another time.");
+          refreshAvailability(targetDate);
+          setActiveStepId('datetime');
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Real-time check before submission failed:', err);
+    }
 
     // If card payment and not explicitly simulating mock test, initiate real Stripe Checkout
     if (paymentMethod === 'card' && !isMock) {
@@ -530,8 +665,8 @@ export function BookNow() {
             studentEmail: email,
             studentPhone: `${countryCode} ${phone}`,
             pickupAddress: `${address}, ${suburbSearch}`,
-            bookingDate: primaryItem.date || selectedDate,
-            bookingTime: primaryItem.time || selectedTimeSlot,
+            bookingDate: targetDate,
+            bookingTime: targetTime,
             instructorName: 'Certified Instructor',
             isPackage: Boolean(selectedPackage),
             packageHours: selectedPackage?.logbookHours || 1
@@ -542,6 +677,12 @@ export function BookNow() {
 
         if (!res.ok || data.error) {
           setIsProcessing(false);
+          if (res.status === 409 || data.error === 'SLOT_ALREADY_BOOKED') {
+            setSlotConflictError(data.message || "This time slot is no longer available. Please select another time.");
+            refreshAvailability(targetDate);
+            setActiveStepId('datetime');
+            return;
+          }
           if (data.error === 'STRIPE_NOT_CONFIGURED') {
             setStripeError('STRIPE_NOT_CONFIGURED');
           } else {
@@ -564,9 +705,7 @@ export function BookNow() {
     }
 
     // Cash (Pay in Car) or Mock Simulation
-    setTimeout(async () => {
-      setIsProcessing(false);
-
+    try {
       const newBooking = await createBookingInDb({
         studentName: `${firstName || 'Learner'} ${lastName || 'Driver'}`.trim(),
         phone: `${countryCode} ${phone || '0400 000 000'}`,
@@ -575,14 +714,21 @@ export function BookNow() {
         pickupAddress: `${address || 'Home pickup'}, ${suburbSearch || ''}`.trim(),
         packageTitle: primaryItem.title,
         packagePrice: cartSubtotal,
-        date: primaryItem.date || selectedDate,
-        time: primaryItem.time || selectedTimeSlot,
+        date: targetDate,
+        time: targetTime,
         status: 'Pending',
         notes: `Pickup: ${address || 'Home pickup'}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}. Payment: ${simulateMock ? 'MOCK CARD (TEST)' : paymentMethod.toUpperCase()}`
       });
 
       setConfirmedBooking(newBooking);
-    }, 1000);
+    } catch (err: any) {
+      console.error('Error creating booking in DB:', err);
+      setSlotConflictError(err?.message || "This time slot is no longer available. Please select another time.");
+      refreshAvailability(targetDate);
+      setActiveStepId('datetime');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // Step Summaries for Sidebar
@@ -899,6 +1045,37 @@ export function BookNow() {
                   scrollBehavior: 'smooth' 
                 }}
               >
+                {/* Real-time Time Slot Conflict Alert */}
+                {slotConflictError && (
+                  <div className="mb-3 p-3.5 bg-rose-50 border border-rose-300 rounded-2xl flex items-start gap-3 text-rose-900 shadow-sm animate-shake">
+                    <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="flex-1 text-xs">
+                      <div className="font-bold text-sm text-rose-950">Time Slot Unavailable</div>
+                      <p className="text-rose-800 mt-0.5 leading-relaxed">{slotConflictError}</p>
+                      {activeStepId !== 'datetime' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSlotConflictError(null);
+                            setActiveStepId('datetime');
+                          }}
+                          className="mt-2 text-xs font-bold text-rose-900 bg-rose-200/80 hover:bg-rose-200 px-3 py-1.5 rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <Calendar className="w-3.5 h-3.5" />
+                          Choose Another Time Slot
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSlotConflictError(null)}
+                      className="text-rose-500 hover:text-rose-800 p-1 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 <AnimatePresence mode="wait">
 
                   {/* ================= STEP 1: SERVICE SELECTION ================= */}
@@ -1151,7 +1328,13 @@ export function BookNow() {
                                   key={idx}
                                   type="button"
                                   disabled={isUnavailable}
-                                  onClick={() => item.dateStr && setSelectedDate(item.dateStr)}
+                                  onClick={() => {
+                                    if (item.dateStr) {
+                                      setSelectedDate(item.dateStr);
+                                      refreshAvailability(item.dateStr);
+                                      setSlotConflictError(null);
+                                    }
+                                  }}
                                   className={cn(
                                     "h-8 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer text-xs",
                                     isSelected 
@@ -1176,29 +1359,40 @@ export function BookNow() {
                             </span>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5 max-h-[250px] overflow-y-auto pr-1">
                               {TIME_SLOTS.map((slotObj, idx) => {
-    const isAvailable = isSlotAvailable(selectedDate, slotObj.slot);
-    const isSelected = selectedTimeSlot === slotObj.slot;
+                                const isAvailable = isSlotAvailable(selectedDate, slotObj.slot);
+                                const isSelected = selectedTimeSlot === slotObj.slot;
 
                                 return (
                                   <button
                                     key={idx}
                                     type="button"
                                     disabled={!isAvailable}
-                                    onClick={() => setSelectedTimeSlot(slotObj.slot)}
+                                    onClick={() => {
+                                      if (isAvailable) {
+                                        setSelectedTimeSlot(slotObj.slot);
+                                        setSlotConflictError(null);
+                                      }
+                                    }}
                                     className={cn(
                                       "px-3 py-2 rounded-xl text-xs font-bold border transition-all text-left flex items-center justify-between",
                                       isSelected
-                                        ? "bg-brand-red text-white border-brand-red shadow-md"
+                                        ? "bg-brand-red text-white border-brand-red shadow-md cursor-pointer"
                                         : !isAvailable
-                                        ? "bg-black/5 text-black/30 border-black/5 cursor-not-allowed line-through"
-                                        : "bg-white border-black/10 hover:border-brand-red/50 text-brand-black"
+                                        ? "bg-black/[0.03] text-black/30 border-black/5 cursor-not-allowed line-through"
+                                        : "bg-white border-black/10 hover:border-brand-red/50 text-brand-black cursor-pointer"
                                     )}
                                   >
                                     <span className="flex items-center gap-2">
                                       <Clock className="w-3.5 h-3.5" />
                                       {slotObj.slot}
                                     </span>
-                                    {isSelected && <Check className="w-3.5 h-3.5" />}
+                                    {isSelected ? (
+                                      <Check className="w-3.5 h-3.5" />
+                                    ) : !isAvailable ? (
+                                      <span className="text-[9px] uppercase font-bold text-rose-600 bg-rose-100/70 px-1.5 py-0.5 rounded no-underline">
+                                        Booked
+                                      </span>
+                                    ) : null}
                                   </button>
                                 );
                               })}

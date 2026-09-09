@@ -383,9 +383,9 @@ export function Home() {
               </div>
               <div className="absolute -bottom-4 -right-4 w-3/5 h-3/5 rounded-[24px] border-[6px] border-brand-offwhite overflow-hidden shadow-xl">
                 <img 
-                  src="/assets/images/about-instructor.jpg" 
+                  src="/instructor.jpg" 
                   onError={(e) => {
-                    e.currentTarget.src = "https://images.unsplash.com/photo-1541899481282-d53bffe3c35d?auto=format&fit=crop&q=80&w=800";
+                    e.currentTarget.src = "/assets/images/about-instructor.jpg";
                   }}
                   className="w-full h-full object-cover" 
                   alt="Instructor" 

@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { 
   Calendar, 
   Clock, 
@@ -23,7 +23,10 @@ import {
   RefreshCw,
   Lock,
   ChevronRight,
-  CreditCard
+  CreditCard,
+  RotateCcw,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   searchCustomerBookings, 
@@ -43,6 +46,80 @@ const AVAILABLE_TIMES = [
   '04:30 PM - 05:30 PM'
 ];
 
+function parseTimeInterval(timeStr: string): { start: number; end: number } | null {
+  if (!timeStr) return null;
+  const clean = timeStr.trim().replace(/\s+/g, ' ');
+  const rangeMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (rangeMatch) {
+    let [_, h1, m1, ap1, h2, m2, ap2] = rangeMatch;
+    let startHours = parseInt(h1, 10);
+    const startMins = parseInt(m1 || '0', 10);
+    let endHours = parseInt(h2, 10);
+    const endMins = parseInt(m2 || '0', 10);
+
+    if (!ap1 && ap2) ap1 = ap2;
+
+    if (ap1) {
+      if (ap1.toUpperCase() === 'PM' && startHours < 12) startHours += 12;
+      if (ap1.toUpperCase() === 'AM' && startHours === 12) startHours = 0;
+    }
+    if (ap2) {
+      if (ap2.toUpperCase() === 'PM' && endHours < 12) endHours += 12;
+      if (ap2.toUpperCase() === 'AM' && endHours === 12) endHours = 0;
+    }
+
+    return {
+      start: startHours * 60 + startMins,
+      end: endHours * 60 + endMins
+    };
+  }
+
+  const singleMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (singleMatch) {
+    let [_, h, m, ap] = singleMatch;
+    let hours = parseInt(h, 10);
+    const mins = parseInt(m || '0', 10);
+    if (ap) {
+      if (ap.toUpperCase() === 'PM' && hours < 12) hours += 12;
+      if (ap.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    }
+    const start = hours * 60 + mins;
+    return { start, end: start + 60 };
+  }
+  return null;
+}
+
+function parseBookingDateTime(dateStr: string, timeStr: string): number {
+  let hours = 9;
+  let minutes = 0;
+  const timeMatch = (timeStr || '').match(/(\d+):(\d+)\s*(AM|PM)?/i);
+  if (timeMatch) {
+    let [_, h, m, ampm] = timeMatch;
+    hours = parseInt(h, 10);
+    minutes = parseInt(m, 10) || 0;
+    if (ampm) {
+      if (ampm.toUpperCase() === 'PM' && hours < 12) hours += 12;
+      if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    }
+  }
+
+  if (dateStr && dateStr.includes('/')) {
+    const parts = dateStr.split('/').map(Number);
+    if (parts.length === 3 && parts[0] <= 31 && parts[1] <= 12) {
+      const [day, month, year] = parts;
+      const d = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+  }
+
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) {
+    d.setHours(hours, minutes, 0, 0);
+    return d.getTime();
+  }
+  return Date.now();
+}
+
 export function ManageBooking() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get('ref') || searchParams.get('code') || searchParams.get('number') || '';
@@ -60,12 +137,71 @@ export function ManageBooking() {
   const [newTime, setNewTime] = useState(AVAILABLE_TIMES[1]);
   const [isSavingReschedule, setIsSavingReschedule] = useState(false);
   const [rescheduleSuccess, setRescheduleSuccess] = useState<string | null>(null);
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null);
+  const [rescheduleBookedSlots, setRescheduleBookedSlots] = useState<{ date: string; time: string; status?: string }[]>([]);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+
+  // Fetch real availability for reschedule date
+  const fetchAvailabilityForReschedule = useCallback(async (targetDate: string) => {
+    if (!targetDate) return;
+    setIsLoadingSlots(true);
+    try {
+      const res = await fetch(`/api/availability?date=${encodeURIComponent(targetDate)}&_t=${Date.now()}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setRescheduleBookedSlots(data);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load reschedule availability:', err);
+    } finally {
+      setIsLoadingSlots(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showRescheduleModal && newDate) {
+      fetchAvailabilityForReschedule(newDate);
+    }
+  }, [showRescheduleModal, newDate, fetchAvailabilityForReschedule]);
+
+  const isRescheduleSlotAvailable = (timeSlot: string) => {
+    if (!newDate || !selectedBooking) return true;
+    const t1 = parseTimeInterval(timeSlot);
+    if (!t1) return true;
+
+    for (const b of rescheduleBookedSlots) {
+      if (b.status === 'Cancelled') continue;
+      // Skip the booking's own original slot if same date & time
+      if (b.date === selectedBooking.date && b.time === selectedBooking.time && newDate === selectedBooking.date) {
+        continue;
+      }
+      const t2 = parseTimeInterval(b.time);
+      if (t2) {
+        const BUFFER_MINUTES = 30;
+        if (t1.start < t2.end + BUFFER_MINUTES && t1.end > t2.start - BUFFER_MINUTES) {
+          return false;
+        }
+      } else if (b.time.trim().toLowerCase() === timeSlot.trim().toLowerCase()) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   // Edit Address Modal
   const [showAddressModal, setShowAddressModal] = useState(false);
   const [newAddress, setNewAddress] = useState('');
   const [isSavingAddress, setIsSavingAddress] = useState(false);
   const [addressSuccess, setAddressSuccess] = useState<string | null>(null);
+
+  // Cancel Booking Modal
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [isSavingCancel, setIsSavingCancel] = useState(false);
+  const [cancelSuccess, setCancelSuccess] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('Change of personal schedule');
 
   // Online Payment Modal
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -79,6 +215,8 @@ export function ManageBooking() {
     setHasSearched(true);
     setRescheduleSuccess(null);
     setAddressSuccess(null);
+    setCancelSuccess(null);
+    setCancelError(null);
 
     try {
       const results = await searchCustomerBookings(q);
@@ -114,6 +252,15 @@ export function ManageBooking() {
   const handleSaveReschedule = async () => {
     if (!selectedBooking || !newDate || !newTime) return;
 
+    setRescheduleError(null);
+
+    // Frontend pre-check
+    if (!isRescheduleSlotAvailable(newTime)) {
+      setRescheduleError('This time slot is no longer available. Please select another time.');
+      fetchAvailabilityForReschedule(newDate);
+      return;
+    }
+
     setIsSavingReschedule(true);
     const updatedFields: Partial<BookingItem> = {
       date: newDate,
@@ -138,8 +285,10 @@ export function ManageBooking() {
       setFoundBookings(prev => prev.map(b => b.id === updatedBooking.id ? updatedBooking : b));
       setShowRescheduleModal(false);
       setRescheduleSuccess(`Lesson successfully rescheduled to ${newDate} at ${newTime}! Wally has been notified.`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to reschedule:', err);
+      setRescheduleError(err?.message || 'This time slot is no longer available. Please select another time.');
+      fetchAvailabilityForReschedule(newDate);
     } finally {
       setIsSavingReschedule(false);
     }
@@ -173,6 +322,58 @@ export function ManageBooking() {
       console.error('Failed to update address:', err);
     } finally {
       setIsSavingAddress(false);
+    }
+  };
+
+  // Cancel Booking
+  const handleCancelBooking = async () => {
+    if (!selectedBooking) return;
+
+    setIsSavingCancel(true);
+    setCancelError(null);
+
+    const bookingTimestamp = parseBookingDateTime(selectedBooking.date, selectedBooking.time);
+    const hoursUntil = (bookingTimestamp - Date.now()) / (1000 * 60 * 60);
+    const isOver24Hours = hoursUntil > 24;
+    const isPaid = selectedBooking.paymentStatus === 'paid';
+
+    const reasonNote = cancelReason ? ` Reason: ${cancelReason}.` : '';
+
+    const updatedFields: Partial<BookingItem> = {
+      status: 'Cancelled',
+      notes: selectedBooking.notes 
+        ? `${selectedBooking.notes} [Cancelled by student.${reasonNote}]`
+        : `[Cancelled by student.${reasonNote}]`
+    };
+
+    try {
+      const serverResult = await updateBookingInDb(selectedBooking.id, updatedFields, selectedBooking.ref);
+
+      const isRefunded = serverResult?.paymentStatus === 'refunded' || (isOver24Hours && isPaid);
+
+      const updatedBooking: BookingItem = {
+        ...selectedBooking,
+        ...updatedFields,
+        paymentStatus: isRefunded ? 'refunded' : selectedBooking.paymentStatus,
+        notes: serverResult?.notes || updatedFields.notes
+      };
+
+      setSelectedBooking(updatedBooking);
+      setFoundBookings(prev => prev.map(b => (b.id === updatedBooking.id || b.ref === updatedBooking.ref ? updatedBooking : b)));
+      setShowCancelModal(false);
+
+      if (isRefunded) {
+        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled. Because your lesson was cancelled more than 24 hours in advance, a full refund of $${selectedBooking.packagePrice.toFixed(2)} AUD has been processed back to your original payment method via Stripe.`);
+      } else if (isPaid) {
+        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled. Note: Because your lesson is scheduled within 24 hours, per driving school policy it is classified as a late cancellation without an automatic refund. If you need assistance, please contact Wally on WhatsApp.`);
+      } else {
+        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled and your scheduled time slot has been released.`);
+      }
+    } catch (err: any) {
+      console.error('Failed to cancel booking:', err);
+      setCancelError(err?.message || 'Failed to cancel booking. Please try again or WhatsApp Wally directly.');
+    } finally {
+      setIsSavingCancel(false);
     }
   };
 
@@ -287,6 +488,18 @@ export function ManageBooking() {
               <span>{addressSuccess}</span>
             </motion.div>
           )}
+
+          {cancelSuccess && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="bg-red-50 border border-red-200 text-red-900 rounded-2xl p-4 text-xs sm:text-sm font-semibold flex items-center gap-3 mb-6 shadow-sm"
+            >
+              <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+              <span>{cancelSuccess}</span>
+            </motion.div>
+          )}
         </AnimatePresence>
 
         {/* Multiple Results Tab Selector (if multiple bookings found for same phone/email) */}
@@ -354,6 +567,7 @@ export function ManageBooking() {
                 )}>
                   {selectedBooking.status === 'Pending' && <Clock className="w-3 h-3 text-amber-600" />}
                   {selectedBooking.status === 'Confirmed' && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
+                  {selectedBooking.status === 'Cancelled' && <AlertCircle className="w-3 h-3 text-red-600" />}
                   <span>{selectedBooking.status === 'Pending' ? 'Pending Confirmation' : selectedBooking.status}</span>
                 </span>
 
@@ -362,12 +576,19 @@ export function ManageBooking() {
                   "text-xs font-black px-3.5 py-1 rounded-full uppercase tracking-wider border flex items-center gap-1.5",
                   selectedBooking.paymentStatus === 'paid'
                     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : selectedBooking.paymentStatus === 'refunded'
+                    ? "bg-purple-50 text-purple-700 border-purple-200"
                     : "bg-amber-50 text-amber-800 border-amber-200"
                 )}>
                   {selectedBooking.paymentStatus === 'paid' ? (
                     <>
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                       <span>Paid Online (Stripe)</span>
+                    </>
+                  ) : selectedBooking.paymentStatus === 'refunded' ? (
+                    <>
+                      <RotateCcw className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Refunded (Stripe)</span>
                     </>
                   ) : (
                     <>
@@ -401,6 +622,22 @@ export function ManageBooking() {
                   </span>
                   <p className="text-[11px] sm:text-xs text-emerald-800/90 mt-0.5 leading-relaxed">
                     Wally has officially confirmed your driving lesson. Please be ready at your pickup address at the scheduled date and time.
+                  </p>
+                </div>
+              </div>
+            ) : selectedBooking.status === 'Cancelled' ? (
+              <div className="mt-4 bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3 text-red-900">
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-xs sm:text-sm block text-red-900">
+                    Booking Cancelled
+                  </span>
+                  <p className="text-[11px] sm:text-xs text-red-800/90 mt-0.5 leading-relaxed">
+                    {selectedBooking.paymentStatus === 'refunded'
+                      ? 'This appointment has been cancelled and a full refund has been issued to your original card / payment method via Stripe.'
+                      : selectedBooking.paymentStatus === 'paid'
+                      ? 'This appointment was cancelled. Because it was scheduled within 24 hours, per driving school policy it is classified as a late cancellation without automatic refund. If you need assistance, please WhatsApp Wally.'
+                      : 'This appointment was cancelled and your time slot has been released. No charges were made.'}
                   </p>
                 </div>
               </div>
@@ -499,42 +736,78 @@ export function ManageBooking() {
 
             {/* Action Buttons */}
             <div className="pt-6 border-t border-black/5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-              {/* Pay Online Button (if not already paid) */}
-              {selectedBooking.paymentStatus !== 'paid' && (
-                <button
-                  type="button"
-                  onClick={() => setShowPaymentModal(true)}
-                  className="flex-1 bg-neutral-950 hover:bg-black text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
-                >
-                  <CreditCard className="w-4 h-4 text-[#FFC439]" />
-                  <span>Pay Online (Card / Google Pay)</span>
-                </button>
+              {selectedBooking.status === 'Cancelled' ? (
+                <>
+                  <Link
+                    to="/book-now"
+                    className="flex-1 bg-brand-red hover:bg-[#c41a21] text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-red/20 transition-all text-center"
+                  >
+                    <Calendar className="w-4 h-4" />
+                    <span>Book a New Driving Lesson</span>
+                  </Link>
+                  <a
+                    href={`https://wa.me/61406693301?text=${encodeURIComponent(`Hi Wally, regarding my cancelled driving lesson booking #${selectedBooking.ref} (${selectedBooking.studentName}).`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all text-center"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    <span>WhatsApp Wally</span>
+                  </a>
+                </>
+              ) : (
+                <>
+                  {/* Pay Online Button (if not already paid) */}
+                  {selectedBooking.paymentStatus !== 'paid' && selectedBooking.paymentStatus !== 'refunded' && (
+                    <button
+                      type="button"
+                      onClick={() => setShowPaymentModal(true)}
+                      className="flex-1 bg-neutral-950 hover:bg-black text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+                    >
+                      <CreditCard className="w-4 h-4 text-[#FFC439]" />
+                      <span>Pay Online (Card / Google Pay)</span>
+                    </button>
+                  )}
+
+                  {/* Reschedule Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewDate(selectedBooking.date);
+                      setNewTime(selectedBooking.time || AVAILABLE_TIMES[0]);
+                      setShowRescheduleModal(true);
+                    }}
+                    className="flex-1 bg-brand-red hover:bg-[#c41a21] text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-red/20 transition-all cursor-pointer"
+                  >
+                    <Calendar className="w-4 h-4" />
+                    <span>Reschedule Date & Time</span>
+                  </button>
+
+                  {/* Cancel Booking Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCancelError(null);
+                      setShowCancelModal(true);
+                    }}
+                    className="px-4 py-3 bg-red-50 hover:bg-red-100 text-red-700 font-bold rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 border border-red-200 transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-600" />
+                    <span>Cancel Booking</span>
+                  </button>
+
+                  {/* WhatsApp Instructor */}
+                  <a
+                    href={`https://wa.me/61406693301?text=${encodeURIComponent(`Hi Wally, I am inquiring about my driving lesson booking #${selectedBooking.ref} scheduled on ${selectedBooking.date} at ${selectedBooking.time} (${selectedBooking.studentName}).`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all text-center"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    <span>WhatsApp Wally</span>
+                  </a>
+                </>
               )}
-
-              {/* Reschedule Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setNewDate(selectedBooking.date);
-                  setNewTime(selectedBooking.time || AVAILABLE_TIMES[0]);
-                  setShowRescheduleModal(true);
-                }}
-                className="flex-1 bg-brand-red hover:bg-[#c41a21] text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-red/20 transition-all cursor-pointer"
-              >
-                <Calendar className="w-4 h-4" />
-                <span>Reschedule Date & Time</span>
-              </button>
-
-              {/* WhatsApp Instructor */}
-              <a
-                href={`https://wa.me/61406693301?text=${encodeURIComponent(`Hi Wally, I am inquiring about my driving lesson booking #${selectedBooking.ref} scheduled on ${selectedBooking.date} at ${selectedBooking.time} (${selectedBooking.studentName}).`)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all text-center"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>WhatsApp Wally</span>
-              </a>
             </div>
           </motion.div>
         ) : hasSearched && !isSearching ? (
@@ -605,16 +878,36 @@ export function ManageBooking() {
               </div>
 
               <div className="space-y-4">
+                {rescheduleError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2 animate-shake">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <span className="font-bold block">Slot Unavailable</span>
+                      <span>{rescheduleError}</span>
+                    </div>
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-xs font-bold text-black/80 uppercase tracking-wider mb-1.5">
-                    New Date
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-black/80 uppercase tracking-wider">
+                      New Date
+                    </label>
+                    {isLoadingSlots && (
+                      <span className="text-[10px] text-brand-red font-medium flex items-center gap-1">
+                        <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Checking availability...
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="date"
                     required
                     min={new Date().toISOString().split('T')[0]}
                     value={newDate}
-                    onChange={(e) => setNewDate(e.target.value)}
+                    onChange={(e) => {
+                      setNewDate(e.target.value);
+                      setRescheduleError(null);
+                    }}
                     className="w-full bg-brand-offwhite border border-black/10 rounded-xl px-4 py-3 text-sm font-semibold text-brand-black focus:outline-none focus:border-brand-red"
                   />
                 </div>
@@ -624,21 +917,39 @@ export function ManageBooking() {
                     Available Time Slot
                   </label>
                   <div className="grid grid-cols-2 gap-2">
-                    {AVAILABLE_TIMES.map((slot) => (
-                      <button
-                        type="button"
-                        key={slot}
-                        onClick={() => setNewTime(slot)}
-                        className={cn(
-                          "p-2.5 rounded-xl text-xs font-bold text-center border transition-all cursor-pointer",
-                          newTime === slot
-                            ? "bg-brand-red text-white border-brand-red shadow-sm"
-                            : "bg-brand-offwhite text-black/80 border-black/10 hover:bg-black/5"
-                        )}
-                      >
-                        {slot}
-                      </button>
-                    ))}
+                    {AVAILABLE_TIMES.map((slot) => {
+                      const isAvailable = isRescheduleSlotAvailable(slot);
+                      const isSelected = newTime === slot;
+
+                      return (
+                        <button
+                          type="button"
+                          key={slot}
+                          disabled={!isAvailable}
+                          onClick={() => {
+                            if (isAvailable) {
+                              setNewTime(slot);
+                              setRescheduleError(null);
+                            }
+                          }}
+                          className={cn(
+                            "p-2.5 rounded-xl text-xs font-bold text-center border transition-all flex items-center justify-between px-3",
+                            isSelected
+                              ? "bg-brand-red text-white border-brand-red shadow-sm cursor-pointer"
+                              : !isAvailable
+                              ? "bg-black/[0.03] text-black/30 border-black/5 cursor-not-allowed line-through"
+                              : "bg-brand-offwhite text-black/80 border-black/10 hover:bg-black/5 cursor-pointer"
+                          )}
+                        >
+                          <span>{slot}</span>
+                          {!isAvailable && (
+                            <span className="text-[9px] uppercase font-bold text-rose-600 bg-rose-100/70 px-1.5 py-0.5 rounded ml-1 no-underline">
+                              Booked
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -653,7 +964,7 @@ export function ManageBooking() {
 
                   <button
                     type="button"
-                    disabled={isSavingReschedule || !newDate}
+                    disabled={isSavingReschedule || !newDate || !isRescheduleSlotAvailable(newTime)}
                     onClick={handleSaveReschedule}
                     className="bg-brand-red hover:bg-[#c41a21] text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-2"
                   >
@@ -794,6 +1105,170 @@ export function ManageBooking() {
             </motion.div>
           </div>
         )}
+
+        {/* Cancel Booking Confirmation Modal */}
+        {showCancelModal && selectedBooking && (() => {
+          const bookingTimestamp = parseBookingDateTime(selectedBooking.date, selectedBooking.time);
+          const hoursUntil = (bookingTimestamp - Date.now()) / (1000 * 60 * 60);
+          const isOver24Hours = hoursUntil > 24;
+          const isPaid = selectedBooking.paymentStatus === 'paid';
+          const isEligibleForRefund = isOver24Hours && isPaid;
+
+          return (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-white rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl border border-black/10 relative my-8"
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(false)}
+                  className="absolute right-5 top-5 text-black/40 hover:text-black p-1 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                {/* Header */}
+                <div className="mb-5">
+                  <div className="inline-flex items-center gap-1.5 text-red-600 text-xs font-bold uppercase tracking-wider mb-1">
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Cancel Driving Lesson</span>
+                  </div>
+                  <h3 className="text-xl font-bold text-brand-black">
+                    Cancel Booking #{selectedBooking.ref}?
+                  </h3>
+                </div>
+
+                {/* Booking summary card */}
+                <div className="bg-brand-offwhite rounded-2xl p-4 border border-black/5 mb-4 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-black/50 font-bold uppercase tracking-wider">Lesson</span>
+                    <span className="font-bold text-brand-black">{selectedBooking.packageTitle}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-black/50 font-bold uppercase tracking-wider">Scheduled Date & Time</span>
+                    <span className="font-bold text-brand-black">{selectedBooking.date} at {selectedBooking.time}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-black/50 font-bold uppercase tracking-wider">Student</span>
+                    <span className="font-bold text-brand-black">{selectedBooking.studentName}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs pt-1 border-t border-black/5">
+                    <span className="text-black/50 font-bold uppercase tracking-wider">Payment Status</span>
+                    <span className="font-black text-brand-red">
+                      {isPaid 
+                        ? `Paid Online ($${selectedBooking.packagePrice.toFixed(2)} AUD)` 
+                        : selectedBooking.paymentStatus === 'refunded'
+                        ? 'Refunded'
+                        : `Awaiting Payment ($${selectedBooking.packagePrice.toFixed(2)} AUD)`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Dynamic Refund & Cancellation Policy Notice */}
+                <div className="mb-5">
+                  {isEligibleForRefund ? (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-emerald-950 flex items-start gap-3">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold text-xs sm:text-sm block text-emerald-900">
+                          Eligible for 100% Full Refund (${selectedBooking.packagePrice.toFixed(2)} AUD)
+                        </span>
+                        <p className="text-[11px] sm:text-xs text-emerald-800/90 mt-1 leading-relaxed">
+                          Your appointment is scheduled in more than 24 hours ({Math.max(0, Math.round(hoursUntil))} hours from now). Your refund will be automatically credited back to your original payment method via Stripe.
+                        </p>
+                      </div>
+                    </div>
+                  ) : isPaid ? (
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-950 flex items-start gap-3">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold text-xs sm:text-sm block text-amber-900">
+                          Late Cancellation Policy Notice (Under 24 Hours)
+                        </span>
+                        <p className="text-[11px] sm:text-xs text-amber-800/90 mt-1 leading-relaxed">
+                          This lesson is scheduled within the next 24 hours ({Math.max(0, Math.round(hoursUntil))} hours from now). Under standard driving school policy, cancellations with less than 24 hours notice cannot be automatically refunded to cover instructor scheduling. If you have an emergency, please message Wally on WhatsApp.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-slate-800 flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold text-xs sm:text-sm block text-slate-900">
+                          Unpaid Booking
+                        </span>
+                        <p className="text-[11px] sm:text-xs text-slate-600 mt-1 leading-relaxed">
+                          No online payment was taken for this lesson. Cancelling will immediately free up the reserved time slot with no cancellation charge.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Reason Selection */}
+                <div className="mb-5">
+                  <label className="block text-xs font-bold text-black/70 uppercase tracking-wider mb-2">
+                    Reason for Cancellation (Optional)
+                  </label>
+                  <select
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    className="w-full bg-brand-offwhite border border-black/10 rounded-xl p-3 text-xs sm:text-sm font-semibold text-brand-black focus:outline-none focus:border-brand-red cursor-pointer"
+                  >
+                    <option value="Change of personal schedule">Change of personal schedule</option>
+                    <option value="Need to reschedule for a future date">Need to reschedule for a future date</option>
+                    <option value="Work / School commitment">Work / School commitment</option>
+                    <option value="Medical or health reason">Medical or health reason</option>
+                    <option value="Booked by mistake">Booked by mistake</option>
+                    <option value="Other reason">Other reason</option>
+                  </select>
+                </div>
+
+                {/* Error Notice */}
+                {cancelError && (
+                  <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-xl flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{cancelError}</span>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex items-center justify-end gap-3 pt-4 border-t border-black/5">
+                  <button
+                    type="button"
+                    onClick={() => setShowCancelModal(false)}
+                    disabled={isSavingCancel}
+                    className="px-4 py-2.5 text-xs font-bold text-black/60 hover:text-black transition-colors cursor-pointer"
+                  >
+                    Keep My Lesson
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCancelBooking}
+                    disabled={isSavingCancel}
+                    className="bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm font-bold px-5 py-2.5 rounded-xl transition-all shadow-md shadow-red-600/20 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                  >
+                    {isSavingCancel ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Processing Cancellation...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Confirm Cancellation</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
 
     </div>

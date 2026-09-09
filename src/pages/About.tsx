@@ -117,8 +117,8 @@ export function About() {
                 id: 'wallsy',
                 name: 'Wallsy',
                 role: "Wally's Driving School Instructor",
-                image: '/assets/images/about-instructor.jpg',
-                fallback: 'https://images.unsplash.com/photo-1541899481282-d53bffe3c35d?auto=format&fit=crop&q=80&w=800',
+                image: '/instructor.jpg',
+                fallback: '/assets/images/about-instructor.jpg',
                 exp: 'Expert Instructor'
               }
             ].map((instructor, index) => (

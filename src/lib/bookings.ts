@@ -364,15 +364,9 @@ export async function createBookingInDb(
   const randomNum = Math.floor(1000 + Math.random() * 9000);
   const bookingRef = `WD-${randomNum}`;
 
-  // 1. First create local booking item
-  const localItem = addBooking({
-    ...booking,
-    ref: bookingRef,
-  } as any);
+  let finalItem: BookingItem | null = null;
 
-  let finalItem: BookingItem = localItem;
-
-  // 2. Send to Express Backend API (Cloud SQL)
+  // 1. Authoritative Backend Check and Insert
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -390,15 +384,31 @@ export async function createBookingInDb(
         status: booking.status || 'Pending'
       }),
     });
-    if (res.ok) {
-      const data = await res.json();
-      finalItem = mapDbToBookingItem(data);
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.message || 'This time slot is no longer available. Please select another time.');
     }
-  } catch (err) {
-    console.warn('Failed to save to backend API directly:', err);
+
+    const data = await res.json();
+    finalItem = mapDbToBookingItem(data);
+  } catch (err: any) {
+    // If backend threw an availability error or validation error, rethrow immediately
+    if (err?.message?.includes('time slot') || err?.message?.includes('reserved') || err?.message?.includes('available')) {
+      throw err;
+    }
+    console.warn('Backend API error, falling back:', err);
   }
 
-  // 3. Send to Supabase if configured
+  // Fallback if backend was unreachable (e.g. static preview)
+  if (!finalItem) {
+    finalItem = addBooking({
+      ...booking,
+      ref: bookingRef,
+    } as any);
+  }
+
+  // 2. Send to Supabase if configured
   if (isSupabaseConfigured) {
     const sb = getSupabase();
     if (sb) {
@@ -480,13 +490,15 @@ export async function updateBookingInDb(
   id: string, 
   updates: Partial<BookingItem>,
   targetRef?: string
-): Promise<void> {
+): Promise<BookingItem | null> {
   const refToMatch = targetRef || (id.startsWith('WD-') ? id : undefined);
+  let serverUpdatedItem: any = null;
 
   // 1. Update Backend API
   try {
+    let res: Response | null = null;
     if (refToMatch) {
-      await fetch(`/api/bookings/ref/${encodeURIComponent(refToMatch)}`, {
+      res = await fetch(`/api/bookings/ref/${encodeURIComponent(refToMatch)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -494,14 +506,24 @@ export async function updateBookingInDb(
     } else {
       const numId = parseInt(id.replace(/^b-/, ''), 10);
       if (!isNaN(numId)) {
-        await fetch(`/api/bookings/${numId}`, {
+        res = await fetch(`/api/bookings/${numId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updates),
         });
       }
     }
-  } catch (err) {
+    if (res) {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || 'Failed to update booking');
+      }
+      serverUpdatedItem = await res.json();
+    }
+  } catch (err: any) {
+    if (err?.message?.includes('already booked') || err?.message?.includes('available')) {
+      throw err;
+    }
     console.warn('Failed to patch to Backend API:', err);
   }
 
@@ -512,6 +534,8 @@ export async function updateBookingInDb(
       try {
         const sbUpdates: Record<string, any> = {};
         if (updates.status) sbUpdates.status = updates.status;
+        if (updates.paymentStatus) sbUpdates.payment_status = updates.paymentStatus;
+        else if (serverUpdatedItem?.paymentStatus) sbUpdates.payment_status = serverUpdatedItem.paymentStatus;
         if (updates.studentName) sbUpdates.student_name = updates.studentName;
         if (updates.phone) sbUpdates.phone = updates.phone;
         if (updates.email) sbUpdates.email = updates.email;
@@ -522,6 +546,7 @@ export async function updateBookingInDb(
         if (updates.packageTitle) sbUpdates.package_title = updates.packageTitle;
         if (updates.packagePrice) sbUpdates.package_price = updates.packagePrice;
         if (updates.notes !== undefined) sbUpdates.notes = updates.notes;
+        else if (serverUpdatedItem?.notes) sbUpdates.notes = serverUpdatedItem.notes;
         if (updates.isRescheduled !== undefined) sbUpdates.is_rescheduled = updates.isRescheduled;
 
         if (refToMatch) {
@@ -541,10 +566,17 @@ export async function updateBookingInDb(
   }
 
   // 3. Update local state
-  updateBookingDetails(id, updates);
+  const mergedUpdates: Partial<BookingItem> = {
+    ...updates,
+    ...(serverUpdatedItem?.paymentStatus ? { paymentStatus: serverUpdatedItem.paymentStatus } : {}),
+    ...(serverUpdatedItem?.notes ? { notes: serverUpdatedItem.notes } : {}),
+  };
+  updateBookingDetails(id, mergedUpdates);
   if (refToMatch && refToMatch !== id) {
-    updateBookingDetails(refToMatch, updates);
+    updateBookingDetails(refToMatch, mergedUpdates);
   }
+
+  return serverUpdatedItem;
 }
 
 // Delete booking from backend API, Supabase, and local storage

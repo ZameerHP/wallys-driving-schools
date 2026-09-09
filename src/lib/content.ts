@@ -3,7 +3,7 @@ export const INSTRUCTORS = [
     id: 'wallsy',
     name: 'Wallsy',
     role: "Wally's Driving School Instructor",
-    image: '/assets/images/about-instructor.jpg'
+    image: '/instructor.jpg'
   }
 ];
 

@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { MapPin, Navigation, CheckCircle2, MessageCircle, Car } from 'lucide-react';
+import { CoverageMap } from '../components/maps/CoverageMap';
 
 const PRIMARY_SUBURBS = [
   'Rooty Hill',
@@ -95,72 +96,14 @@ export function CoverageArea() {
             </div>
           </motion.div>
 
-          {/* Interactive Map Replacement - Premium Blue Circular Visualization */}
+          {/* Interactive Google Map with Transparent Blue Coverage Circle */}
           <motion.div
             initial={{ opacity: 0, x: 30 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
-            className="lg:col-span-2 bg-white rounded-[40px] p-6 shadow-2xl border border-black/5 overflow-hidden h-[640px] flex flex-col justify-center items-center relative"
+            className="lg:col-span-2 flex flex-col"
           >
-            <div className="absolute top-4 left-6 flex items-center gap-2 text-xs font-bold text-brand-black z-10">
-              <Navigation className="w-4 h-4 text-brand-red" />
-              Service Area Visualization
-            </div>
-            <div className="absolute top-4 right-6 text-xs text-brand-black/50 z-10">Rooty Hill, NSW 2766</div>
-            
-            {/* The Visualization Canvas */}
-            <div className="relative w-full max-w-[500px] aspect-square flex items-center justify-center mt-6">
-              
-              {/* Outer Glow / Layer */}
-              <div className="absolute inset-0 bg-blue-50 rounded-full animate-[pulse-glow_4s_ease-in-out_infinite] opacity-60"></div>
-              
-              {/* Middle Layer */}
-              <div className="absolute inset-8 bg-blue-100/80 rounded-full border border-blue-200/50 backdrop-blur-sm shadow-[0_0_40px_rgba(59,130,246,0.15)] flex items-center justify-center">
-                {/* Center Core */}
-                <div className="absolute inset-20 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full shadow-[0_10px_30px_rgba(59,130,246,0.4)] border-4 border-white/20 flex flex-col items-center justify-center text-white z-20">
-                  <MapPin className="w-8 h-8 mb-2 drop-shadow-md" />
-                  <span className="font-display font-bold text-lg tracking-wide drop-shadow-md text-center leading-tight">Wally's<br/>Driving School</span>
-                  <span className="text-[10px] font-medium tracking-widest uppercase mt-1 opacity-90">Rooty Hill Base</span>
-                </div>
-              </div>
-
-              {/* Orbiting Suburb Nodes */}
-              {PRIMARY_SUBURBS.map((suburb, i) => {
-                const total = PRIMARY_SUBURBS.length;
-                const angle = (i * (360 / total)) * (Math.PI / 180);
-                // Adjust radius based on screen size implicitly by using % based positioning or fixed with transform
-                const radiusX = 42; // Percentage from center
-                const radiusY = 42;
-                
-                const left = 50 + radiusX * Math.cos(angle);
-                const top = 50 + radiusY * Math.sin(angle);
-                
-                return (
-                  <motion.div
-                    key={suburb}
-                    initial={{ opacity: 0, scale: 0 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: 0.4 + (i * 0.05), type: "spring" }}
-                    className="absolute z-30 flex flex-col items-center justify-center"
-                    style={{
-                      left: `${left}%`,
-                      top: `${top}%`,
-                      transform: 'translate(-50%, -50%)'
-                    }}
-                  >
-                    <div className="w-2.5 h-2.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,0.8)] border-2 border-white mb-1.5" />
-                    <span className="text-[11px] font-bold text-slate-700 bg-white/90 backdrop-blur-md px-2.5 py-1 rounded-full shadow-sm border border-slate-100 whitespace-nowrap">
-                      {suburb}
-                    </span>
-                  </motion.div>
-                );
-              })}
-              
-              {/* Decorative concentric rings */}
-              <div className="absolute inset-0 border border-blue-200/40 rounded-full scale-110 pointer-events-none"></div>
-              <div className="absolute inset-0 border border-blue-200/20 rounded-full scale-125 pointer-events-none border-dashed"></div>
-
-            </div>
+            <CoverageMap />
           </motion.div>
         </div>
       </div>
