@@ -1,7 +1,7 @@
 export const INSTRUCTORS = [
   {
-    id: 'wallsy',
-    name: 'Wallsy',
+    id: 'wally',
+    name: 'Wally',
     role: "Wally's Driving School Instructor",
     image: '/instructor.jpg'
   }

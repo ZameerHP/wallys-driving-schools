@@ -39,6 +39,13 @@ import { validateInternationalPhone, validateWorkingEmail } from '../lib/validat
 import { Country, DEFAULT_COUNTRY } from '../lib/countries';
 import { PhoneInputWithCountry } from '../components/PhoneInputWithCountry';
 import { PACKAGES } from '../lib/content';
+import { 
+  getPackageSpecs, 
+  generateSlotsForDuration, 
+  checkSlotAvailability, 
+  ScheduledLesson,
+  formatDurationDisplay
+} from '../lib/bookingSlots';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -182,6 +189,9 @@ export function BookNow() {
   // Selections
   const [selectedPackage, setSelectedPackage] = useState<any>(PACKAGES[0]);
   
+  // Package Specifications
+  const packageSpecs = useMemo(() => getPackageSpecs(selectedPackage), [selectedPackage]);
+
   // Date & Time
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
@@ -191,6 +201,69 @@ export function BookNow() {
     return d.toISOString().split('T')[0];
   });
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>('9:00 AM – 10:00 AM');
+
+  // Multi-Lesson Package Scheduling State (each lesson has distinct Date + Time)
+  const [scheduledLessons, setScheduledLessons] = useState<ScheduledLesson[]>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    return [{ lessonNumber: 1, date: d.toISOString().split('T')[0], time: '9:00 AM – 10:00 AM' }];
+  });
+  const [activeLessonIndex, setActiveLessonIndex] = useState<number>(0);
+
+  // Sync scheduled lessons whenever the selected package changes
+  useEffect(() => {
+    const specs = getPackageSpecs(selectedPackage);
+    const slots = generateSlotsForDuration(specs.durationMinutes);
+    const defaultSlot = slots[2]?.slot || slots[0]?.slot || '9:00 AM – 10:00 AM';
+
+    setScheduledLessons(prev => {
+      const count = specs.lessonCount;
+      const baseDate = new Date();
+      baseDate.setDate(baseDate.getDate() + 2);
+
+      const next: ScheduledLesson[] = [];
+      for (let i = 0; i < count; i++) {
+        const existing = prev[i];
+        if (existing) {
+          const isValid = slots.some(s => s.slot === existing.time);
+          next.push({
+            lessonNumber: i + 1,
+            date: existing.date,
+            time: isValid ? existing.time : defaultSlot
+          });
+        } else {
+          const d = new Date(baseDate);
+          d.setDate(d.getDate() + (i * 2));
+          next.push({
+            lessonNumber: i + 1,
+            date: d.toISOString().split('T')[0],
+            time: defaultSlot
+          });
+        }
+      }
+      return next;
+    });
+    setActiveLessonIndex(0);
+  }, [selectedPackage?.id]);
+
+  // Active lesson helper
+  const activeLesson = scheduledLessons[activeLessonIndex] || scheduledLessons[0] || {
+    lessonNumber: 1,
+    date: selectedDate,
+    time: selectedTimeSlot
+  };
+
+  // Keep selectedDate and selectedTimeSlot in sync with active lesson
+  useEffect(() => {
+    if (activeLesson) {
+      if (activeLesson.date && activeLesson.date !== selectedDate) {
+        setSelectedDate(activeLesson.date);
+      }
+      if (activeLesson.time && activeLesson.time !== selectedTimeSlot) {
+        setSelectedTimeSlot(activeLesson.time);
+      }
+    }
+  }, [activeLessonIndex, activeLesson?.date, activeLesson?.time]);
 
   // Cart Items
   const [cartItems, setCartItems] = useState<CartItem[]>([
@@ -225,19 +298,60 @@ export function BookNow() {
   const [isRefreshingSlots, setIsRefreshingSlots] = useState(false);
   const [slotConflictError, setSlotConflictError] = useState<string | null>(null);
 
+  // Determine if Car Hire package is selected
+  const isCarHire = Boolean(selectedPackage?.id?.includes('test') || selectedPackage?.label?.toLowerCase().includes('car hire') || selectedPackage?.title?.toLowerCase().includes('car hire'));
+
   // Helper to normalize any date format (YYYY-MM-DD, DD/MM/YYYY, '15 September 2026')
   const normalizeDateStr = (rawDate: string): string => {
     if (!rawDate) return '';
     const trimmed = rawDate.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
 
-    if (trimmed.includes('/')) {
-      const parts = trimmed.split('/').map(p => p.trim());
-      if (parts.length === 3) {
-        if (parts[0].length === 4) {
-          return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-        }
-        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    // Format: DD/MM/YYYY or DD-MM-YYYY
+    const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (dmyMatch) {
+      const day = dmyMatch[1].padStart(2, '0');
+      const month = dmyMatch[2].padStart(2, '0');
+      const year = dmyMatch[3];
+      return `${year}-${month}-${day}`;
+    }
+
+    const MONTHS: Record<string, string> = {
+      jan: '01', january: '01',
+      feb: '02', february: '02',
+      mar: '03', march: '03',
+      apr: '04', april: '04',
+      may: '05',
+      jun: '06', june: '06',
+      jul: '07', july: '07',
+      aug: '08', august: '08',
+      sep: '09', september: '09',
+      oct: '10', october: '10',
+      nov: '11', november: '11',
+      dec: '12', december: '12'
+    };
+
+    // Format: "15 September 2026", "15 September", "15 Sep 2026"
+    const textMatch1 = trimmed.match(/^(\d{1,2})\s+([a-zA-Z]+)(?:,?\s+(\d{4}))?$/i);
+    if (textMatch1) {
+      const day = textMatch1[1].padStart(2, '0');
+      const mon = textMatch1[2].toLowerCase();
+      const month = MONTHS[mon];
+      const year = textMatch1[3] || new Date().getFullYear().toString();
+      if (month) {
+        return `${year}-${month}-${day}`;
+      }
+    }
+
+    // Format: "September 15, 2026", "September 15"
+    const textMatch2 = trimmed.match(/^([a-zA-Z]+)\s+(\d{1,2})(?:,?\s+(\d{4}))?$/i);
+    if (textMatch2) {
+      const mon = textMatch2[1].toLowerCase();
+      const day = textMatch2[2].padStart(2, '0');
+      const month = MONTHS[mon];
+      const year = textMatch2[3] || new Date().getFullYear().toString();
+      if (month) {
+        return `${year}-${month}-${day}`;
       }
     }
 
@@ -248,50 +362,70 @@ export function BookNow() {
       const dd = String(d.getDate()).padStart(2, '0');
       return `${yyyy}-${mm}-${dd}`;
     }
-    return trimmed;
+    return trimmed.toLowerCase();
   };
 
   // Robust time parser handling ranges & single timestamps
-  const parseTime = (timeStr: string): { start: number; end: number } | null => {
+  const parseTime = (timeStr: string, defaultDurationMinutes = 60): { start: number; end: number } | null => {
     if (!timeStr) return null;
     const clean = timeStr.trim().replace(/\s+/g, ' ');
 
-    const rangeMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+    const rangeMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i) ||
+                       clean.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+
     if (rangeMatch) {
-      let [_, h1, m1, ap1, h2, m2, ap2] = rangeMatch;
-      let startHours = parseInt(h1, 10);
-      const startMins = parseInt(m1 || '0', 10);
-      let endHours = parseInt(h2, 10);
-      const endMins = parseInt(m2 || '0', 10);
-
-      if (!ap1 && ap2) ap1 = ap2;
-
-      if (ap1) {
-        if (ap1.toUpperCase() === 'PM' && startHours < 12) startHours += 12;
-        if (ap1.toUpperCase() === 'AM' && startHours === 12) startHours = 0;
-      }
-      if (ap2) {
-        if (ap2.toUpperCase() === 'PM' && endHours < 12) endHours += 12;
-        if (ap2.toUpperCase() === 'AM' && endHours === 12) endHours = 0;
-      }
-
-      return {
-        start: startHours * 60 + startMins,
-        end: endHours * 60 + endMins
+      const parsePart = (hStr: string, mStr: string | undefined, ampmStr: string | undefined) => {
+        let h = parseInt(hStr, 10);
+        const m = mStr ? parseInt(mStr, 10) : 0;
+        const ampm = (ampmStr || '').toUpperCase();
+        if (ampm === 'PM' && h < 12) h += 12;
+        if (ampm === 'AM' && h === 12) h = 0;
+        return h * 60 + m;
       };
+
+      let startAmpm = rangeMatch[3];
+      let endAmpm = rangeMatch[6];
+
+      const startH = parseInt(rangeMatch[1], 10);
+      const endH = parseInt(rangeMatch[4], 10);
+
+      // If neither has AM/PM, infer daytime driving school hours (7:00 AM - 7:00 PM)
+      if (!startAmpm && !endAmpm) {
+        startAmpm = (startH >= 7 && startH <= 12) ? 'AM' : 'PM';
+        endAmpm = (endH >= 7 && endH <= 12) ? 'AM' : 'PM';
+      } else if (!startAmpm && endAmpm) {
+        if (endAmpm.toUpperCase() === 'PM' && startH <= endH && startH >= 12) {
+          startAmpm = 'PM';
+        } else if (endAmpm.toUpperCase() === 'PM' && startH > endH && startH <= 12) {
+          startAmpm = 'AM';
+        } else {
+          startAmpm = endAmpm;
+        }
+      } else if (startAmpm && !endAmpm) {
+        if (startAmpm.toUpperCase() === 'AM' && endH < startH) {
+          endAmpm = 'PM';
+        } else {
+          endAmpm = startAmpm;
+        }
+      }
+
+      const start = parsePart(rangeMatch[1], rangeMatch[2], startAmpm);
+      const end = parsePart(rangeMatch[4], rangeMatch[5], endAmpm);
+      return { start, end: end > start ? end : start + defaultDurationMinutes };
     }
 
-    const singleMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+    const singleMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
     if (singleMatch) {
-      let [_, h, m, ap] = singleMatch;
-      let hours = parseInt(h, 10);
-      const mins = parseInt(m || '0', 10);
-      if (ap) {
-        if (ap.toUpperCase() === 'PM' && hours < 12) hours += 12;
-        if (ap.toUpperCase() === 'AM' && hours === 12) hours = 0;
+      let h = parseInt(singleMatch[1], 10);
+      const m = singleMatch[2] ? parseInt(singleMatch[2], 10) : 0;
+      let ampm = (singleMatch[3] || '').toUpperCase();
+      if (!ampm) {
+        ampm = (h >= 7 && h <= 12) ? 'AM' : 'PM';
       }
-      const start = hours * 60 + mins;
-      return { start, end: start + 60 };
+      if (ampm === 'PM' && h < 12) h += 12;
+      if (ampm === 'AM' && h === 12) h = 0;
+      const start = h * 60 + m;
+      return { start, end: start + defaultDurationMinutes };
     }
 
     return null;
@@ -317,6 +451,13 @@ export function BookNow() {
       setIsRefreshingSlots(false);
     }
   }, []);
+
+  // Immediately refresh availability when customer changes date
+  useEffect(() => {
+    if (selectedDate) {
+      refreshAvailability(selectedDate);
+    }
+  }, [selectedDate, refreshAvailability]);
 
   // Poll availability every 10s to keep slot view real-time
   useEffect(() => {
@@ -350,6 +491,55 @@ export function BookNow() {
     }
     return true;
   }, [bookedSlots]);
+
+  // Generate dynamic slots based on package duration (e.g. 60m, 120m, 150m for 2.5h test, 210m for 3.5h test)
+  const availableSlotsForPackage = useMemo(() => {
+    return generateSlotsForDuration(packageSpecs.durationMinutes);
+  }, [packageSpecs.durationMinutes]);
+
+  // Check availability including self-conflict within the same multi-lesson package
+  const getSlotAvailabilityStatus = useCallback((slotStr: string) => {
+    return checkSlotAvailability(
+      selectedDate,
+      slotStr,
+      bookedSlots,
+      packageSpecs.lessonCount > 1 ? scheduledLessons : undefined,
+      packageSpecs.lessonCount > 1 ? activeLesson.lessonNumber : undefined
+    );
+  }, [selectedDate, bookedSlots, packageSpecs.lessonCount, scheduledLessons, activeLesson.lessonNumber]);
+
+  // Update date for the currently active lesson
+  const handleSelectCalendarDate = (dateStr: string) => {
+    setSelectedDate(dateStr);
+    refreshAvailability(dateStr);
+    setSlotConflictError(null);
+    setScheduledLessons(prev => {
+      const next = [...prev];
+      if (next[activeLessonIndex]) {
+        next[activeLessonIndex] = {
+          ...next[activeLessonIndex],
+          date: dateStr
+        };
+      }
+      return next;
+    });
+  };
+
+  // Update time for the currently active lesson
+  const handleSelectTimeSlot = (slotStr: string) => {
+    setSelectedTimeSlot(slotStr);
+    setSlotConflictError(null);
+    setScheduledLessons(prev => {
+      const next = [...prev];
+      if (next[activeLessonIndex]) {
+        next[activeLessonIndex] = {
+          ...next[activeLessonIndex],
+          time: slotStr
+        };
+      }
+      return next;
+    });
+  };
 
 
   // URL params for Stripe redirection
@@ -449,11 +639,29 @@ export function BookNow() {
     if (activeStepId === 'service') {
       setActiveStepId('datetime');
     } else if (activeStepId === 'datetime') {
-      // Validate slot availability before allowing forward movement
-      if (!isSlotAvailable(selectedDate, selectedTimeSlot)) {
-        setSlotConflictError("This time slot is no longer available. Please select another time.");
-        refreshAvailability(selectedDate);
+      // Validate that every lesson in multi-lesson package has a selected date and time
+      const incomplete = scheduledLessons.find(l => !l.date || !l.time);
+      if (incomplete) {
+        setSlotConflictError(`Please select a date and time for Lesson ${incomplete.lessonNumber} of ${packageSpecs.lessonCount}.`);
+        setActiveLessonIndex(incomplete.lessonNumber - 1);
         return;
+      }
+
+      // Authoritative batch availability check against database
+      try {
+        const checkRes = await fetch('/api/check-slots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lessons: scheduledLessons })
+        });
+        if (!checkRes.ok) {
+          const checkData = await checkRes.json();
+          setSlotConflictError(checkData.message || "One or more of your selected lesson times are no longer available. Please choose another time.");
+          refreshAvailability(selectedDate);
+          return;
+        }
+      } catch (err) {
+        console.warn('Real-time batch slot check warning:', err);
       }
 
       // Sync or update cart item
@@ -465,10 +673,12 @@ export function BookNow() {
         {
           id: `item-${Date.now()}`,
           title: itemTitle,
-          subtitle: selectedPackage?.category || 'Driving Lessons',
+          subtitle: packageSpecs.lessonCount > 1
+            ? `${packageSpecs.lessonCount} Lessons (${packageSpecs.lessonCount * 3} Log Book Hours)`
+            : (selectedPackage?.label || selectedPackage?.category || 'Driving Lessons'),
           price: itemPrice,
-          date: selectedDate,
-          time: selectedTimeSlot,
+          date: scheduledLessons[0]?.date || selectedDate,
+          time: scheduledLessons[0]?.time || selectedTimeSlot,
           image: itemImg,
           isPackage: true
         }
@@ -498,9 +708,7 @@ export function BookNow() {
 
       if (!address.trim()) errors.address = 'Pickup address is required';
       if (!suburbSearch.trim()) errors.suburb = 'Service suburb is required';
-      if (isCarHire && (!selectedTestCentre || !selectedTestCentre.trim())) {
-        errors.testCentre = 'Please select your RMS test centre';
-      }
+      // Per business rules: Test Centre must not be required when Car Hire is selected
 
       if (Object.keys(errors).length > 0) {
         setInfoErrors(errors);
@@ -508,20 +716,22 @@ export function BookNow() {
       }
 
       // Authoritative database check right before proceeding to Payment
-      const primaryItem = cartItems[0];
-      const targetDate = primaryItem?.date || selectedDate;
-      const targetTime = primaryItem?.time || selectedTimeSlot;
-
       try {
-        const checkRes = await fetch(`/api/check-slot?date=${encodeURIComponent(targetDate)}&time=${encodeURIComponent(targetTime)}&_t=${Date.now()}`, { cache: 'no-store' });
-        if (checkRes.ok) {
+        const checkRes = await fetch('/api/check-slots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lessons: scheduledLessons,
+            email: emailCheck.email,
+            phone: phoneCheck.formatted
+          })
+        });
+        if (!checkRes.ok) {
           const checkData = await checkRes.json();
-          if (!checkData.available) {
-            setSlotConflictError("This time slot is no longer available. Please select another time.");
-            refreshAvailability(targetDate);
-            setActiveStepId('datetime');
-            return;
-          }
+          setSlotConflictError(checkData.message || "One or more of your selected lesson times are no longer available. Please select another time.");
+          refreshAvailability(selectedDate);
+          setActiveStepId('datetime');
+          return;
         }
       } catch (err) {
         console.warn('Real-time check error:', err);
@@ -637,16 +847,22 @@ export function BookNow() {
 
     // 1. Authoritative real-time check against database immediately before charging or creating booking
     try {
-      const checkRes = await fetch(`/api/check-slot?date=${encodeURIComponent(targetDate)}&time=${encodeURIComponent(targetTime)}&_t=${Date.now()}`, { cache: 'no-store' });
-      if (checkRes.ok) {
+      const checkRes = await fetch('/api/check-slots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lessons: scheduledLessons,
+          email,
+          phone: `${countryCode} ${phone}`
+        })
+      });
+      if (!checkRes.ok) {
         const checkData = await checkRes.json();
-        if (!checkData.available) {
-          setIsProcessing(false);
-          setSlotConflictError("This time slot is no longer available. Please select another time.");
-          refreshAvailability(targetDate);
-          setActiveStepId('datetime');
-          return;
-        }
+        setIsProcessing(false);
+        setSlotConflictError(checkData.message || "One or more of your selected lesson times are no longer available. Please choose another time.");
+        refreshAvailability(targetDate);
+        setActiveStepId('datetime');
+        return;
       }
     } catch (err) {
       console.warn('Real-time check before submission failed:', err);
@@ -669,7 +885,8 @@ export function BookNow() {
             bookingTime: targetTime,
             instructorName: 'Certified Instructor',
             isPackage: Boolean(selectedPackage),
-            packageHours: selectedPackage?.logbookHours || 1
+            packageHours: selectedPackage?.logbookHours || 1,
+            lessons: scheduledLessons
           })
         });
 
@@ -717,10 +934,14 @@ export function BookNow() {
         date: targetDate,
         time: targetTime,
         status: 'Pending',
-        notes: `Pickup: ${address || 'Home pickup'}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}. Payment: ${simulateMock ? 'MOCK CARD (TEST)' : paymentMethod.toUpperCase()}`
+        notes: `Pickup: ${address || 'Home pickup'}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}. Payment: ${simulateMock ? 'MOCK CARD (TEST)' : paymentMethod.toUpperCase()}`,
+        lessons: scheduledLessons
       });
 
-      setConfirmedBooking(newBooking);
+      setConfirmedBooking({
+        ...newBooking,
+        lessons: scheduledLessons
+      });
     } catch (err: any) {
       console.error('Error creating booking in DB:', err);
       setSlotConflictError(err?.message || "This time slot is no longer available. Please select another time.");
@@ -834,10 +1055,26 @@ export function BookNow() {
                   <span className="text-brand-black/60">Selected Package:</span>
                   <span className="font-bold text-brand-black">{confirmedBooking.packageTitle}</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-brand-black/60">Scheduled Date & Time:</span>
-                  <span className="font-bold text-brand-black">{confirmedBooking.date} · {confirmedBooking.time}</span>
-                </div>
+                {confirmedBooking.lessons && confirmedBooking.lessons.length > 1 ? (
+                  <div className="pt-2 border-t border-black/5">
+                    <span className="text-xs font-bold text-brand-black block mb-1.5">
+                      Confirmed Lesson Schedule ({confirmedBooking.lessons.length} Lessons):
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                      {confirmedBooking.lessons.map((l: any, idx: number) => (
+                        <div key={idx} className="bg-white p-2 rounded-lg border border-black/10 flex justify-between text-xs">
+                          <span className="font-bold text-brand-black">Lesson {l.lessonNumber}</span>
+                          <span className="text-brand-black/70">{l.date} · {l.time}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex justify-between items-center">
+                    <span className="text-brand-black/60">Scheduled Date & Time:</span>
+                    <span className="font-bold text-brand-black">{confirmedBooking.date} · {confirmedBooking.time}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center">
                   <span className="text-brand-black/60">Service Suburb:</span>
                   <span className="font-bold text-brand-black">{confirmedBooking.suburb}</span>
@@ -1248,8 +1485,121 @@ export function BookNow() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="space-y-3"
+                      className="space-y-4"
                     >
+                      {/* Multi-Lesson Header & Tabs */}
+                      {packageSpecs.lessonCount > 1 ? (
+                        <div className="bg-brand-offwhite rounded-2xl p-4 border border-black/10">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-black/5">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold uppercase tracking-wider text-brand-red bg-brand-red/10 px-2 py-0.5 rounded-full">
+                                  Multi-Lesson Package
+                                </span>
+                                <h3 className="text-sm sm:text-base font-display font-black text-brand-black">
+                                  Schedule Each Lesson Separately
+                                </h3>
+                              </div>
+                              <p className="text-xs text-brand-black/60 mt-0.5">
+                                Select a distinct date and start time for every lesson in your {packageSpecs.lessonCount}-lesson package.
+                              </p>
+                            </div>
+                            <div className="shrink-0 flex items-center gap-1.5 bg-white border border-black/10 px-3 py-1.5 rounded-xl text-xs font-bold text-brand-black">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-brand-red" />
+                              <span>
+                                {scheduledLessons.filter(l => l.date && l.time).length} of {packageSpecs.lessonCount} Scheduled
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Lesson Selector Pills */}
+                          <div className="pt-3">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-brand-black/50 block mb-2">
+                              Select lesson to schedule:
+                            </span>
+                            <div className="flex flex-wrap gap-2">
+                              {scheduledLessons.map((l, idx) => {
+                                const isActive = idx === activeLessonIndex;
+                                const isFilled = Boolean(l.date && l.time);
+
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveLessonIndex(idx);
+                                      setSelectedDate(l.date);
+                                      setSelectedTimeSlot(l.time);
+                                      refreshAvailability(l.date);
+                                      setSlotConflictError(null);
+                                    }}
+                                    className={cn(
+                                      "px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer",
+                                      isActive
+                                        ? "bg-brand-red text-white border-brand-red shadow-sm shadow-brand-red/30 scale-105"
+                                        : isFilled
+                                        ? "bg-white text-brand-black border-black/15 hover:border-brand-red/50 hover:bg-black/5"
+                                        : "bg-black/[0.03] text-black/50 border-black/10 hover:border-black/20"
+                                    )}
+                                  >
+                                    <span>Lesson {l.lessonNumber}</span>
+                                    {isFilled ? (
+                                      <Check className={cn("w-3 h-3", isActive ? "text-white" : "text-emerald-600")} />
+                                    ) : (
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Active Lesson Status Banner */}
+                          <div className="mt-3 p-2.5 bg-white rounded-xl border border-black/10 flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-brand-red animate-pulse" />
+                              <span className="font-bold text-brand-black">
+                                Currently Setting Lesson {activeLesson.lessonNumber} of {packageSpecs.lessonCount}:
+                              </span>
+                              <span className="text-brand-black/70">
+                                {activeLesson.date} · {activeLesson.time}
+                              </span>
+                            </div>
+                            {activeLessonIndex < packageSpecs.lessonCount - 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextIdx = activeLessonIndex + 1;
+                                  setActiveLessonIndex(nextIdx);
+                                  const nextL = scheduledLessons[nextIdx];
+                                  if (nextL) {
+                                    setSelectedDate(nextL.date);
+                                    setSelectedTimeSlot(nextL.time);
+                                    refreshAvailability(nextL.date);
+                                  }
+                                }}
+                                className="text-brand-red hover:underline font-bold text-xs"
+                              >
+                                Next Lesson →
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : packageSpecs.isContinuousTestPackage ? (
+                        /* Continuous Test Package Banner */
+                        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-3.5 flex items-start gap-3">
+                          <Clock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                          <div>
+                            <h4 className="text-xs sm:text-sm font-bold text-amber-950">
+                              Continuous {formatDurationDisplay(packageSpecs.durationMinutes)} Test Package Booking Block
+                            </h4>
+                            <p className="text-[11px] text-amber-900/80 mt-0.5">
+                              Includes RMS test car hire + {packageSpecs.durationMinutes === 150 ? '1-hour' : '2-hour'} pre-test warmup lesson. Wally’s vehicle is reserved continuously for this entire duration.
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+
                       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                         
                         {/* Interactive Calendar (Mon-Sun) */}
@@ -1323,6 +1673,11 @@ export function BookNow() {
                               const isSelected = selectedDate === item.dateStr;
                               const isUnavailable = item.isPast;
 
+                              // Check if any other lesson is booked on this date
+                              const otherLessonsOnDate = packageSpecs.lessonCount > 1 
+                                ? scheduledLessons.filter(l => l.date === item.dateStr && l.lessonNumber !== activeLesson.lessonNumber)
+                                : [];
+
                               return (
                                 <button
                                   key={idx}
@@ -1330,13 +1685,11 @@ export function BookNow() {
                                   disabled={isUnavailable}
                                   onClick={() => {
                                     if (item.dateStr) {
-                                      setSelectedDate(item.dateStr);
-                                      refreshAvailability(item.dateStr);
-                                      setSlotConflictError(null);
+                                      handleSelectCalendarDate(item.dateStr);
                                     }
                                   }}
                                   className={cn(
-                                    "h-8 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer text-xs",
+                                    "relative h-8 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer text-xs",
                                     isSelected 
                                       ? "bg-brand-red text-white font-bold shadow-md shadow-brand-red/30 scale-105" 
                                       : isUnavailable 
@@ -1344,22 +1697,35 @@ export function BookNow() {
                                       : "hover:bg-white text-brand-black hover:shadow-sm"
                                   )}
                                 >
-                                  {item.day}
+                                  <span>{item.day}</span>
+                                  {otherLessonsOnDate.length > 0 && !isSelected && (
+                                    <span 
+                                      title={`Lesson ${otherLessonsOnDate.map(l => l.lessonNumber).join(', ')} scheduled`}
+                                      className="absolute bottom-0.5 w-1 h-1 rounded-full bg-brand-red"
+                                    />
+                                  )}
                                 </button>
                               );
                             })}
                           </div>
                         </div>
 
-                        {/* Half-Hour Time Slot Buttons */}
+                        {/* Available Slots Section */}
                         <div className="lg:col-span-5 flex flex-col justify-between">
                           <div>
-                            <span className="text-xs font-bold uppercase tracking-wider text-brand-black/60 mb-1.5 block">
-                              Available Half-Hour Slots ({selectedDate})
-                            </span>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-xs font-bold uppercase tracking-wider text-brand-black/60 block">
+                                {packageSpecs.lessonCount > 1 ? `Lesson ${activeLesson.lessonNumber} Slots` : 'Available Slots'} ({selectedDate})
+                              </span>
+                              <span className="text-[10px] text-brand-black/50 font-semibold">
+                                {formatDurationDisplay(packageSpecs.durationMinutes)} each
+                              </span>
+                            </div>
+                            
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5 max-h-[250px] overflow-y-auto pr-1">
-                              {TIME_SLOTS.map((slotObj, idx) => {
-                                const isAvailable = isSlotAvailable(selectedDate, slotObj.slot);
+                              {availableSlotsForPackage.map((slotObj, idx) => {
+                                const status = getSlotAvailabilityStatus(slotObj.slot);
+                                const isAvailable = status.available;
                                 const isSelected = selectedTimeSlot === slotObj.slot;
 
                                 return (
@@ -1369,8 +1735,7 @@ export function BookNow() {
                                     disabled={!isAvailable}
                                     onClick={() => {
                                       if (isAvailable) {
-                                        setSelectedTimeSlot(slotObj.slot);
-                                        setSlotConflictError(null);
+                                        handleSelectTimeSlot(slotObj.slot);
                                       }
                                     }}
                                     className={cn(
@@ -1390,7 +1755,9 @@ export function BookNow() {
                                       <Check className="w-3.5 h-3.5" />
                                     ) : !isAvailable ? (
                                       <span className="text-[9px] uppercase font-bold text-rose-600 bg-rose-100/70 px-1.5 py-0.5 rounded no-underline">
-                                        Booked
+                                        {status.reason === 'self_conflict' 
+                                          ? `In Lesson ${status.conflictingLesson}` 
+                                          : 'Booked'}
                                       </span>
                                     ) : null}
                                   </button>
@@ -1399,6 +1766,27 @@ export function BookNow() {
                             </div>
                           </div>
 
+                          {/* Advance lesson helper */}
+                          {packageSpecs.lessonCount > 1 && activeLessonIndex < packageSpecs.lessonCount - 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextIdx = activeLessonIndex + 1;
+                                setActiveLessonIndex(nextIdx);
+                                const nextL = scheduledLessons[nextIdx];
+                                if (nextL) {
+                                  setSelectedDate(nextL.date);
+                                  setSelectedTimeSlot(nextL.time);
+                                  refreshAvailability(nextL.date);
+                                }
+                              }}
+                              className="mt-2.5 w-full py-2 px-3 bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                            >
+                              <span>Next: Schedule Lesson {activeLessonIndex + 2} of {packageSpecs.lessonCount}</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
                           <div className="mt-3 p-2.5 bg-brand-offwhite rounded-xl border border-black/5 text-[11px] text-brand-black/70 flex items-center gap-2">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                             <span>Instructor Wally operates everyday 8:00 AM – 6:00 PM.</span>
@@ -1406,6 +1794,50 @@ export function BookNow() {
                         </div>
 
                       </div>
+
+                      {/* Multi-Lesson Summary Tray */}
+                      {packageSpecs.lessonCount > 1 && (
+                        <div className="mt-4 p-3 bg-brand-offwhite rounded-2xl border border-black/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-bold uppercase tracking-wider text-brand-black/70">
+                              Package Schedule Overview ({packageSpecs.lessonCount} Lessons)
+                            </span>
+                            <span className="text-[11px] font-semibold text-brand-black/50">
+                              Click any lesson to adjust its date/time
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                            {scheduledLessons.map((l, idx) => (
+                              <div 
+                                key={idx}
+                                onClick={() => {
+                                  setActiveLessonIndex(idx);
+                                  setSelectedDate(l.date);
+                                  setSelectedTimeSlot(l.time);
+                                  refreshAvailability(l.date);
+                                }}
+                                className={cn(
+                                  "p-2 rounded-xl border text-xs cursor-pointer transition-all",
+                                  idx === activeLessonIndex 
+                                    ? "bg-white border-brand-red shadow-sm ring-1 ring-brand-red" 
+                                    : "bg-white border-black/10 hover:border-black/30"
+                                )}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-brand-black">Lesson {l.lessonNumber}</span>
+                                  {l.date && l.time && <Check className="w-3 h-3 text-emerald-600" />}
+                                </div>
+                                <div className="text-[11px] text-brand-black/70 truncate mt-0.5">
+                                  {l.date}
+                                </div>
+                                <div className="text-[10px] text-brand-black/50 truncate">
+                                  {l.time}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </motion.div>
                   )}
 
@@ -1470,19 +1902,47 @@ export function BookNow() {
                                 <motion.div 
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: 'auto' }}
-                                  className="mt-3 pt-3 border-t border-black/5 text-xs text-brand-black/70 flex justify-between items-center"
+                                  className="mt-3 pt-3 border-t border-black/5 text-xs text-brand-black/70"
                                 >
-                                  <div>
-                                    <span>Pickup: Door-to-door in Western Sydney (NSW)</span>
-                                    <span className="block text-[11px] text-brand-black/50">Includes dual-control vehicle and certified instructor tuition.</span>
+                                  <div className="flex justify-between items-center">
+                                    <div>
+                                      <span>Pickup: Door-to-door in Western Sydney (NSW)</span>
+                                      <span className="block text-[11px] text-brand-black/50">Includes dual-control vehicle and certified instructor tuition.</span>
+                                    </div>
+                                    <button 
+                                      onClick={() => setCartItems([])}
+                                      className="text-red-500 hover:text-red-700 flex items-center gap-1 font-bold text-xs"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      Remove
+                                    </button>
                                   </div>
-                                  <button 
-                                    onClick={() => setCartItems([])}
-                                    className="text-red-500 hover:text-red-700 flex items-center gap-1 font-bold text-xs"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                    Remove
-                                  </button>
+
+                                  {/* Multi-Lesson Individual Schedule List */}
+                                  {packageSpecs.lessonCount > 1 && (
+                                    <div className="mt-3 pt-3 border-t border-black/5">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <span className="font-bold text-brand-black">
+                                          Scheduled Lessons ({packageSpecs.lessonCount} Lessons):
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => setActiveStepId('datetime')}
+                                          className="text-brand-red font-bold text-[11px] hover:underline cursor-pointer"
+                                        >
+                                          Edit Schedule
+                                        </button>
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                        {scheduledLessons.map((l, idx) => (
+                                          <div key={idx} className="bg-white p-2 rounded-xl border border-black/10 flex items-center justify-between text-xs">
+                                            <span className="font-bold text-brand-black">Lesson {l.lessonNumber}</span>
+                                            <span className="text-brand-black/70">{l.date} · {l.time}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </motion.div>
                               )}
                             </div>
@@ -1674,8 +2134,8 @@ export function BookNow() {
                           )}
                         </div>
 
-                        {/* Test Centre Searchable Dropdown */}
-                        {(selectedPackage?.id?.includes('test')) && (
+                        {/* Test Centre Searchable Dropdown - Hidden when Car Hire is selected */}
+                        {(!isCarHire && selectedPackage?.id?.includes('test')) && (
                         <div className="relative">
                           <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
                             Test Centre <span className="text-brand-red">*</span>
@@ -1798,7 +2258,8 @@ export function BookNow() {
                             bookingTime: selectedTimeSlot,
                             notes: `Pickup: ${address}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}.`,
                             packageTitle: cartItems[0]?.title || selectedPackage?.name || selectedPackage?.title || 'Driving Lesson',
-                            packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedPackage?.price || 65.00)
+                            packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedPackage?.price || 65.00),
+                            lessons: scheduledLessons
                           }}
                           onBack={() => setActiveStepId('info')}
                           onPaymentSuccess={(booking) => {

@@ -31,12 +31,19 @@ export const bookings = pgTable('bookings', {
   notes: text('notes'),
   paymentStatus: text('payment_status').default('unpaid').notNull(),
   stripeSessionId: text('stripe_session_id'),
+  reminderStatus: text('reminder_status').default('pending'),
+  reminderScheduledFor: text('reminder_scheduled_for'),
+  reminderSentAt: text('reminder_sent_at'),
+  reminderMessageId: text('reminder_message_id'),
+  reminderError: text('reminder_error'),
+  reminderRecipientPhone: text('reminder_recipient_phone'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({
   dateSlotIdx: index('booking_date_slot_idx').on(table.date, table.time),
   emailIdx: index('booking_email_idx').on(table.email),
   statusIdx: index('booking_status_idx').on(table.status),
+  reminderStatusIdx: index('booking_reminder_status_idx').on(table.reminderStatus),
 }));
 
 // Contact inquiry messages

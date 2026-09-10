@@ -24,6 +24,12 @@ const inMemoryBookings: any[] = [
     notes: 'Preparing for practical driving assessment at Rockingham DVS',
     paymentStatus: 'paid',
     stripeSessionId: null,
+    reminderStatus: 'scheduled',
+    reminderScheduledFor: '2026-06-15T00:00:00.000Z',
+    reminderSentAt: null,
+    reminderMessageId: null,
+    reminderError: null,
+    reminderRecipientPhone: '+61412345678',
     createdAt: new Date('2026-06-01T08:30:00Z'),
     updatedAt: new Date('2026-06-01T08:30:00Z'),
   },
@@ -44,6 +50,12 @@ const inMemoryBookings: any[] = [
     notes: 'PDA car hire package. DVS test scheduled at 10:05 AM',
     paymentStatus: 'paid',
     stripeSessionId: null,
+    reminderStatus: 'sent',
+    reminderScheduledFor: '2026-06-18T00:00:00.000Z',
+    reminderSentAt: '2026-06-18T00:00:05.000Z',
+    reminderMessageId: 'wamid.HBgM0434567890WA01',
+    reminderError: null,
+    reminderRecipientPhone: '+61434567890',
     createdAt: new Date('2026-06-03T14:20:00Z'),
     updatedAt: new Date('2026-06-03T14:20:00Z'),
   },
@@ -64,6 +76,12 @@ const inMemoryBookings: any[] = [
     notes: 'Initial lesson, automatic dual controls requested',
     paymentStatus: 'paid',
     stripeSessionId: null,
+    reminderStatus: 'scheduled',
+    reminderScheduledFor: '2026-06-20T01:30:00.000Z',
+    reminderSentAt: null,
+    reminderMessageId: null,
+    reminderError: null,
+    reminderRecipientPhone: '+61445678901',
     createdAt: new Date('2026-06-04T09:00:00Z'),
     updatedAt: new Date('2026-06-04T09:00:00Z'),
   },
@@ -124,6 +142,12 @@ function mapSupabaseRowToBooking(row: any): any {
     notes: row.notes || null,
     paymentStatus: payment,
     stripeSessionId: row.stripe_session_id || row.stripeSessionId || null,
+    reminderStatus: row.reminder_status || row.reminderStatus || (row.status === 'Confirmed' ? 'scheduled' : 'pending'),
+    reminderScheduledFor: row.reminder_scheduled_for || row.reminderScheduledFor || null,
+    reminderSentAt: row.reminder_sent_at || row.reminderSentAt || null,
+    reminderMessageId: row.reminder_message_id || row.reminderMessageId || null,
+    reminderError: row.reminder_error || row.reminderError || null,
+    reminderRecipientPhone: row.reminder_recipient_phone || row.reminderRecipientPhone || null,
     createdAt: row.created_at ? new Date(row.created_at) : new Date(),
     updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
   };
@@ -346,7 +370,6 @@ export function normalizeDate(dateStr: string): string {
     return `${year}-${month}-${day}`;
   }
 
-  // Format: "15 September 2026", "15 Sep 2026", "September 15, 2026"
   const MONTHS: Record<string, string> = {
     jan: '01', january: '01',
     feb: '02', february: '02',
@@ -362,12 +385,25 @@ export function normalizeDate(dateStr: string): string {
     dec: '12', december: '12'
   };
 
-  const textMatch = trimmed.match(/^(\d{1,2})\s+([a-zA-Z]+)(?:,?\s+(\d{4}))?$/i);
-  if (textMatch) {
-    const day = textMatch[1].padStart(2, '0');
-    const mon = textMatch[2].toLowerCase();
+  // Format: "15 September 2026", "15 September", "15 Sep 2026"
+  const textMatch1 = trimmed.match(/^(\d{1,2})\s+([a-zA-Z]+)(?:,?\s+(\d{4}))?$/i);
+  if (textMatch1) {
+    const day = textMatch1[1].padStart(2, '0');
+    const mon = textMatch1[2].toLowerCase();
     const month = MONTHS[mon];
-    const year = textMatch[3] || new Date().getFullYear().toString();
+    const year = textMatch1[3] || new Date().getFullYear().toString();
+    if (month) {
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  // Format: "September 15, 2026", "September 15"
+  const textMatch2 = trimmed.match(/^([a-zA-Z]+)\s+(\d{1,2})(?:,?\s+(\d{4}))?$/i);
+  if (textMatch2) {
+    const mon = textMatch2[1].toLowerCase();
+    const day = textMatch2[2].padStart(2, '0');
+    const month = MONTHS[mon];
+    const year = textMatch2[3] || new Date().getFullYear().toString();
     if (month) {
       return `${year}-${month}-${day}`;
     }
@@ -388,10 +424,13 @@ export function normalizeDate(dateStr: string): string {
 // Parse time string into start and end minutes from midnight (handles ranges & single times)
 export function parseTimeInterval(timeStr: string, defaultDurationMinutes = 60): { start: number; end: number } | null {
   if (!timeStr) return null;
-  const trimmed = timeStr.trim();
+  const trimmed = timeStr.trim().replace(/\s+/g, ' ');
 
-  // 1. Range match: "10:00 AM – 11:00 AM" or "10:00 AM - 11:00 AM" or "8:00 AM – 9:00 AM"
-  const rangeMatch = trimmed.match(/(\d{1,2}):?(\d{2})?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2}):?(\d{2})?\s*(AM|PM)/i);
+  // 1. Range match: "10:00 AM – 11:00 AM", "10:00–11:00 AM", "10:00–11:00", "9:30–10:30", "10:15–11:15"
+  // Handles -, –, —, to
+  const rangeMatch = trimmed.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i) ||
+                     trimmed.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–—to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+
   if (rangeMatch) {
     const parsePart = (hStr: string, mStr: string | undefined, ampmStr: string | undefined) => {
       let h = parseInt(hStr, 10);
@@ -403,16 +442,28 @@ export function parseTimeInterval(timeStr: string, defaultDurationMinutes = 60):
     };
 
     let startAmpm = rangeMatch[3];
-    const endAmpm = rangeMatch[6];
-    if (!startAmpm && endAmpm) {
-      const startH = parseInt(rangeMatch[1], 10);
-      const endH = parseInt(rangeMatch[4], 10);
+    let endAmpm = rangeMatch[6];
+
+    const startH = parseInt(rangeMatch[1], 10);
+    const endH = parseInt(rangeMatch[4], 10);
+
+    // If neither has AM/PM, infer daytime driving school hours (7:00 AM - 7:00 PM)
+    if (!startAmpm && !endAmpm) {
+      startAmpm = (startH >= 7 && startH <= 12) ? 'AM' : 'PM';
+      endAmpm = (endH >= 7 && endH <= 12) ? 'AM' : 'PM';
+    } else if (!startAmpm && endAmpm) {
       if (endAmpm.toUpperCase() === 'PM' && startH <= endH && startH >= 12) {
         startAmpm = 'PM';
       } else if (endAmpm.toUpperCase() === 'PM' && startH > endH && startH <= 12) {
         startAmpm = 'AM';
       } else {
         startAmpm = endAmpm;
+      }
+    } else if (startAmpm && !endAmpm) {
+      if (startAmpm.toUpperCase() === 'AM' && endH < startH) {
+        endAmpm = 'PM';
+      } else {
+        endAmpm = startAmpm;
       }
     }
 
@@ -421,12 +472,15 @@ export function parseTimeInterval(timeStr: string, defaultDurationMinutes = 60):
     return { start, end: end > start ? end : start + defaultDurationMinutes };
   }
 
-  // 2. Single time match: "10:00 AM", "10:00AM", "10:00"
-  const singleMatch = trimmed.match(/(\d{1,2}):?(\d{2})?\s*(AM|PM)?/i);
+  // 2. Single time match: "10:00 AM", "10:00AM", "10:00", "9:30 AM", "11:00 AM"
+  const singleMatch = trimmed.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
   if (singleMatch) {
     let h = parseInt(singleMatch[1], 10);
     const m = singleMatch[2] ? parseInt(singleMatch[2], 10) : 0;
-    const ampm = (singleMatch[3] || '').toUpperCase();
+    let ampm = (singleMatch[3] || '').toUpperCase();
+    if (!ampm) {
+      ampm = (h >= 7 && h <= 12) ? 'AM' : 'PM';
+    }
     if (ampm === 'PM' && h < 12) h += 12;
     if (ampm === 'AM' && h === 12) h = 0;
     const start = h * 60 + m;
@@ -447,39 +501,32 @@ export function isTimeSlotConflicting(
   return (slot1.start < slot2.end + bufferMinutes) && (slot1.end > slot2.start - bufferMinutes);
 }
 
-// Async mutex lock manager to guarantee zero race condition double bookings
+// Strictly serialized async mutex lock manager to guarantee zero race condition double bookings
 export class BookingLockManager {
-  private locks = new Map<string, Promise<void>>();
-
-  async acquire(key: string): Promise<() => void> {
-    const normalizedKey = key.trim().toLowerCase();
-    while (this.locks.has(normalizedKey)) {
-      try {
-        await this.locks.get(normalizedKey);
-      } catch {}
-    }
-
-    let release: () => void = () => {};
-    const promise = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    this.locks.set(normalizedKey, promise);
-
-    return () => {
-      if (this.locks.get(normalizedKey) === promise) {
-        this.locks.delete(normalizedKey);
-      }
-      release();
-    };
-  }
+  private queues = new Map<string, Promise<any>>();
 
   async runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const release = await this.acquire(key);
+    const normalizedKey = key.trim().toLowerCase();
+    const prevPromise = this.queues.get(normalizedKey) || Promise.resolve();
+
+    let releaseLock: () => void;
+    const lockGate = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    const nextInQueue = prevPromise.then(() => lockGate, () => lockGate);
+    this.queues.set(normalizedKey, nextInQueue);
+
+    // Wait strictly for prior operation to finish completely
+    await prevPromise.catch(() => {});
+
     try {
       return await fn();
     } finally {
-      release();
+      releaseLock!();
+      if (this.queues.get(normalizedKey) === nextInQueue) {
+        this.queues.delete(normalizedKey);
+      }
     }
   }
 }
@@ -495,6 +542,8 @@ export async function checkSlotBooked(
   customerPhone?: string
 ): Promise<boolean> {
   const normTargetDate = normalizeDate(date);
+  if (!normTargetDate) return false;
+
   const targetInterval = parseTimeInterval(time);
   const cleanEmail = customerEmail?.trim().toLowerCase();
   const cleanPhone = customerPhone?.replace(/\D/g, '');
@@ -516,8 +565,9 @@ export async function checkSlotBooked(
     }
 
     // 3. Match date using canonical date normalization
+    // IMPORTANT: Different date + same time must be allowed!
     const bookingNormDate = normalizeDate(r.date);
-    if (normTargetDate && bookingNormDate && normTargetDate !== bookingNormDate) {
+    if (!bookingNormDate || bookingNormDate !== normTargetDate) {
       continue;
     }
 
@@ -564,6 +614,54 @@ export async function checkSlotBooked(
   return false;
 }
 
+// Authoritatively validate an entire batch of lessons for multi-lesson packages
+export async function checkMultipleSlotsBooked(
+  lessons: Array<{ date: string; time: string; lessonNumber?: number }>,
+  excludeRef?: string,
+  customerEmail?: string,
+  customerPhone?: string
+): Promise<{ available: boolean; conflicts: string[] }> {
+  const conflicts: string[] = [];
+
+  // Check each lesson against DB
+  for (let i = 0; i < lessons.length; i++) {
+    const l = lessons[i];
+    const num = l.lessonNumber || i + 1;
+    if (!l.date || !l.time) {
+      conflicts.push(`Lesson ${num} is missing date or time`);
+      continue;
+    }
+    const isBooked = await checkSlotBooked(l.date, l.time, excludeRef, customerEmail, customerPhone);
+    if (isBooked) {
+      conflicts.push(`Lesson ${num} (${l.date} at ${l.time}) is no longer available`);
+    }
+  }
+
+  // Check self-overlaps among lessons in this batch
+  for (let i = 0; i < lessons.length; i++) {
+    for (let j = i + 1; j < lessons.length; j++) {
+      const l1 = lessons[i];
+      const l2 = lessons[j];
+      const num1 = l1.lessonNumber || i + 1;
+      const num2 = l2.lessonNumber || j + 1;
+      if (l1.date && l2.date && l1.time && l2.time) {
+        if (normalizeDate(l1.date) === normalizeDate(l2.date)) {
+          const iv1 = parseTimeInterval(l1.time);
+          const iv2 = parseTimeInterval(l2.time);
+          if (iv1 && iv2 && isTimeSlotConflicting(iv1, iv2, 30)) {
+            conflicts.push(`Lesson ${num1} and Lesson ${num2} have overlapping times on ${l1.date}`);
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    available: conflicts.length === 0,
+    conflicts
+  };
+}
+
 // Insert new driving lesson booking with atomic locking and authoritative double-booking check
 export async function createBooking(data: {
   bookingRef: string;
@@ -581,6 +679,12 @@ export async function createBooking(data: {
   notes?: string | null;
   paymentStatus?: string;
   stripeSessionId?: string | null;
+  reminderStatus?: string | null;
+  reminderScheduledFor?: string | Date | null;
+  reminderSentAt?: string | Date | null;
+  reminderMessageId?: string | null;
+  reminderError?: string | null;
+  reminderRecipientPhone?: string | null;
 }) {
   const normDate = normalizeDate(data.date);
 
@@ -596,7 +700,7 @@ export async function createBooking(data: {
     );
 
     if (isTaken) {
-      const err: any = new Error("This time slot is no longer available. Please select another time.");
+      const err: any = new Error("This time slot was just booked by another customer. Please select another time.");
       err.code = "SLOT_ALREADY_BOOKED";
       err.status = 409;
       throw err;
@@ -619,6 +723,12 @@ export async function createBooking(data: {
       notes: data.notes || null,
       paymentStatus: data.paymentStatus || 'unpaid',
       stripeSessionId: data.stripeSessionId || null,
+      reminderStatus: data.reminderStatus || (data.status === 'Confirmed' ? 'scheduled' : 'pending'),
+      reminderScheduledFor: data.reminderScheduledFor || null,
+      reminderSentAt: data.reminderSentAt || null,
+      reminderMessageId: data.reminderMessageId || null,
+      reminderError: data.reminderError || null,
+      reminderRecipientPhone: data.reminderRecipientPhone || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -689,6 +799,12 @@ export async function createBooking(data: {
             notes: data.notes || null,
             paymentStatus: data.paymentStatus || 'unpaid',
             stripeSessionId: data.stripeSessionId || null,
+            reminderStatus: data.reminderStatus || (data.status === 'Confirmed' ? 'scheduled' : 'pending'),
+            reminderScheduledFor: data.reminderScheduledFor || null,
+            reminderSentAt: data.reminderSentAt || null,
+            reminderMessageId: data.reminderMessageId || null,
+            reminderError: data.reminderError || null,
+            reminderRecipientPhone: data.reminderRecipientPhone || null,
           })
           .returning();
 
@@ -726,6 +842,21 @@ export async function updateBooking(
         await supabase.from('bookings').update(sbUpdates).eq('id', numId);
       }
     } catch {}
+  }
+
+  if (isSqlConfigured && db) {
+    try {
+      const numId = typeof id === 'number' ? id : parseInt(String(id).replace(/\D/g, ''), 10);
+      if (!isNaN(numId)) {
+        await db
+          .update(bookings)
+          .set({
+            ...updates,
+            updatedAt: new Date(),
+          })
+          .where(eq(bookings.id, numId));
+      }
+    } catch (err) {}
   }
 
   const idx = inMemoryBookings.findIndex(b => String(b.id) === String(id));

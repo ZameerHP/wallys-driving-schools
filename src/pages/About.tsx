@@ -114,8 +114,8 @@ export function About() {
           <div className="flex justify-center">
             {[
               {
-                id: 'wallsy',
-                name: 'Wallsy',
+                id: 'wally',
+                name: 'Wally',
                 role: "Wally's Driving School Instructor",
                 image: '/instructor.jpg',
                 fallback: '/assets/images/about-instructor.jpg',

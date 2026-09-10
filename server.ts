@@ -13,6 +13,7 @@ import {
   createContactMessage,
   getOrCreateUser,
   checkSlotBooked,
+  checkMultipleSlotsBooked,
   getPendingBookingForCustomer,
   normalizeDate,
   bookingLock
@@ -20,6 +21,15 @@ import {
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
 import { validateAustralianPhone, validateWorkingEmail, validateInternationalPhone } from "./src/lib/validation.ts";
+import {
+  processPendingLessonReminders,
+  sendLessonReminderForBooking,
+  sendWhatsAppMessage,
+  handleBookingConfirmed,
+  handleBookingRescheduled,
+  handleBookingCancelled,
+  normalizePhoneNumber
+} from "./src/server/whatsapp-reminder-service.ts";
 
 dotenv.config();
 
@@ -126,11 +136,10 @@ app.use((req, res, next) => {
   })(req, res, next);
 });
 
-// 1. Security Headers Middleware (HSTS, X-Content-Type-Options, Frame Guard)
+// 1. Security Headers Middleware (HSTS, X-Content-Type-Options)
 app.use((req, res, next) => {
   res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("X-XSS-Protection", "1; mode=block");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
@@ -357,7 +366,8 @@ app.post("/api/create-checkout-session", async (req, res) => {
       isPackage,
       packageHours,
       bookingRef,
-      items
+      items,
+      lessons
     } = req.body;
 
     const verified = computeVerifiedOrder(items || (serviceTitle ? [{ name: serviceTitle, unitPrice: totalAmount }] : []));
@@ -367,7 +377,15 @@ app.post("/api/create-checkout-session", async (req, res) => {
     const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
 
     // Authoritative slot check before creating checkout session
-    if (bookingDate && bookingTime) {
+    if (Array.isArray(lessons) && lessons.length > 0) {
+      const batchCheck = await checkMultipleSlotsBooked(lessons, targetRef, studentEmail, studentPhone);
+      if (!batchCheck.available) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: batchCheck.conflicts[0] || "One or more selected time slots are no longer available. Please select another time."
+        });
+      }
+    } else if (bookingDate && bookingTime) {
       const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef, studentEmail, studentPhone);
       if (isTaken) {
         return res.status(409).json({
@@ -376,6 +394,23 @@ app.post("/api/create-checkout-session", async (req, res) => {
         });
       }
     }
+
+    // Minify lessons list for Stripe metadata
+    let minifiedLessonsJson: string | undefined = undefined;
+    if (Array.isArray(lessons) && lessons.length > 0) {
+      const minified = lessons.slice(0, 10).map((l: any, i: number) => ({
+        n: l.lessonNumber || i + 1,
+        d: l.date,
+        t: l.time
+      }));
+      const str = JSON.stringify(minified);
+      if (str.length <= 500) {
+        minifiedLessonsJson = str;
+      }
+    }
+
+    const firstLessonDate = Array.isArray(lessons) && lessons.length > 0 ? lessons[0]?.date : bookingDate;
+    const firstLessonTime = Array.isArray(lessons) && lessons.length > 0 ? lessons[0]?.time : bookingTime;
 
     if (!process.env.STRIPE_SECRET_KEY) {
       // Sandbox fallback: generate simulated checkout session
@@ -394,10 +429,11 @@ app.post("/api/create-checkout-session", async (req, res) => {
           studentPhone: studentPhone || "",
           serviceTitle: serviceTitle || verified.verifiedItems[0]?.name || "Driving Lesson",
           pickupAddress: pickupAddress || "",
-          bookingDate: bookingDate || "",
-          bookingTime: bookingTime || "",
+          bookingDate: firstLessonDate || "",
+          bookingTime: firstLessonTime || "",
           instructorName: instructorName || "Wally",
           bookingRef: targetRef,
+          lessonsJson: minifiedLessonsJson || "",
         }
       });
 
@@ -418,8 +454,8 @@ app.post("/api/create-checkout-session", async (req, res) => {
             product_data: {
               name: serviceTitle || verified.verifiedItems[0]?.name || "Driving Lesson",
               description: isPackage 
-                ? `${packageHours || 10}-Hour Driving Lesson Package with Fast Track Driving School` 
-                : `Professional Driving Lesson with ${instructorName || 'Certified Instructor'}`,
+                ? `${packageHours || 10}-Hour Driving Lesson Package with Wally's Driving School` 
+                : `Professional Driving Lesson with ${instructorName || 'Certified Instructor Wally'}`,
               images: [
                 "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=600&auto=format&fit=crop&q=80"
               ]
@@ -436,10 +472,11 @@ app.post("/api/create-checkout-session", async (req, res) => {
         studentPhone: studentPhone || "",
         serviceTitle: serviceTitle || verified.verifiedItems[0]?.name || "",
         pickupAddress: pickupAddress || "",
-        bookingDate: bookingDate || "",
-        bookingTime: bookingTime || "",
-        instructorName: instructorName || "",
+        bookingDate: firstLessonDate || "",
+        bookingTime: firstLessonTime || "",
+        instructorName: instructorName || "Wally",
         bookingRef: targetRef,
+        lessonsJson: minifiedLessonsJson || "",
       },
       success_url: `${origin}/book-now?session_id={CHECKOUT_SESSION_ID}&step=confirmed`,
       cancel_url: `${origin}/book-now?cancelled=true`,
@@ -485,32 +522,100 @@ app.get("/api/verify-checkout-session", async (req, res) => {
       const meta = sessionData.metadata || {};
       const targetRef = meta.bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
       
-      const existing = await getBookingByRef(targetRef, { allowUnpaid: true });
-      if (existing) {
-        finalBooking = await updateBookingByRef(targetRef, {
-          status: "Confirmed",
-          paymentStatus: "paid",
-          stripeSessionId: sessionData.id,
-          packagePrice: sessionData.amount_total ? sessionData.amount_total / 100 : existing.packagePrice,
-        });
+      let parsedLessons: Array<{ n?: number; d: string; t: string }> = [];
+      try {
+        if (meta.lessonsJson) {
+          parsedLessons = JSON.parse(meta.lessonsJson);
+        }
+      } catch {}
+
+      if (Array.isArray(parsedLessons) && parsedLessons.length > 1) {
+        // Multi-lesson package: create or update individual bookings for each lesson
+        for (let i = 0; i < parsedLessons.length; i++) {
+          const l = parsedLessons[i];
+          const lessonNum = l.n || i + 1;
+          const lessonRef = i === 0 ? targetRef : `${targetRef}-L${lessonNum}`;
+          const existing = await getBookingByRef(lessonRef, { allowUnpaid: true });
+
+          const lessonPrice = i === 0 ? (sessionData.amount_total ? sessionData.amount_total / 100 : 620) : 0;
+          const lessonNote = `[Verified via Stripe Checkout: ${sessionData.id}] [Package: ${meta.serviceTitle || 'Multi-Lesson Package'}] [Lesson ${lessonNum} of ${parsedLessons.length}]`;
+
+          let lessonBooking = null;
+          if (existing) {
+            lessonBooking = await updateBookingByRef(lessonRef, {
+              status: "Confirmed",
+              paymentStatus: "paid",
+              stripeSessionId: sessionData.id,
+              date: sanitizeText(l.d),
+              time: sanitizeText(l.t),
+              packagePrice: lessonPrice,
+              notes: lessonNote
+            });
+          } else {
+            lessonBooking = await createBooking({
+              bookingRef: lessonRef,
+              userId: null,
+              studentName: sanitizeText(meta.studentName || sessionData.customer_details?.name || "Student Driver"),
+              phone: sanitizeText(meta.studentPhone || ""),
+              email: sanitizeText(sessionData.customer_details?.email || ""),
+              suburb: sanitizeText(meta.suburb || "Rooty Hill, NSW"),
+              pickupAddress: sanitizeText(meta.pickupAddress || null),
+              packageTitle: sanitizeText(meta.serviceTitle || "Driving Lesson"),
+              packagePrice: lessonPrice,
+              date: sanitizeText(l.d),
+              time: sanitizeText(l.t),
+              status: "Confirmed",
+              notes: lessonNote,
+              paymentStatus: "paid",
+              stripeSessionId: sessionData.id,
+            });
+          }
+
+          if (lessonBooking) {
+            handleBookingConfirmed(lessonBooking).catch(err => {
+              console.error(`[WhatsApp Reminder] Error in handleBookingConfirmed for ${lessonRef}:`, err);
+            });
+          }
+
+          if (i === 0) {
+            finalBooking = lessonBooking;
+          }
+        }
       } else {
-        finalBooking = await createBooking({
-          bookingRef: targetRef,
-          userId: null,
-          studentName: sanitizeText(meta.studentName || sessionData.customer_details?.name || "Student Driver"),
-          phone: sanitizeText(meta.studentPhone || ""),
-          email: sanitizeText(sessionData.customer_details?.email || ""),
-          suburb: sanitizeText(meta.suburb || "Rockingham, WA"),
-          pickupAddress: sanitizeText(meta.pickupAddress || null),
-          packageTitle: sanitizeText(meta.serviceTitle || "Driving Lesson"),
-          packagePrice: sessionData.amount_total ? sessionData.amount_total / 100 : 65,
-          date: sanitizeText(meta.bookingDate || new Date().toISOString().split("T")[0]),
-          time: sanitizeText(meta.bookingTime || "09:00 AM"),
-          status: "Confirmed",
-          notes: `[Verified via Stripe Checkout: ${sessionData.id}]`,
-          paymentStatus: "paid",
-          stripeSessionId: sessionData.id,
-        });
+        // Single lesson or test package
+        const existing = await getBookingByRef(targetRef, { allowUnpaid: true });
+        if (existing) {
+          finalBooking = await updateBookingByRef(targetRef, {
+            status: "Confirmed",
+            paymentStatus: "paid",
+            stripeSessionId: sessionData.id,
+            packagePrice: sessionData.amount_total ? sessionData.amount_total / 100 : existing.packagePrice,
+          });
+        } else {
+          finalBooking = await createBooking({
+            bookingRef: targetRef,
+            userId: null,
+            studentName: sanitizeText(meta.studentName || sessionData.customer_details?.name || "Student Driver"),
+            phone: sanitizeText(meta.studentPhone || ""),
+            email: sanitizeText(sessionData.customer_details?.email || ""),
+            suburb: sanitizeText(meta.suburb || "Rooty Hill, NSW"),
+            pickupAddress: sanitizeText(meta.pickupAddress || null),
+            packageTitle: sanitizeText(meta.serviceTitle || "Driving Lesson"),
+            packagePrice: sessionData.amount_total ? sessionData.amount_total / 100 : 65,
+            date: sanitizeText(meta.bookingDate || new Date().toISOString().split("T")[0]),
+            time: sanitizeText(meta.bookingTime || "09:00 AM"),
+            status: "Confirmed",
+            notes: `[Verified via Stripe Checkout: ${sessionData.id}]`,
+            paymentStatus: "paid",
+            stripeSessionId: sessionData.id,
+          });
+        }
+
+        if (finalBooking) {
+          handleBookingConfirmed(finalBooking).catch(err => {
+            console.error("[WhatsApp Reminder] Error in handleBookingConfirmed on checkout verification:", err);
+          });
+        }
       }
     }
 
@@ -540,19 +645,33 @@ app.get("/api/verify-checkout-session", async (req, res) => {
 
 const CANONICAL_PRICES: Record<string, number> = {
   '1 hour driving lesson': 65.0,
+  '60 minutes lesson': 65.0,
+  '60 min lesson': 65.0,
+  '60-min-lesson': 65.0,
   '2 hour driving lesson': 130.0,
+  '2 hours lesson': 130.0,
+  '2-hour-lesson': 130.0,
   'car hire + 1 hour lesson': 200.0,
+  'car hire & 1 lesson': 200.0,
+  'driving test package + 1 lesson': 200.0,
+  'driving test package': 200.0,
+  'test-1-lesson': 200.0,
   'car hire + 2 hour lesson': 250.0,
+  'car hire & 2 lessons': 250.0,
+  'driving test package + 2 lessons': 250.0,
+  'test-2-lesson': 250.0,
   '10 hours package': 620.0,
+  '10 hours pack': 620.0,
+  '10-hours-pack': 620.0,
   '5 hours package': 315.0,
+  '5 hours pack': 315.0,
+  '5-hours-pack': 315.0,
   'srv-1hr': 65.0,
   'srv-2hr': 130.0,
   'srv-car-1hr': 200.0,
   'srv-car-2hr': 250.0,
   'pkg-10hr': 620.0,
   'pkg-5hr': 315.0,
-  '10-hours-pack': 620.0,
-  '5-hours-pack': 315.0,
   'single-lesson': 65.0,
   '2-hours-lesson': 130.0,
   'practice-test': 95.0,
@@ -865,6 +984,10 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
       });
     }
 
+    if (finalBooking) {
+      handleBookingConfirmed(finalBooking).catch((e) => console.error("[WhatsApp] Error confirming lesson reminder:", e));
+    }
+
     const bookingResponse = finalBooking ? {
       ...finalBooking,
       ref: finalBooking.bookingRef || finalBooking.ref || targetRef,
@@ -1133,6 +1256,40 @@ app.get("/api/check-slot", async (req, res) => {
   }
 });
 
+// Fast real-time check for multiple date & time slots (multi-lesson packages)
+app.post("/api/check-slots", async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    const { lessons, excludeRef, email, phone } = req.body;
+    if (!Array.isArray(lessons) || lessons.length === 0) {
+      return res.status(400).json({ error: "Missing or invalid lessons array" });
+    }
+
+    const check = await checkMultipleSlotsBooked(lessons, excludeRef, email, phone);
+    if (!check.available) {
+      return res.status(409).json({
+        available: false,
+        conflicts: check.conflicts,
+        message: check.conflicts[0] || "One or more selected lessons are no longer available"
+      });
+    }
+
+    res.json({
+      available: true,
+      count: lessons.length,
+      message: "All selected lesson slots are available"
+    });
+  } catch (error: any) {
+    console.error("Error checking multiple slots:", error);
+    res.status(500).json({ error: "Failed to check slots" });
+  }
+});
+
 app.get("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const email = (req.query.email as string) || undefined;
@@ -1178,10 +1335,15 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       status,
       notes,
       paymentStatus,
-      stripeSessionId
+      stripeSessionId,
+      lessons
     } = req.body;
 
-    if (!studentName || !phone || !email || !suburb || !packageTitle || !date || !time) {
+    const hasMultipleLessons = Array.isArray(lessons) && lessons.length > 0;
+    const primaryDate = hasMultipleLessons ? lessons[0]?.date : date;
+    const primaryTime = hasMultipleLessons ? lessons[0]?.time : time;
+
+    if (!studentName || !phone || !email || !suburb || !packageTitle || !primaryDate || !primaryTime) {
       return res.status(400).json({ error: "Missing required booking fields" });
     }
 
@@ -1196,13 +1358,23 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       return res.status(400).json({ error: phoneCheck.error || "Please enter a valid phone number" });
     }
 
-    // Double booking verification: ensure slot is free (allowing customer to finalize their own pending booking)
-    const isSlotTaken = await checkSlotBooked(date, time, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
-    if (isSlotTaken) {
-      return res.status(409).json({
-        error: "SLOT_ALREADY_BOOKED",
-        message: "This time slot is no longer available. Please select another time."
-      });
+    // Double booking verification: multi-lesson batch or single slot
+    if (hasMultipleLessons) {
+      const batchCheck = await checkMultipleSlotsBooked(lessons, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
+      if (!batchCheck.available) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: batchCheck.conflicts[0] || "One or more selected lesson slots are no longer available. Please select another time."
+        });
+      }
+    } else {
+      const isSlotTaken = await checkSlotBooked(primaryDate, primaryTime, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
+      if (isSlotTaken) {
+        return res.status(409).json({
+          error: "SLOT_ALREADY_BOOKED",
+          message: "This time slot is no longer available. Please select another time."
+        });
+      }
     }
 
     // Enforce that bookings must have successful payment or be marked pending (e.g. cash in car)
@@ -1217,8 +1389,62 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
     }
 
     const randomNum = Math.floor(1000 + Math.random() * 9000);
-    const bookingRef = `WD-${randomNum}`;
+    const bookingRef = req.body.bookingRef || `WD-${randomNum}`;
 
+    if (hasMultipleLessons && lessons.length > 1) {
+      // Atomic multi-lesson package creation
+      const createdBookings = [];
+      const totalAmount = Number(packagePrice) || 620;
+
+      for (let i = 0; i < lessons.length; i++) {
+        const l = lessons[i];
+        const lessonNum = l.lessonNumber || i + 1;
+        const lessonRef = i === 0 ? bookingRef : `${bookingRef}-L${lessonNum}`;
+        const lessonPrice = i === 0 ? totalAmount : 0;
+        const lessonNote = `[Package: ${sanitizeText(packageTitle)}] [Lesson ${lessonNum} of ${lessons.length}] ${sanitizeText(notes) || ''}`.trim();
+
+        const itemBooking = await createBooking({
+          bookingRef: lessonRef,
+          userId: req.user?.uid || null,
+          studentName: sanitizeText(studentName),
+          phone: sanitizeText(phone),
+          email: sanitizeText(email).toLowerCase(),
+          suburb: sanitizeText(suburb),
+          pickupAddress: sanitizeText(pickupAddress) || null,
+          packageTitle: sanitizeText(packageTitle),
+          packagePrice: lessonPrice,
+          date: sanitizeText(l.date),
+          time: sanitizeText(l.time),
+          status: status || (finalPaymentStatus === "paid" ? "Confirmed" : "Pending"),
+          notes: lessonNote,
+          paymentStatus: finalPaymentStatus,
+          stripeSessionId: stripeSessionId || null,
+        });
+
+        if (itemBooking.status === "Confirmed") {
+          handleBookingConfirmed(itemBooking).catch(err => {
+            console.error(`[WhatsApp Reminder] Error in handleBookingConfirmed for ${lessonRef}:`, err);
+          });
+        }
+
+        createdBookings.push(itemBooking);
+      }
+
+      const masterBooking = {
+        ...createdBookings[0],
+        lessons: createdBookings.map((b, idx) => ({
+          lessonNumber: idx + 1,
+          bookingRef: b.bookingRef,
+          date: b.date,
+          time: b.time,
+          status: b.status
+        }))
+      };
+
+      return res.status(201).json(masterBooking);
+    }
+
+    // Single booking creation
     const newBooking = await createBooking({
       bookingRef,
       userId: req.user?.uid || null,
@@ -1229,13 +1455,19 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       pickupAddress: sanitizeText(pickupAddress) || null,
       packageTitle: sanitizeText(packageTitle),
       packagePrice: Number(packagePrice) || 70,
-      date: sanitizeText(date),
-      time: sanitizeText(time),
+      date: sanitizeText(primaryDate),
+      time: sanitizeText(primaryTime),
       status: status || (finalPaymentStatus === "paid" ? "Confirmed" : "Pending"),
       notes: sanitizeText(notes) || null,
       paymentStatus: finalPaymentStatus,
       stripeSessionId: stripeSessionId || null,
     });
+
+    if (newBooking.status === "Confirmed") {
+      handleBookingConfirmed(newBooking).catch(err => {
+        console.error("[WhatsApp Reminder] Error in handleBookingConfirmed for new booking:", err);
+      });
+    }
 
     res.status(201).json(newBooking);
   } catch (error: any) {
@@ -1259,6 +1491,8 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
     }
 
     if (req.body.status === 'Cancelled') {
+      req.body.reminderStatus = 'cancelled';
+      req.body.reminderError = 'Lesson was cancelled';
       // Need to fetch existing first
       const bookings = await getBookings({ includeUnpaid: true });
       const existing = bookings.find(b => b.id === id);
@@ -1307,6 +1541,17 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
     }
 
     const updated = await updateBooking(id, req.body);
+
+    if (updated) {
+      if (req.body.status === 'Cancelled') {
+        handleBookingCancelled(updated).catch(() => {});
+      } else if (req.body.date || req.body.time) {
+        handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {});
+      } else if (req.body.status === 'Confirmed') {
+        handleBookingConfirmed(updated).catch(() => {});
+      }
+    }
+
     res.json(updated);
   } catch (error: any) {
     console.error("Error updating booking:", error);
@@ -1321,6 +1566,8 @@ app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
     
     // Check if it's a cancellation
     if (req.body.status === 'Cancelled') {
+      req.body.reminderStatus = 'cancelled';
+      req.body.reminderError = 'Lesson was cancelled';
       const existing = await getBookingByRef(ref, { allowUnpaid: true });
       if (existing && existing.status !== 'Cancelled') {
         const timestamp = getBookingTimestamp(existing.date, existing.time);
@@ -1368,6 +1615,17 @@ app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
     }
 
     const updated = await updateBookingByRef(ref, req.body);
+
+    if (updated) {
+      if (req.body.status === 'Cancelled') {
+        handleBookingCancelled(updated).catch(() => {});
+      } else if (req.body.date || req.body.time) {
+        handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {});
+      } else if (req.body.status === 'Confirmed') {
+        handleBookingConfirmed(updated).catch(() => {});
+      }
+    }
+
     res.json(updated);
   } catch (error: any) {
     console.error("Error updating booking by ref:", error);
@@ -1454,6 +1712,109 @@ app.get("/api/supabase/status", async (_req, res) => {
   }
 });
 
+// =========================================================================
+// WHATSAPP LESSON REMINDERS API ENDPOINTS
+// =========================================================================
+
+// Get WhatsApp Reminder Provider and Queue Status
+app.get("/api/reminders/status", async (req, res) => {
+  try {
+    const metaToken = !!(process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN);
+    const metaPhoneId = !!process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const twilioSid = !!process.env.TWILIO_ACCOUNT_SID;
+    const twilioToken = !!process.env.TWILIO_AUTH_TOKEN;
+    const twilioNumber = !!process.env.TWILIO_WHATSAPP_NUMBER;
+
+    let provider: 'meta' | 'twilio' | 'none' = 'none';
+    if (metaToken && metaPhoneId) provider = 'meta';
+    else if (twilioSid && twilioToken && twilioNumber) provider = 'twilio';
+
+    const bookings = await getBookings({ includeUnpaid: false });
+    const confirmed = bookings.filter(b => b.status === 'Confirmed');
+
+    const scheduled = confirmed.filter(b => b.reminderStatus === 'scheduled').length;
+    const sent = confirmed.filter(b => b.reminderStatus === 'sent').length;
+    const failed = confirmed.filter(b => b.reminderStatus === 'failed').length;
+    const cancelled = bookings.filter(b => b.reminderStatus === 'cancelled').length;
+
+    res.json({
+      configured: provider !== 'none',
+      provider,
+      timezone: process.env.SCHOOL_TIMEZONE || 'Australia/Perth',
+      intervalSeconds: 60,
+      stats: {
+        totalConfirmed: confirmed.length,
+        scheduled,
+        sent,
+        failed,
+        cancelled
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get reminder status" });
+  }
+});
+
+// Admin: Trigger manual send or retry for a booking's reminder
+app.post("/api/reminders/send/:refOrId", optionalAuth, async (req, res) => {
+  try {
+    const refOrId = req.params.refOrId;
+    const bookings = await getBookings({ includeUnpaid: true });
+    const booking = bookings.find(
+      b => (b.bookingRef && b.bookingRef.toUpperCase() === refOrId.toUpperCase()) || 
+           String(b.id) === String(refOrId)
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    const force = req.body?.force === true || req.query.force === 'true';
+    const result = await sendLessonReminderForBooking(booking, { force });
+
+    res.json({
+      bookingRef: booking.bookingRef || booking.ref,
+      studentName: booking.studentName,
+      studentPhone: booking.phone,
+      ...result
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to trigger reminder" });
+  }
+});
+
+// Admin / System: Force run pending reminders pass
+app.post("/api/reminders/cron/run", optionalAuth, async (req, res) => {
+  try {
+    const result = await processPendingLessonReminders();
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to run reminder cron" });
+  }
+});
+
+// Utility: Phone number normalization tester
+app.post("/api/reminders/test-normalize", (req, res) => {
+  const { phone } = req.body;
+  const result = normalizePhoneNumber(phone);
+  res.json(result);
+});
+
+// Send a direct WhatsApp reminder or custom message to any phone number
+app.post("/api/reminders/send-direct", async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+    const msg = message || "Hi! This is a reminder from Wally's Driving School regarding your upcoming driving lesson. Please be ready at your pickup location.";
+    const result = await sendWhatsAppMessage(phone, msg);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to send direct WhatsApp message" });
+  }
+});
+
 // Global JSON error handler to ensure JSON responses on unexpected exceptions
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("[Server Error]", err);
@@ -1482,37 +1843,31 @@ async function startServer() {
     });
   }
 
-  
-// Automated 24-Hour Reminders
-// Runs every hour to check for bookings happening exactly tomorrow
-setInterval(async () => {
-  try {
-    const bookings = await getBookings({ includeUnpaid: false });
-    const now = Date.now();
-    const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-    
-    for (const booking of bookings) {
-      if (booking.status === 'Confirmed' && !booking.notes?.includes('[Reminder Sent]')) {
-        const timestamp = getBookingTimestamp(booking.date, booking.time);
-        const timeUntilBooking = timestamp - now;
-        
-        // If booking is between 24 and 25 hours away, send reminder
-        if (timeUntilBooking > 0 && timeUntilBooking <= TWENTY_FOUR_HOURS_MS && timeUntilBooking > (TWENTY_FOUR_HOURS_MS - 60 * 60 * 1000)) {
-          console.log(`[Automated Reminder] Sending 24h reminder to ${booking.studentName} (${booking.email}) for booking ${booking.bookingRef} on ${booking.date} at ${booking.time}`);
-          
-          // Update booking to mark reminder as sent
-          const updatedNotes = (booking.notes || '') + ' [Reminder Sent]';
-          await updateBooking(booking.id as number, { notes: updatedNotes });
-        }
-      }
-    }
-  } catch (err) {
-    console.error("[Automated Reminder] Error checking reminders:", err);
-  }
-}, 60 * 60 * 1000); // Run every hour
+  // =========================================================================
+  // PRODUCTION-READY AUTOMATIC WHATSAPP LESSON REMINDER SCHEDULER
+  // =========================================================================
+  // Checks every 60 seconds server-side for confirmed lessons starting in 2 hours
+  // Works autonomously even if the website is closed or no admin is logged in
+  const REMINDER_CHECK_INTERVAL_MS = 60 * 1000;
 
-app.listen(PORT, "0.0.0.0", () => {
+  setInterval(async () => {
+    try {
+      await processPendingLessonReminders();
+    } catch (err) {
+      console.error("[WhatsApp Reminder Engine] Error in periodic reminder check:", err);
+    }
+  }, REMINDER_CHECK_INTERVAL_MS);
+
+  // Initial pass shortly after boot
+  setTimeout(() => {
+    processPendingLessonReminders().catch(err => {
+      console.warn("[WhatsApp Reminder Engine] Initial check warning:", err?.message || err);
+    });
+  }, 3000);
+
+  app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`[WhatsApp Reminder Engine] Initialized in timezone: ${process.env.SCHOOL_TIMEZONE || 'Australia/Perth'}`);
   });
 }
 

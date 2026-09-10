@@ -284,7 +284,7 @@ export function ManageBooking() {
       setSelectedBooking(updatedBooking);
       setFoundBookings(prev => prev.map(b => b.id === updatedBooking.id ? updatedBooking : b));
       setShowRescheduleModal(false);
-      setRescheduleSuccess(`Lesson successfully rescheduled to ${newDate} at ${newTime}! Wally has been notified.`);
+      setRescheduleSuccess(`Lesson successfully rescheduled to ${newDate} at ${newTime}! Your automatic WhatsApp lesson reminder has been updated for 2 hours prior to your new lesson.`);
     } catch (err: any) {
       console.error('Failed to reschedule:', err);
       setRescheduleError(err?.message || 'This time slot is no longer available. Please select another time.');
@@ -363,11 +363,11 @@ export function ManageBooking() {
       setShowCancelModal(false);
 
       if (isRefunded) {
-        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled. Because your lesson was cancelled more than 24 hours in advance, a full refund of $${selectedBooking.packagePrice.toFixed(2)} AUD has been processed back to your original payment method via Stripe.`);
+        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled and any scheduled WhatsApp lesson reminders have been cancelled. Because your lesson was cancelled more than 24 hours in advance, a full refund of $${selectedBooking.packagePrice.toFixed(2)} AUD has been processed back to your original payment method via Stripe.`);
       } else if (isPaid) {
-        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled. Note: Because your lesson is scheduled within 24 hours, per driving school policy it is classified as a late cancellation without an automatic refund. If you need assistance, please contact Wally on WhatsApp.`);
+        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled and any scheduled WhatsApp lesson reminders have been cancelled. Note: Because your lesson is scheduled within 24 hours, per driving school policy it is classified as a late cancellation without an automatic refund. If you need assistance, please contact Wally on WhatsApp.`);
       } else {
-        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled and your scheduled time slot has been released.`);
+        setCancelSuccess(`Booking #${selectedBooking.ref} has been cancelled, any scheduled WhatsApp lesson reminders have been cancelled, and your scheduled time slot has been released.`);
       }
     } catch (err: any) {
       console.error('Failed to cancel booking:', err);
@@ -732,6 +732,21 @@ export function ManageBooking() {
                   </div>
                 )}
               </div>
+
+              {/* Automatic WhatsApp Lesson Reminder Information */}
+              {selectedBooking.status !== 'Cancelled' && (
+                <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3.5 flex items-start gap-3 text-xs text-emerald-900 mt-2">
+                  <MessageCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-emerald-950 block">
+                      Automatic WhatsApp Lesson Reminder Active
+                    </span>
+                    <p className="text-emerald-800/90 mt-0.5 leading-relaxed text-[11px]">
+                      A reminder will be sent to your phone (<strong>{selectedBooking.phone}</strong>) automatically 2 hours before your lesson start time ({selectedBooking.time.split('-')[0]?.trim() || selectedBooking.time}).
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Action Buttons */}

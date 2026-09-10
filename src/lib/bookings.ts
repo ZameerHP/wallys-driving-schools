@@ -23,6 +23,13 @@ export interface BookingItem {
   paymentStatus?: 'paid' | 'unpaid' | string;
   paymentMethod?: string;
   stripeSessionId?: string | null;
+  reminderStatus?: 'pending' | 'scheduled' | 'sent' | 'failed' | 'cancelled';
+  reminderScheduledFor?: string | null;
+  reminderSentAt?: string | null;
+  reminderMessageId?: string | null;
+  reminderError?: string | null;
+  reminderRecipientPhone?: string | null;
+  lessons?: Array<{ lessonNumber: number; date: string; time: string }>;
 }
 
 const STORAGE_KEY = 'wallys_bookings_v3';
@@ -675,4 +682,59 @@ export function setOwnerLoggedIn(val: boolean): void {
 
 export function logoutOwner(): void {
   sessionStorage.removeItem(OWNER_SESSION_KEY);
+}
+
+// Fetch server WhatsApp reminder engine status
+export async function fetchReminderSystemStatus(): Promise<{
+  configured: boolean;
+  provider: 'meta' | 'twilio' | 'none';
+  timezone: string;
+  intervalSeconds: number;
+  stats?: {
+    totalConfirmed: number;
+    scheduled: number;
+    sent: number;
+    failed: number;
+    cancelled: number;
+  };
+}> {
+  try {
+    const res = await fetch('/api/reminders/status');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Failed to fetch reminder status:', err);
+  }
+  return {
+    configured: false,
+    provider: 'none',
+    timezone: 'Australia/Perth',
+    intervalSeconds: 60
+  };
+}
+
+// Admin trigger to immediately send or retry WhatsApp reminder for a booking
+export async function triggerWhatsAppReminder(
+  bookingRefOrId: string, 
+  force = false
+): Promise<{
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  provider: 'meta' | 'twilio' | 'none';
+  recipientPhone?: string;
+}> {
+  const token = localStorage.getItem('instructor_token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`/api/reminders/send/${encodeURIComponent(bookingRefOrId)}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ force })
+  });
+
+  const data = await res.json();
+  return data;
 }
