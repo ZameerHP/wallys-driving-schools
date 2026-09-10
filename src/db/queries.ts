@@ -1,11 +1,14 @@
 import { db, isSqlConfigured } from './index.ts';
-import { users, bookings, contactMessages } from './schema.ts';
+import { users, bookings, contactMessages, bookingAuditLogs, emailLogs, webhookEvents } from './schema.ts';
 import { eq, desc, or, and, ne } from 'drizzle-orm';
 import { getSupabaseServerClient } from '../lib/supabase-server.ts';
 
 // In-memory fallback stores for offline/sandbox environments
 const inMemoryUsers: Map<string, any> = new Map();
 const inMemoryContactMessages: any[] = [];
+const inMemoryAuditLogs: any[] = [];
+const inMemoryEmailLogs: any[] = [];
+const inMemoryWebhookEvents: Set<string> = new Set();
 const inMemoryBookings: any[] = [
   {
     id: 1,
@@ -977,3 +980,227 @@ export async function createContactMessage(data: {
   inMemoryContactMessages.push(newMsg);
   return newMsg;
 }
+
+// -------------------------------------------------------------
+// Audit Logging System (Section 2.3 & 5.1 of Master Prompt)
+// -------------------------------------------------------------
+
+export interface BookingAuditLogEntry {
+  bookingRef?: string | null;
+  action: string; // 'create' | 'update_status' | 'reschedule' | 'cancel' | 'refund' | 'payment_verified'
+  performedBy?: string; // 'system' | 'stripe_webhook' | 'paypal_webhook' | 'instructor' | 'student'
+  previousState?: string | null;
+  newState?: string | null;
+  notes?: string | null;
+}
+
+export async function logBookingAudit(entry: BookingAuditLogEntry) {
+  const auditRecord = {
+    id: inMemoryAuditLogs.length + 1,
+    bookingRef: entry.bookingRef || 'N/A',
+    action: entry.action,
+    performedBy: entry.performedBy || 'system',
+    previousState: entry.previousState || null,
+    newState: entry.newState || null,
+    notes: entry.notes || null,
+    createdAt: new Date(),
+  };
+
+  // 1. Supabase attempt
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      await supabase.from('booking_audit_logs').insert([{
+        booking_ref: entry.bookingRef || 'N/A',
+        action: entry.action,
+        performed_by: entry.performedBy || 'system',
+        previous_state: entry.previousState || null,
+        new_state: entry.newState || null,
+        notes: entry.notes || null,
+        created_at: new Date().toISOString(),
+      }]);
+    } catch (sbErr) {
+      // Non-fatal if table doesn't exist yet
+    }
+  }
+
+  // 2. Drizzle SQL attempt
+  if (isSqlConfigured && db) {
+    try {
+      await db.insert(bookingAuditLogs).values({
+        bookingRef: entry.bookingRef || 'N/A',
+        action: entry.action,
+        performedBy: entry.performedBy || 'system',
+        previousState: entry.previousState || null,
+        newState: entry.newState || null,
+        notes: entry.notes || null,
+      });
+    } catch (sqlErr) {
+      // Non-fatal fallback
+    }
+  }
+
+  // 3. In-memory store
+  inMemoryAuditLogs.unshift(auditRecord);
+  return auditRecord;
+}
+
+export async function getBookingAuditLogs(bookingRef?: string, limit: number = 50): Promise<any[]> {
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      let query = supabase.from('booking_audit_logs').select('*').order('created_at', { ascending: false }).limit(limit);
+      if (bookingRef) {
+        query = query.eq('booking_ref', bookingRef);
+      }
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return data;
+      }
+    } catch {}
+  }
+
+  if (isSqlConfigured && db) {
+    try {
+      if (bookingRef) {
+        return await db
+          .select()
+          .from(bookingAuditLogs)
+          .where(eq(bookingAuditLogs.bookingRef, bookingRef))
+          .orderBy(desc(bookingAuditLogs.createdAt))
+          .limit(limit);
+      }
+      return await db
+        .select()
+        .from(bookingAuditLogs)
+        .orderBy(desc(bookingAuditLogs.createdAt))
+        .limit(limit);
+    } catch {}
+  }
+
+  if (bookingRef) {
+    return inMemoryAuditLogs.filter(log => log.bookingRef === bookingRef).slice(0, limit);
+  }
+  return inMemoryAuditLogs.slice(0, limit);
+}
+
+// -------------------------------------------------------------
+// Transactional Email Delivery Logging (Section 4.3)
+// -------------------------------------------------------------
+
+export interface EmailLogEntry {
+  bookingRef?: string | null;
+  emailType: string;
+  recipientEmail: string;
+  status: 'sent' | 'failed' | 'retrying';
+  messageId?: string | null;
+  error?: string | null;
+  retryCount?: number;
+}
+
+export async function logEmailDelivery(entry: EmailLogEntry) {
+  const logRecord = {
+    id: inMemoryEmailLogs.length + 1,
+    bookingRef: entry.bookingRef || null,
+    emailType: entry.emailType,
+    recipientEmail: entry.recipientEmail,
+    status: entry.status,
+    messageId: entry.messageId || null,
+    error: entry.error || null,
+    retryCount: entry.retryCount ?? 0,
+    createdAt: new Date(),
+  };
+
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      await supabase.from('email_logs').insert([{
+        booking_ref: entry.bookingRef || null,
+        email_type: entry.emailType,
+        recipient_email: entry.recipientEmail,
+        status: entry.status,
+        message_id: entry.messageId || null,
+        error: entry.error || null,
+        retry_count: entry.retryCount ?? 0,
+        created_at: new Date().toISOString(),
+      }]);
+    } catch {}
+  }
+
+  if (isSqlConfigured && db) {
+    try {
+      await db.insert(emailLogs).values({
+        bookingRef: entry.bookingRef || null,
+        emailType: entry.emailType,
+        recipientEmail: entry.recipientEmail,
+        status: entry.status,
+        messageId: entry.messageId || null,
+        error: entry.error || null,
+        retryCount: entry.retryCount ?? 0,
+      });
+    } catch {}
+  }
+
+  inMemoryEmailLogs.unshift(logRecord);
+  return logRecord;
+}
+
+// -------------------------------------------------------------
+// Webhook Idempotency Tracking (Section 3.3)
+// -------------------------------------------------------------
+
+export async function isWebhookEventProcessed(eventId: string): Promise<boolean> {
+  if (!eventId) return false;
+  if (inMemoryWebhookEvents.has(eventId)) return true;
+
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      const { data } = await supabase.from('webhook_events').select('event_id').eq('event_id', eventId).single();
+      if (data) {
+        inMemoryWebhookEvents.add(eventId);
+        return true;
+      }
+    } catch {}
+  }
+
+  if (isSqlConfigured && db) {
+    try {
+      const existing = await db.select().from(webhookEvents).where(eq(webhookEvents.eventId, eventId)).limit(1);
+      if (existing.length > 0) {
+        inMemoryWebhookEvents.add(eventId);
+        return true;
+      }
+    } catch {}
+  }
+
+  return false;
+}
+
+export async function recordWebhookEvent(eventId: string, provider: string, eventType: string): Promise<void> {
+  if (!eventId) return;
+  inMemoryWebhookEvents.add(eventId);
+
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      await supabase.from('webhook_events').insert([{
+        event_id: eventId,
+        provider,
+        event_type: eventType,
+        processed_at: new Date().toISOString(),
+      }]);
+    } catch {}
+  }
+
+  if (isSqlConfigured && db) {
+    try {
+      await db.insert(webhookEvents).values({
+        eventId,
+        provider,
+        eventType,
+      });
+    } catch {}
+  }
+}
+

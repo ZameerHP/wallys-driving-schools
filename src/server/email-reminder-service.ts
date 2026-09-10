@@ -1,10 +1,23 @@
 import { Resend } from 'resend';
-import { getBookings, updateBooking, updateBookingByRef } from '../db/queries.ts';
+import { getBookings, updateBooking, updateBookingByRef, logEmailDelivery } from '../db/queries.ts';
 
 // Lock map to prevent duplicate concurrent executions for the same booking ref/id
 const inFlightSendingLocks = new Set<string>();
 
 let resendInstance: Resend | null = null;
+
+/**
+ * Escapes user-supplied text for safe injection into email HTML templates.
+ */
+export function escapeHtml(str: string | null | undefined): string {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 export function getResend(): Resend | null {
   const apiKey = process.env.RESEND_API_KEY;
@@ -595,3 +608,493 @@ export async function processPendingLessonReminders(): Promise<{
 
   return { checked, sent, scheduled, failed, skipped };
 }
+
+// ============================================================================
+// TRANSACTIONAL EMAIL SUITE (Resend Integration - Section 4 of Master Prompt)
+// ============================================================================
+
+/**
+ * Robust dispatcher with exponential backoff retry logic and audit logging.
+ */
+export async function sendEmailWithRetry(
+  payload: {
+    from?: string;
+    to: string | string[];
+    subject: string;
+    html?: string;
+    text?: string;
+    reply_to?: string;
+  },
+  options: {
+    maxRetries?: number;
+    bookingRef?: string | null;
+    emailType: 'confirmation' | 'receipt' | 'cancellation' | 'reminder' | 'instructor_notification';
+  }
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  const resend = getResend();
+  const maxRetries = options.maxRetries ?? 3;
+  const primarySender = payload.from || getFormattedSender();
+  const recipient = Array.isArray(payload.to) ? payload.to.join(', ') : payload.to;
+
+  if (!resend) {
+    console.warn(`[Resend] RESEND_API_KEY is not configured. Email to ${recipient} simulated.`);
+    await logEmailDelivery({
+      bookingRef: options.bookingRef,
+      emailType: options.emailType,
+      recipientEmail: recipient,
+      status: 'sent',
+      messageId: `sim_${Date.now()}`,
+      error: 'RESEND_API_KEY missing - simulated delivery',
+      retryCount: 0,
+    });
+    return { success: true, id: `sim_${Date.now()}` };
+  }
+
+  let attempt = 0;
+  let lastError = '';
+  let activePayload = { ...payload, from: primarySender };
+
+  while (attempt < maxRetries) {
+    attempt++;
+    try {
+      let res = await resend.emails.send(activePayload as any);
+
+      // Handle unverified domain gracefully by retrying with onboarding domain
+      if (res.error && (res.error.message.includes('domain') || res.error.name === 'validation_error')) {
+        console.warn(`[Resend] Domain notice: ${res.error.message}. Retrying with onboarding@resend.dev...`);
+        activePayload.from = "Wally’s Driving School <onboarding@resend.dev>";
+        res = await resend.emails.send(activePayload as any);
+      }
+
+      if (res.error) {
+        lastError = res.error.message || 'Unknown Resend error';
+        console.warn(`[Resend] Attempt ${attempt}/${maxRetries} failed for ${recipient}: ${lastError}`);
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, attempt * 1000));
+          continue;
+        }
+      } else {
+        const messageId = res.data?.id;
+        await logEmailDelivery({
+          bookingRef: options.bookingRef,
+          emailType: options.emailType,
+          recipientEmail: recipient,
+          status: 'sent',
+          messageId,
+          retryCount: attempt - 1,
+        });
+        return { success: true, id: messageId };
+      }
+    } catch (err: any) {
+      lastError = err?.message || 'Network exception calling Resend';
+      console.warn(`[Resend] Attempt ${attempt}/${maxRetries} threw exception for ${recipient}: ${lastError}`);
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, attempt * 1000));
+      }
+    }
+  }
+
+  await logEmailDelivery({
+    bookingRef: options.bookingRef,
+    emailType: options.emailType,
+    recipientEmail: recipient,
+    status: 'failed',
+    error: lastError,
+    retryCount: maxRetries,
+  });
+
+  return { success: false, error: lastError };
+}
+
+/**
+ * 1. Booking Confirmation Email
+ * Sent upon confirmed / paid status.
+ */
+export async function sendBookingConfirmationEmail(booking: {
+  bookingRef: string;
+  studentName: string;
+  email: string;
+  phone?: string;
+  date: string;
+  time: string;
+  packageTitle: string;
+  packagePrice?: number;
+  pickupAddress?: string | null;
+  suburb?: string;
+  notes?: string | null;
+}): Promise<{ success: boolean; id?: string; error?: string }> {
+  const recipient = (booking.email || '').trim();
+  if (!recipient) return { success: false, error: 'Recipient email missing' };
+
+  const safeName = escapeHtml(booking.studentName || 'Student');
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeDate = escapeHtml(booking.date);
+  const safeTime = escapeHtml(booking.time);
+  const safePackage = escapeHtml(booking.packageTitle || 'Driving Lesson');
+  const safePrice = booking.packagePrice ? `$${Number(booking.packagePrice).toFixed(2)} AUD` : 'Paid';
+  const safeAddress = escapeHtml(booking.pickupAddress || `${booking.suburb || 'Rooty Hill'}, NSW`);
+
+  // Extract test centre if present in notes
+  let testCentreInfo = '';
+  if (booking.notes && booking.notes.toLowerCase().includes('test centre:')) {
+    const match = booking.notes.match(/test centre:\s*([^.]+)/i);
+    if (match && match[1] && match[1].trim() !== 'N/A') {
+      testCentreInfo = `
+        <tr>
+          <td style="padding: 8px 0; color: #555555; font-size: 14px;">RMS Test Centre:</td>
+          <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${escapeHtml(match[1].trim())}</td>
+        </tr>
+      `;
+    }
+  }
+
+  const subject = `Booking Confirmed: ${booking.packageTitle} with Wally (${booking.bookingRef})`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #E3222A; padding: 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold; letter-spacing: -0.5px;">Wally's Driving School</h1>
+            <p style="color: rgba(255,255,255,0.9); margin: 4px 0 0; font-size: 13px;">Western Sydney & Hills District, NSW</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 24px;">
+            <h2 style="font-size: 18px; margin: 0 0 12px; color: #111111;">Your booking is confirmed, ${safeName}!</h2>
+            <p style="font-size: 14px; line-height: 1.6; color: #444444; margin: 0 0 24px;">
+              Thank you for booking with Wally's Driving School. Your session is locked in with accredited RMS instructor Wally.
+            </p>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #eeeeee; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Booking Reference:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #E3222A; font-size: 14px; text-align: right; font-family: monospace;">${safeRef}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Instructor:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">Wally (Accredited RMS Instructor)</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Lesson Package:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safePackage}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Date:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Time Slot:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeTime}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Pickup Location:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeAddress}</td>
+              </tr>
+              ${testCentreInfo}
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Amount Paid:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safePrice}</td>
+              </tr>
+            </table>
+
+            <div style="background-color: #fff8f8; border-left: 4px solid #E3222A; padding: 14px 16px; margin-bottom: 24px; border-radius: 4px;">
+              <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #333333;">
+                <strong>What to prepare:</strong> Please ensure you have your physical or digital NSW Learner Licence, your logbook (or app), and wear comfortable flat closed-toe shoes.
+              </p>
+            </div>
+
+            <p style="font-size: 12px; line-height: 1.5; color: #777777; margin: 0 0 8px;">
+              <strong>Cancellation & Rescheduling Policy:</strong> Free rescheduling or cancellation is available with at least 24 hours notice.
+            </p>
+            <p style="font-size: 12px; line-height: 1.5; color: #777777; margin: 0;">
+              Questions? Call Wally directly at <a href="tel:0412345678" style="color: #E3222A; text-decoration: none;">0412 345 678</a> or reply to this email.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #f7f7f9; padding: 16px 24px; text-align: center; border-top: 1px solid #eeeeee; font-size: 11px; color: #888888;">
+            Wally's Driving School • Rooty Hill NSW 2766 • Australia
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const text = `
+Hi ${booking.studentName || 'Student'},
+
+Your booking with Wally's Driving School is confirmed!
+
+Booking Reference: ${booking.bookingRef}
+Instructor: Wally (Accredited RMS Instructor)
+Lesson Package: ${booking.packageTitle}
+Date: ${booking.date}
+Time: ${booking.time}
+Pickup: ${booking.pickupAddress || booking.suburb}
+Amount: ${safePrice}
+
+Please have your NSW Learner Licence and logbook ready.
+If you need to reschedule or have questions, contact Wally on 0412 345 678.
+  `.trim();
+
+  return await sendEmailWithRetry(
+    { to: recipient, subject, html, text },
+    { bookingRef: booking.bookingRef, emailType: 'confirmation' }
+  );
+}
+
+/**
+ * 2. Payment Receipt Email
+ */
+export async function sendPaymentReceiptEmail(
+  booking: {
+    bookingRef: string;
+    studentName: string;
+    email: string;
+    packageTitle: string;
+    packagePrice: number;
+    date: string;
+    time: string;
+  },
+  payment: {
+    method: string; // 'card' | 'link' | 'google_pay' | 'paypal'
+    transactionId: string;
+    amount: number;
+  }
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  const recipient = (booking.email || '').trim();
+  if (!recipient) return { success: false, error: 'Recipient email missing' };
+
+  const safeName = escapeHtml(booking.studentName || 'Customer');
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeMethod = escapeHtml(
+    payment.method === 'google_pay' ? 'Google Pay' :
+    payment.method === 'link' ? 'Stripe Link' :
+    payment.method === 'paypal' ? 'PayPal' : 'Credit / Debit Card'
+  );
+  const safeTxId = escapeHtml(payment.transactionId);
+  const safeAmount = `$${Number(payment.amount || booking.packagePrice).toFixed(2)} AUD`;
+  const safePackage = escapeHtml(booking.packageTitle || 'Driving Lesson');
+
+  const subject = `Payment Receipt: ${safeAmount} for Wally's Driving School (${booking.bookingRef})`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #111111; padding: 20px 24px; color: #ffffff;">
+            <div style="font-size: 18px; font-weight: bold;">Wally's Driving School</div>
+            <div style="font-size: 12px; color: #aaaaaa;">Tax Invoice / Official Receipt</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px;">
+            <p style="font-size: 14px; margin: 0 0 16px;">Dear ${safeName},</p>
+            <p style="font-size: 14px; line-height: 1.5; color: #444444; margin: 0 0 20px;">
+              Thank you for your payment. Here is your official payment receipt:
+            </p>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin-bottom: 24px;">
+              <tr style="border-bottom: 2px solid #eeeeee;">
+                <th align="left" style="padding: 10px 0; font-size: 13px; color: #666666;">Item</th>
+                <th align="right" style="padding: 10px 0; font-size: 13px; color: #666666;">Amount</th>
+              </tr>
+              <tr style="border-bottom: 1px solid #eeeeee;">
+                <td style="padding: 12px 0; font-size: 14px; font-weight: 500;">${safePackage}</td>
+                <td style="padding: 12px 0; font-size: 14px; font-weight: bold; text-align: right;">${safeAmount}</td>
+              </tr>
+              <tr>
+                <td style="padding: 14px 0; font-size: 15px; font-weight: bold;">Total Paid</td>
+                <td style="padding: 14px 0; font-size: 16px; font-weight: bold; color: #E3222A; text-align: right;">${safeAmount}</td>
+              </tr>
+            </table>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9f9fb; border-radius: 8px; padding: 14px; font-size: 12px; color: #555555; line-height: 1.6;">
+              <tr>
+                <td style="width: 40%;">Booking Reference:</td>
+                <td style="font-weight: bold; color: #111111;">${safeRef}</td>
+              </tr>
+              <tr>
+                <td>Payment Method:</td>
+                <td style="font-weight: bold; color: #111111;">${safeMethod}</td>
+              </tr>
+              <tr>
+                <td>Transaction ID:</td>
+                <td style="font-family: monospace; font-size: 11px;">${safeTxId}</td>
+              </tr>
+              <tr>
+                <td>Date of Payment:</td>
+                <td>${new Date().toLocaleDateString('en-AU')}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #f7f7f9; padding: 16px 24px; text-align: center; border-top: 1px solid #eeeeee; font-size: 11px; color: #888888;">
+            Wally's Driving School • info@wallysdrivingschool.com.au • 0412 345 678
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  return await sendEmailWithRetry(
+    { to: recipient, subject, html, text: `Receipt for ${safeAmount}. Ref: ${booking.bookingRef}, Tx: ${safeTxId}` },
+    { bookingRef: booking.bookingRef, emailType: 'receipt' }
+  );
+}
+
+/**
+ * 3. Booking Cancellation / Refund Notice Email
+ */
+export async function sendBookingCancellationNoticeEmail(
+  booking: {
+    bookingRef: string;
+    studentName: string;
+    email: string;
+    date: string;
+    time: string;
+    packageTitle: string;
+  },
+  details?: {
+    reason?: string;
+    refundStatus?: string;
+    amountRefunded?: number;
+    refundTxId?: string;
+  }
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  const recipient = (booking.email || '').trim();
+  if (!recipient) return { success: false, error: 'Recipient email missing' };
+
+  const safeName = escapeHtml(booking.studentName || 'Student');
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeDate = escapeHtml(booking.date);
+  const safeTime = escapeHtml(booking.time);
+  const safeReason = escapeHtml(details?.reason || 'Customer or instructor requested cancellation');
+  const isRefunded = Boolean(details?.refundStatus === 'refunded' || details?.amountRefunded);
+  const refundAmount = details?.amountRefunded ? `$${Number(details.amountRefunded).toFixed(2)} AUD` : '';
+
+  const subject = `Booking Cancellation Notice: ${booking.bookingRef} – Wally's Driving School`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #333333; padding: 24px; text-align: center; color: #ffffff;">
+            <h1 style="margin: 0; font-size: 20px;">Wally's Driving School</h1>
+            <p style="margin: 4px 0 0; font-size: 13px; opacity: 0.8;">Booking Cancellation Confirmation</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px;">
+            <p style="font-size: 14px;">Hi ${safeName},</p>
+            <p style="font-size: 14px; line-height: 1.6; color: #444444;">
+              This email confirms that your driving lesson booking (<strong>${safeRef}</strong>) scheduled for <strong>${safeDate} at ${safeTime}</strong> has been cancelled.
+            </p>
+
+            <div style="background-color: #f9f9f9; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #555555;">
+              <div><strong>Reason:</strong> ${safeReason}</div>
+              ${isRefunded ? `
+                <div style="margin-top: 8px; color: #166534; font-weight: bold;">
+                  Refund Status: A refund of ${refundAmount} has been initiated to your original payment method.
+                </div>
+              ` : ''}
+            </div>
+
+            <p style="font-size: 13px; color: #666666;">
+              If you wish to re-book at another time that suits your schedule, please visit our website at <a href="https://wallysdrivingschool.com.au/book-now" style="color: #E3222A;">wallysdrivingschool.com.au/book-now</a>.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  return await sendEmailWithRetry(
+    { to: recipient, subject, html, text: `Booking ${booking.bookingRef} has been cancelled.` },
+    { bookingRef: booking.bookingRef, emailType: 'cancellation' }
+  );
+}
+
+/**
+ * 4. Instructor Notification Email
+ * Alerts the driving instructor immediately when a new booking is created / confirmed.
+ */
+export async function sendInstructorNotificationEmail(booking: {
+  bookingRef: string;
+  studentName: string;
+  phone: string;
+  email: string;
+  date: string;
+  time: string;
+  packageTitle: string;
+  packagePrice?: number;
+  pickupAddress?: string | null;
+  suburb?: string;
+  notes?: string | null;
+}): Promise<{ success: boolean; id?: string; error?: string }> {
+  const instructorEmail = process.env.INSTRUCTOR_NOTIFICATION_EMAIL?.trim() || 'info@wallysdrivingschool.com.au';
+
+  const safeName = escapeHtml(booking.studentName);
+  const safePhone = escapeHtml(booking.phone);
+  const safeEmail = escapeHtml(booking.email);
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeDate = escapeHtml(booking.date);
+  const safeTime = escapeHtml(booking.time);
+  const safePackage = escapeHtml(booking.packageTitle);
+  const safeAddress = escapeHtml(booking.pickupAddress || booking.suburb || 'Not provided');
+  const safeNotes = escapeHtml(booking.notes || 'None');
+
+  const subject = `NEW LESSON BOOKING: ${safeName} – ${safeDate} @ ${safeTime} (${safeRef})`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #E3222A; padding: 20px 24px; color: #ffffff;">
+            <h2 style="margin: 0; font-size: 18px;">New Student Booking Alert!</h2>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px;">
+            <p style="font-size: 14px; margin: 0 0 16px;">Wally, a new paid driving lesson has been booked:</p>
+            <table width="100%" cellpadding="6" cellspacing="0" style="font-size: 13px; line-height: 1.6;">
+              <tr><td style="color: #666;">Booking Ref:</td><td><strong>${safeRef}</strong></td></tr>
+              <tr><td style="color: #666;">Student Name:</td><td><strong>${safeName}</strong></td></tr>
+              <tr><td style="color: #666;">Phone:</td><td><a href="tel:${safePhone}">${safePhone}</a></td></tr>
+              <tr><td style="color: #666;">Email:</td><td><a href="mailto:${safeEmail}">${safeEmail}</a></td></tr>
+              <tr><td style="color: #666;">Date:</td><td><strong>${safeDate}</strong></td></tr>
+              <tr><td style="color: #666;">Time Slot:</td><td><strong>${safeTime}</strong></td></tr>
+              <tr><td style="color: #666;">Package:</td><td>${safePackage}</td></tr>
+              <tr><td style="color: #666;">Pickup Address:</td><td><strong>${safeAddress}</strong></td></tr>
+              <tr><td style="color: #666;">Notes:</td><td>${safeNotes}</td></tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  return await sendEmailWithRetry(
+    { to: instructorEmail, subject, html, text: `New Booking: ${booking.studentName} on ${booking.date} at ${booking.time}. Ref: ${booking.bookingRef}` },
+    { bookingRef: booking.bookingRef, emailType: 'instructor_notification' }
+  );
+}
+

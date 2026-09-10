@@ -58,14 +58,56 @@ export const contactMessages = pgTable('contact_messages', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// Audit logging table for booking state changes (instructor / system / webhook actions)
+export const bookingAuditLogs = pgTable('booking_audit_logs', {
+  id: serial('id').primaryKey(),
+  bookingRef: text('booking_ref').notNull(),
+  action: text('action').notNull(), // 'create', 'update_status', 'reschedule', 'cancel', 'refund', 'payment_verified'
+  performedBy: text('performed_by').default('system').notNull(), // 'system', 'stripe_webhook', 'paypal_webhook', 'instructor', 'student'
+  previousState: text('previous_state'),
+  newState: text('new_state'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  auditBookingRefIdx: index('audit_booking_ref_idx').on(table.bookingRef),
+  auditActionIdx: index('audit_action_idx').on(table.action),
+}));
+
+// Transactional email delivery and retry tracking logs (Resend integration)
+export const emailLogs = pgTable('email_logs', {
+  id: serial('id').primaryKey(),
+  bookingRef: text('booking_ref'),
+  emailType: text('email_type').notNull(), // 'confirmation', 'receipt', 'cancellation', 'reminder', 'instructor_notification'
+  recipientEmail: text('recipient_email').notNull(),
+  status: text('status').notNull(), // 'sent', 'failed', 'retrying'
+  messageId: text('message_id'),
+  error: text('error'),
+  retryCount: integer('retry_count').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  emailLogBookingRefIdx: index('email_log_booking_ref_idx').on(table.bookingRef),
+  emailLogStatusIdx: index('email_log_status_idx').on(table.status),
+}));
+
+// Idempotent webhook event log to prevent duplicate processing
+export const webhookEvents = pgTable('webhook_events', {
+  id: serial('id').primaryKey(),
+  eventId: text('event_id').notNull().unique(),
+  provider: text('provider').notNull(), // 'stripe', 'paypal'
+  eventType: text('event_type').notNull(),
+  processedAt: timestamp('processed_at').defaultNow(),
+});
+
 // Table relations
 export const usersRelations = relations(users, ({ many }) => ({
   bookings: many(bookings),
 }));
 
-export const bookingsRelations = relations(bookings, ({ one }) => ({
+export const bookingsRelations = relations(bookings, ({ one, many }) => ({
   user: one(users, {
     fields: [bookings.userId],
     references: [users.uid],
   }),
+  auditLogs: many(bookingAuditLogs),
+  emailLogs: many(emailLogs),
 }));

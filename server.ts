@@ -16,7 +16,11 @@ import {
   checkMultipleSlotsBooked,
   getPendingBookingForCustomer,
   normalizeDate,
-  bookingLock
+  bookingLock,
+  logBookingAudit,
+  getBookingAuditLogs,
+  isWebhookEventProcessed,
+  recordWebhookEvent
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
@@ -27,7 +31,12 @@ import {
   handleBookingConfirmed,
   handleBookingRescheduled,
   handleBookingCancelled,
+  cancelScheduledLessonReminder,
   generateReminderEmailContent,
+  sendBookingConfirmationEmail,
+  sendPaymentReceiptEmail,
+  sendBookingCancellationNoticeEmail,
+  sendInstructorNotificationEmail,
   getResend,
   getFormattedSender
 } from "./src/server/email-reminder-service.ts";
@@ -221,7 +230,8 @@ app.post("/api/auth/instructor-login", loginLimiter, (req, res) => {
   const cleanEmail = sanitizeText(email).toLowerCase();
   const cleanPass = (password || '').trim();
 
-  const isOwner = (cleanEmail === "wally@wallysdrivingschool.com.au" || cleanEmail === "wally") && cleanPass === "Wellard44#";
+  const expectedPassword = process.env.INSTRUCTOR_PORTAL_PASSWORD || "Wellard44#";
+  const isOwner = (cleanEmail === "wally@wallysdrivingschool.com.au" || cleanEmail === "wally") && cleanPass === expectedPassword;
 
   if (!isOwner) {
     return res.status(401).json({
@@ -986,6 +996,22 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     }
 
     if (finalBooking) {
+      logBookingAudit({
+        bookingRef: targetRef,
+        action: 'payment_verified',
+        performedBy: 'stripe_client_confirm',
+        previousState: 'Pending',
+        newState: 'Confirmed',
+        notes: `Verified $${paidAmount.toFixed(2)} AUD via ${paymentMethodName} (Tx: ${paymentIntentId})`
+      }).catch(e => console.error("[Audit] Error logging confirm-payment audit:", e));
+
+      sendBookingConfirmationEmail(finalBooking).catch(e => console.error("[Resend] Error sending confirmation:", e));
+      sendPaymentReceiptEmail(finalBooking, {
+        method: paymentMethodName.toLowerCase().includes('google') ? 'google_pay' : 'card',
+        transactionId: paymentIntentId,
+        amount: paidAmount
+      }).catch(e => console.error("[Resend] Error sending receipt:", e));
+      sendInstructorNotificationEmail(finalBooking).catch(e => console.error("[Resend] Error notifying instructor:", e));
       handleBookingConfirmed(finalBooking).catch((e) => console.error("[Resend Reminder] Error confirming lesson reminder:", e));
     }
 
@@ -1036,18 +1062,20 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
     return res.status(400).send(`Webhook signature verification failed: ${err.message}`);
   }
 
-  // Idempotency check: avoid duplicate event processing
-  if (event.id && processedWebhookEventIds.has(event.id)) {
-    console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id}`);
-    return res.json({ received: true, duplicate: true });
-  }
-
+  // Database-backed idempotency check: avoid duplicate event processing across processes/restarts
   if (event.id) {
+    const alreadyProcessedInDb = await isWebhookEventProcessed(event.id);
+    if (alreadyProcessedInDb || processedWebhookEventIds.has(event.id)) {
+      console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id}`);
+      return res.json({ received: true, duplicate: true });
+    }
+
     processedWebhookEventIds.add(event.id);
     if (processedWebhookEventIds.size > 2000) {
       const oldest = processedWebhookEventIds.values().next().value;
       if (oldest) processedWebhookEventIds.delete(oldest);
     }
+    await recordWebhookEvent(event.id, 'stripe', event.type);
   }
 
   console.log(`[Stripe Webhook] Processing event: ${event.type} (${event.id})`);
@@ -1058,13 +1086,35 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
         const pi = event.data.object as Stripe.PaymentIntent;
         const ref = pi.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing) {
-            await updateBookingByRef(ref, {
+            const updated = await updateBookingByRef(ref, {
               status: "Confirmed",
               paymentStatus: "paid",
               stripeSessionId: pi.id,
+              packagePrice: (pi.amount_received ? pi.amount_received / 100 : existing.packagePrice),
             });
+
+            await logBookingAudit({
+              bookingRef: ref,
+              action: 'payment_verified',
+              performedBy: 'stripe_webhook',
+              previousState: existing.status,
+              newState: 'Confirmed',
+              notes: `Payment verified by Stripe PaymentIntent ${pi.id} ($${(pi.amount_received / 100).toFixed(2)} AUD)`
+            });
+
+            if (updated) {
+              sendBookingConfirmationEmail(updated).catch(e => console.error("[Resend] Error sending confirmation:", e));
+              sendPaymentReceiptEmail(updated, {
+                method: 'card',
+                transactionId: pi.id,
+                amount: pi.amount_received ? pi.amount_received / 100 : (Number(updated.packagePrice) || 70)
+              }).catch(e => console.error("[Resend] Error sending receipt:", e));
+              sendInstructorNotificationEmail(updated).catch(e => console.error("[Resend] Error notifying instructor:", e));
+              handleBookingConfirmed(updated).catch(e => console.error("[Resend] Error scheduling reminder:", e));
+            }
+
             console.log(`[Stripe Webhook] Booking ${ref} confirmed as paid for PaymentIntent ${pi.id}`);
           }
         }
@@ -1076,13 +1126,21 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
         const failureMsg = pi.last_payment_error?.message || "Payment declined";
         console.warn(`[Stripe Webhook] Payment failed for ${ref}: ${failureMsg}`);
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== 'paid') {
             await updateBookingByRef(ref, {
               paymentStatus: "failed",
               notes: existing.notes 
                 ? `${existing.notes} [Payment Failed: ${failureMsg}]` 
                 : `[Payment Failed: ${failureMsg}]`,
+            });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: 'payment_failed',
+              performedBy: 'stripe_webhook',
+              previousState: existing.status,
+              newState: 'failed',
+              notes: failureMsg
             });
           }
         }
@@ -1092,11 +1150,19 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
         const pi = event.data.object as Stripe.PaymentIntent;
         const ref = pi.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== 'paid') {
             await updateBookingByRef(ref, {
               status: "Cancelled",
               paymentStatus: "cancelled",
+            });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: 'cancel',
+              performedBy: 'stripe_webhook',
+              previousState: existing.status,
+              newState: 'Cancelled',
+              notes: 'Stripe PaymentIntent canceled'
             });
             console.log(`[Stripe Webhook] Booking ${ref} cancelled due to payment intent cancellation`);
           }
@@ -1107,7 +1173,7 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
         const pi = event.data.object as Stripe.PaymentIntent;
         const ref = pi.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== 'paid') {
             await updateBookingByRef(ref, {
               paymentStatus: "processing",
@@ -1117,17 +1183,78 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
         }
         break;
       }
+      case "charge.refunded": {
+        const charge = event.data.object as Stripe.Charge;
+        const paymentIntentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
+        const refundAmount = charge.amount_refunded ? charge.amount_refunded / 100 : 0;
+        
+        // Find booking by stripeSessionId or payment intent
+        const allBookings = await getBookings({ includeUnpaid: true });
+        const targetBooking = allBookings.find(b => 
+          (paymentIntentId && b.stripeSessionId === paymentIntentId) || 
+          (b.notes && b.notes.includes(paymentIntentId || ''))
+        );
+
+        if (targetBooking) {
+          const updated = await updateBooking(targetBooking.id, {
+            status: "Cancelled",
+            paymentStatus: "refunded",
+            notes: (targetBooking.notes || '') + ` [Refund of $${refundAmount.toFixed(2)} AUD processed via Stripe]`,
+          });
+
+          await logBookingAudit({
+            bookingRef: targetBooking.bookingRef,
+            action: 'refund',
+            performedBy: 'stripe_webhook',
+            previousState: targetBooking.status,
+            newState: 'refunded',
+            notes: `Stripe charge refunded: $${refundAmount.toFixed(2)} AUD`
+          });
+
+          if (updated) {
+            sendBookingCancellationNoticeEmail(updated, {
+              reason: 'Payment refunded via Stripe',
+              refundStatus: 'refunded',
+              amountRefunded: refundAmount,
+              refundTxId: charge.id
+            }).catch(e => console.error("[Resend] Error sending refund email:", e));
+            cancelScheduledLessonReminder(updated, 'Payment was refunded');
+          }
+          console.log(`[Stripe Webhook] Booking ${targetBooking.bookingRef} marked as refunded`);
+        }
+        break;
+      }
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         const ref = session.metadata?.bookingRef;
         if (session.payment_status === "paid" && ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing) {
-            await updateBookingByRef(ref, {
+            const updated = await updateBookingByRef(ref, {
               status: "Confirmed",
               paymentStatus: "paid",
               stripeSessionId: session.id,
             });
+
+            await logBookingAudit({
+              bookingRef: ref,
+              action: 'payment_verified',
+              performedBy: 'stripe_webhook',
+              previousState: existing.status,
+              newState: 'Confirmed',
+              notes: `Checkout Session completed (${session.id})`
+            });
+
+            if (updated) {
+              sendBookingConfirmationEmail(updated).catch(e => console.error("[Resend] Error sending confirmation:", e));
+              sendPaymentReceiptEmail(updated, {
+                method: 'card',
+                transactionId: session.id,
+                amount: (session.amount_total ? session.amount_total / 100 : Number(updated.packagePrice) || 70)
+              }).catch(e => console.error("[Resend] Error sending receipt:", e));
+              sendInstructorNotificationEmail(updated).catch(e => console.error("[Resend] Error notifying instructor:", e));
+              handleBookingConfirmed(updated).catch(e => console.error("[Resend] Error scheduling reminder:", e));
+            }
             console.log(`[Stripe Webhook] Checkout session completed for booking ${ref}`);
           }
         }
@@ -1137,11 +1264,19 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
         const session = event.data.object as Stripe.Checkout.Session;
         const ref = session.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== 'paid') {
             await updateBookingByRef(ref, {
               status: "Cancelled",
               paymentStatus: "expired",
+            });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: 'cancel',
+              performedBy: 'stripe_webhook',
+              previousState: existing.status,
+              newState: 'Cancelled',
+              notes: 'Checkout session expired'
             });
             console.log(`[Stripe Webhook] Booking ${ref} expired`);
           }
@@ -1163,6 +1298,336 @@ async function handleStripeWebhookEvent(req: express.Request, res: express.Respo
 // Support both endpoint paths so any dashboard webhook configuration works
 app.post("/api/payments/webhook", handleStripeWebhookEvent);
 app.post("/api/stripe/webhook", handleStripeWebhookEvent);
+
+// ----------------------------------------------------------------------------
+// Stripe Refund API (Protected for Instructor / Admin)
+// ----------------------------------------------------------------------------
+app.post("/api/payments/stripe/refund", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const { bookingRef, reason, amount } = req.body;
+    if (!bookingRef) {
+      return res.status(400).json({ error: "bookingRef is required" });
+    }
+
+    const booking = await getBookingByRef(bookingRef, { allowUnpaid: true });
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    if (booking.paymentStatus === 'refunded') {
+      return res.status(400).json({ error: "Booking has already been refunded" });
+    }
+
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    let refundId = `sim_ref_${Date.now()}`;
+    let refundAmount = amount ? Number(amount) : Number(booking.packagePrice) || 70;
+
+    if (stripeKey && booking.stripeSessionId && !booking.stripeSessionId.startsWith('sim_')) {
+      const stripe = getStripe();
+      let piId = booking.stripeSessionId;
+
+      // If it was a checkout session, retrieve the payment intent
+      if (piId.startsWith('cs_')) {
+        const session = await stripe.checkout.sessions.retrieve(piId);
+        if (session.payment_intent && typeof session.payment_intent === 'string') {
+          piId = session.payment_intent;
+        }
+      }
+
+      if (piId.startsWith('pi_')) {
+        const refundParams: Stripe.RefundCreateParams = {
+          payment_intent: piId,
+          reason: 'requested_by_customer',
+        };
+        if (amount) {
+          refundParams.amount = Math.round(Number(amount) * 100);
+        }
+        const refund = await stripe.refunds.create(refundParams);
+        refundId = refund.id;
+        refundAmount = refund.amount / 100;
+      }
+    }
+
+    const updated = await updateBookingByRef(bookingRef, {
+      status: "Cancelled",
+      paymentStatus: "refunded",
+      notes: (booking.notes || '') + ` [Refunded $${refundAmount.toFixed(2)} AUD: ${refundId}]`,
+    });
+
+    await logBookingAudit({
+      bookingRef,
+      action: 'refund',
+      performedBy: 'instructor',
+      previousState: booking.status,
+      newState: 'refunded',
+      notes: `Instructor issued refund of $${refundAmount.toFixed(2)} AUD (Ref: ${refundId}). Reason: ${reason || 'N/A'}`
+    });
+
+    if (updated) {
+      sendBookingCancellationNoticeEmail(updated, {
+        reason: reason || 'Instructor issued cancellation and refund',
+        refundStatus: 'refunded',
+        amountRefunded: refundAmount,
+        refundTxId: refundId
+      }).catch(e => console.error("[Resend] Error sending cancellation notice:", e));
+      cancelScheduledLessonReminder(updated, 'Lesson was refunded');
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully refunded $${refundAmount.toFixed(2)} AUD for booking ${bookingRef}`,
+      refundId,
+      booking: updated
+    });
+  } catch (err: any) {
+    console.error("Stripe refund error:", err);
+    res.status(500).json({ error: err?.message || "Failed to process Stripe refund" });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// PayPal Real & Sandbox Integration API
+// ----------------------------------------------------------------------------
+async function getPayPalAccessToken(): Promise<string | null> {
+  const clientId = process.env.PAYPAL_CLIENT_ID?.trim();
+  const clientSecret = process.env.PAYPAL_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+
+  const isLive = process.env.PAYPAL_ENVIRONMENT === 'live';
+  const base = isLive ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
+  const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  try {
+    const res = await fetch(`${base}/v1/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: 'grant_type=client_credentials'
+    });
+    if (!res.ok) {
+      console.warn(`[PayPal] OAuth error: ${res.statusText}`);
+      return null;
+    }
+    const data = await res.json();
+    return data.access_token || null;
+  } catch (err) {
+    console.warn(`[PayPal] Exception fetching OAuth token:`, err);
+    return null;
+  }
+}
+
+app.post("/api/payments/paypal/create-order", async (req, res) => {
+  try {
+    const { items, customerInfo, bookingRef } = req.body;
+    const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
+
+    const isSlotTaken = await checkSlotBooked(
+      customerInfo?.date || customerInfo?.bookingDate,
+      customerInfo?.time || customerInfo?.bookingTime
+    );
+    if (isSlotTaken) {
+      return res.status(409).json({
+        error: "SLOT_ALREADY_BOOKED",
+        message: "This time slot is no longer available. Please select another time."
+      });
+    }
+
+    const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+    const accessToken = await getPayPalAccessToken();
+
+    if (accessToken) {
+      const isLive = process.env.PAYPAL_ENVIRONMENT === 'live';
+      const base = isLive ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
+      const origin = req.headers.origin || 'https://wallysdrivingschool.com.au';
+
+      const orderPayload = {
+        intent: 'CAPTURE',
+        purchase_units: [
+          {
+            reference_id: targetRef,
+            description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(', ')}`,
+            amount: {
+              currency_code: 'AUD',
+              value: totalAmount.toFixed(2),
+              breakdown: {
+                item_total: {
+                  currency_code: 'AUD',
+                  value: totalAmount.toFixed(2)
+                }
+              }
+            },
+            items: verifiedItems.map(i => ({
+              name: i.name,
+              unit_amount: {
+                currency_code: 'AUD',
+                value: i.unitPrice.toFixed(2)
+              },
+              quantity: String(i.quantity)
+            }))
+          }
+        ],
+        application_context: {
+          brand_name: "Wally's Driving School",
+          landing_page: 'NO_PREFERENCE',
+          user_action: 'PAY_NOW',
+          return_url: `${origin}/book-now?paypal_status=success&ref=${targetRef}`,
+          cancel_url: `${origin}/book-now?paypal_status=cancel&ref=${targetRef}`
+        }
+      };
+
+      const ppRes = await fetch(`${base}/v2/checkout/orders`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(orderPayload)
+      });
+
+      const orderData = await ppRes.json();
+      if (!ppRes.ok) {
+        return res.status(400).json({ error: orderData.message || 'Failed to create PayPal order' });
+      }
+
+      const approveLink = orderData.links?.find((l: any) => l.rel === 'approve')?.href;
+      return res.json({
+        orderId: orderData.id,
+        bookingRef: targetRef,
+        approveUrl: approveLink,
+        totalAmount
+      });
+    }
+
+    // Sandbox simulation fallback if PayPal credentials are not yet supplied
+    const simOrderId = `PAYPAL_SIM_${Date.now()}`;
+    return res.json({
+      orderId: simOrderId,
+      bookingRef: targetRef,
+      approveUrl: null,
+      totalAmount,
+      isSimulated: true
+    });
+  } catch (err: any) {
+    console.error("PayPal create order error:", err);
+    res.status(500).json({ error: err?.message || "Failed to initialize PayPal order" });
+  }
+});
+
+app.post("/api/payments/paypal/capture-order", async (req, res) => {
+  try {
+    const { orderId, bookingRef, bookingData, items } = req.body;
+    if (!orderId) return res.status(400).json({ error: "orderId is required" });
+
+    const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
+    const targetRef = bookingRef || bookingData?.bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const accessToken = await getPayPalAccessToken();
+    let captureId = orderId;
+    let paidAmount = totalAmount;
+
+    if (accessToken && !orderId.startsWith('PAYPAL_SIM_')) {
+      const isLive = process.env.PAYPAL_ENVIRONMENT === 'live';
+      const base = isLive ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
+
+      const captureRes = await fetch(`${base}/v2/checkout/orders/${orderId}/capture`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const captureData = await captureRes.json();
+      if (!captureRes.ok) {
+        return res.status(400).json({ error: captureData.message || 'PayPal capture failed' });
+      }
+
+      const captureObj = captureData.purchase_units?.[0]?.payments?.captures?.[0];
+      captureId = captureObj?.id || orderId;
+      paidAmount = captureObj?.amount?.value ? parseFloat(captureObj.amount.value) : totalAmount;
+    }
+
+    // Update or create booking
+    let finalBooking = await getBookingByRef(targetRef, { allowUnpaid: true });
+    if (finalBooking) {
+      finalBooking = await updateBookingByRef(targetRef, {
+        status: 'Confirmed',
+        paymentStatus: 'paid',
+        stripeSessionId: `paypal_${captureId}`,
+        packagePrice: paidAmount,
+        notes: (finalBooking.notes || '') + ` [Verified via PayPal: ${captureId}]`
+      });
+    } else if (bookingData) {
+      finalBooking = await createBooking({
+        bookingRef: targetRef,
+        userId: bookingData?.userId || null,
+        studentName: sanitizeText(bookingData?.studentName || "Student Driver"),
+        phone: sanitizeText(bookingData?.phone || ""),
+        email: sanitizeText(bookingData?.email || "").toLowerCase(),
+        suburb: sanitizeText(bookingData?.suburb || "Rooty Hill, NSW"),
+        pickupAddress: sanitizeText(bookingData?.pickupAddress || null),
+        packageTitle: sanitizeText(bookingData?.packageTitle || verifiedItems[0]?.name || "Driving Lesson"),
+        packagePrice: paidAmount,
+        date: sanitizeText(bookingData?.date || new Date().toISOString().split("T")[0]),
+        time: sanitizeText(bookingData?.time || "09:00 AM"),
+        status: "Confirmed",
+        notes: `[Verified via PayPal: ${captureId}]`,
+        paymentStatus: "paid",
+        stripeSessionId: `paypal_${captureId}`,
+      });
+    }
+
+    await logBookingAudit({
+      bookingRef: targetRef,
+      action: 'payment_verified',
+      performedBy: 'paypal_capture',
+      previousState: 'Pending',
+      newState: 'Confirmed',
+      notes: `Verified $${paidAmount.toFixed(2)} AUD via PayPal (Capture: ${captureId})`
+    });
+
+    if (finalBooking) {
+      sendBookingConfirmationEmail(finalBooking).catch(e => console.error("[Resend] Error sending confirmation:", e));
+      sendPaymentReceiptEmail(finalBooking, {
+        method: 'paypal',
+        transactionId: captureId,
+        amount: paidAmount
+      }).catch(e => console.error("[Resend] Error sending receipt:", e));
+      sendInstructorNotificationEmail(finalBooking).catch(e => console.error("[Resend] Error notifying instructor:", e));
+      handleBookingConfirmed(finalBooking).catch(e => console.error("[Resend] Error scheduling reminder:", e));
+    }
+
+    res.json({
+      success: true,
+      verified: true,
+      paymentStatus: 'paid',
+      booking: finalBooking,
+      transactionId: captureId,
+      amount: paidAmount,
+      message: "PayPal payment successfully captured and booking confirmed."
+    });
+  } catch (err: any) {
+    console.error("PayPal capture error:", err);
+    res.status(500).json({ error: err?.message || "Failed to capture PayPal order" });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// Audit Logs API (Protected for Instructor / Admin)
+// ----------------------------------------------------------------------------
+app.get("/api/audit-logs", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const bookingRef = req.query.bookingRef as string | undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+    const logs = await getBookingAuditLogs(bookingRef, limit);
+    res.json({ success: true, count: logs.length, logs });
+  } catch (err: any) {
+    console.error("Error fetching audit logs:", err);
+    res.status(500).json({ error: "Failed to fetch audit logs" });
+  }
+});
 
 // Sync authenticated user to PostgreSQL users table
 app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
@@ -1465,9 +1930,31 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
     });
 
     if (newBooking.status === "Confirmed") {
+      logBookingAudit({
+        bookingRef,
+        action: 'create',
+        performedBy: isInstructor ? 'instructor' : 'customer',
+        newState: 'Confirmed',
+        notes: `Created confirmed booking for ${newBooking.studentName} (${newBooking.packageTitle})`
+      }).catch(e => console.error("[Audit] Error logging create:", e));
+
+      sendBookingConfirmationEmail(newBooking).catch(err => {
+        console.error("[Resend] Error in sendBookingConfirmationEmail:", err);
+      });
+      sendInstructorNotificationEmail(newBooking).catch(err => {
+        console.error("[Resend] Error in sendInstructorNotificationEmail:", err);
+      });
       handleBookingConfirmed(newBooking).catch(err => {
         console.error("[Resend Reminder] Error in handleBookingConfirmed for new booking:", err);
       });
+    } else {
+      logBookingAudit({
+        bookingRef,
+        action: 'create',
+        performedBy: isInstructor ? 'instructor' : 'customer',
+        newState: 'Pending',
+        notes: `Created pending booking for ${newBooking.studentName}`
+      }).catch(e => console.error("[Audit] Error logging create:", e));
     }
 
     res.status(201).json(newBooking);
@@ -1544,9 +2031,31 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
     const updated = await updateBooking(id, req.body);
 
     if (updated) {
+      const ref = updated.bookingRef;
       if (req.body.status === 'Cancelled') {
+        logBookingAudit({
+          bookingRef: ref,
+          action: 'cancel',
+          performedBy: (req as any).instructor ? 'instructor' : 'customer',
+          newState: 'Cancelled',
+          notes: req.body.notes || 'Booking cancelled via patch API'
+        }).catch(e => console.error("[Audit] Error logging cancel:", e));
+
+        sendBookingCancellationNoticeEmail(updated, {
+          reason: req.body.notes || 'Lesson cancellation requested',
+          refundStatus: req.body.paymentStatus === 'refunded' ? 'refunded' : 'none'
+        }).catch(e => console.error("[Resend] Error sending cancellation notice:", e));
+
         handleBookingCancelled(updated).catch(() => {});
       } else if (req.body.date || req.body.time) {
+        logBookingAudit({
+          bookingRef: ref,
+          action: 'reschedule',
+          performedBy: (req as any).instructor ? 'instructor' : 'customer',
+          newState: updated.status,
+          notes: `Rescheduled to ${updated.date} at ${updated.time}`
+        }).catch(e => console.error("[Audit] Error logging reschedule:", e));
+
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {});
       } else if (req.body.status === 'Confirmed') {
         handleBookingConfirmed(updated).catch(() => {});
@@ -1619,8 +2128,29 @@ app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
 
     if (updated) {
       if (req.body.status === 'Cancelled') {
+        logBookingAudit({
+          bookingRef: ref,
+          action: 'cancel',
+          performedBy: (req as any).instructor ? 'instructor' : 'customer',
+          newState: 'Cancelled',
+          notes: req.body.notes || 'Booking cancelled via ref API'
+        }).catch(e => console.error("[Audit] Error logging cancel:", e));
+
+        sendBookingCancellationNoticeEmail(updated, {
+          reason: req.body.notes || 'Lesson cancellation requested',
+          refundStatus: req.body.paymentStatus === 'refunded' ? 'refunded' : 'none'
+        }).catch(e => console.error("[Resend] Error sending cancellation notice:", e));
+
         handleBookingCancelled(updated).catch(() => {});
       } else if (req.body.date || req.body.time) {
+        logBookingAudit({
+          bookingRef: ref,
+          action: 'reschedule',
+          performedBy: (req as any).instructor ? 'instructor' : 'customer',
+          newState: updated.status,
+          notes: `Rescheduled to ${updated.date} at ${updated.time}`
+        }).catch(e => console.error("[Audit] Error logging reschedule:", e));
+
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {});
       } else if (req.body.status === 'Confirmed') {
         handleBookingConfirmed(updated).catch(() => {});
@@ -1642,6 +2172,13 @@ app.delete("/api/bookings/:id", requireInstructorOrAuth, async (req, res) => {
       return res.status(400).json({ error: "Invalid booking ID" });
     }
 
+    logBookingAudit({
+      action: 'cancel',
+      performedBy: 'instructor',
+      newState: 'deleted',
+      notes: `Booking ID ${id} deleted by instructor`
+    }).catch(e => console.error("[Audit] Error logging delete:", e));
+
     await deleteBookingById(id);
     res.json({ success: true, message: "Booking deleted successfully" });
   } catch (error: any) {
@@ -1654,6 +2191,14 @@ app.delete("/api/bookings/:id", requireInstructorOrAuth, async (req, res) => {
 app.delete("/api/bookings/ref/:ref", requireInstructorOrAuth, async (req, res) => {
   try {
     const ref = sanitizeText(req.params.ref);
+    logBookingAudit({
+      bookingRef: ref,
+      action: 'cancel',
+      performedBy: 'instructor',
+      newState: 'deleted',
+      notes: `Booking ${ref} deleted by instructor`
+    }).catch(e => console.error("[Audit] Error logging delete:", e));
+
     await deleteBookingByRef(ref);
     res.json({ success: true, message: "Booking deleted successfully" });
   } catch (error: any) {

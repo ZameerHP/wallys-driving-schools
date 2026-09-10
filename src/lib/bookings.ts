@@ -646,25 +646,17 @@ export async function deleteBookingFromDb(id: string, targetRef?: string): Promi
   }
 }
 
-// Default Owner Credentials
+// Default Owner Identity
 export const OWNER_CREDENTIALS = {
   username: "Wally@wallysdrivingschool.com.au",
-  password: "Wellard44#",
   name: "Wally (Owner & Lead Instructor)",
   role: "Instructor"
 };
 
-// Check owner credentials
-export function checkOwnerAuth(user: string, pass: string): boolean {
-  const cleanUser = user.trim().toLowerCase();
-  const cleanPass = pass.trim();
-  
-  return (
-    (cleanUser === OWNER_CREDENTIALS.username.toLowerCase() || 
-     cleanUser === "wally" || 
-     cleanUser === "wally@wallysdrivingschool.com.au") &&
-    cleanPass === OWNER_CREDENTIALS.password
-  );
+// Check owner credentials via server authentication
+export function checkOwnerAuth(_user: string, _pass: string): boolean {
+  // Authentication must be performed server-side via /api/auth/instructor-login
+  return false;
 }
 
 const OWNER_SESSION_KEY = 'wallys_owner_authenticated_session';

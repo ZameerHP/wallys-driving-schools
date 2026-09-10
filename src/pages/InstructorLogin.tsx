@@ -26,7 +26,6 @@ import {
 import { useState, useEffect } from 'react';
 import { cn } from '../lib/utils';
 import { 
-  checkOwnerAuth, 
   isOwnerLoggedIn, 
   setOwnerLoggedIn, 
   logoutOwner, 
@@ -35,7 +34,6 @@ import {
   fetchBookingsFromDb,
   updateBookingInDb,
   deleteBookingFromDb,
-  OWNER_CREDENTIALS,
   triggerLessonReminder,
   fetchReminderSystemStatus
 } from '../lib/bookings';
@@ -72,21 +70,9 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
         setError(data.message || 'Access Denied: Only the owner (Wally) is authorized to access the instructor portal.');
       }
     } catch {
-      // Offline fallback
       setIsLoading(false);
-      const isValid = checkOwnerAuth(email, password);
-      if (isValid) {
-        setOwnerLoggedIn(true);
-        onLogin();
-      } else {
-        setError('Access Denied: Only the owner (Wally) is authorized to access the instructor portal. Please check your credentials.');
-      }
+      setError('Unable to reach authentication server. Please check your network connection.');
     }
-  };
-
-  const handleAutofill = () => {
-    setEmail(OWNER_CREDENTIALS.username);
-    setPassword(OWNER_CREDENTIALS.password);
   };
 
   return (
@@ -187,18 +173,6 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
               )}
             </motion.button>
           </form>
-
-          {/* Quick Autofill */}
-          <div className="mt-4 text-center">
-            <button
-              type="button"
-              onClick={handleAutofill}
-              className="inline-flex items-center gap-1.5 text-xs text-brand-red hover:underline cursor-pointer font-medium bg-brand-red/10 px-3.5 py-1.5 rounded-full border border-brand-red/20 transition-all"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Autofill Wally's Credentials</span>
-            </button>
-          </div>
 
           <div className="mt-6 pt-5 border-t border-white/10 text-center relative z-10 flex flex-col gap-2">
             <span className="text-xs text-white/40">Credential: Wally@wallysdrivingschool.com.au</span>

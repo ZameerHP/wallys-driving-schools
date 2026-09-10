@@ -17,11 +17,14 @@ import { Pool } from "pg";
 // src/db/schema.ts
 var schema_exports = {};
 __export(schema_exports, {
+  bookingAuditLogs: () => bookingAuditLogs,
   bookings: () => bookings,
   bookingsRelations: () => bookingsRelations,
   contactMessages: () => contactMessages,
+  emailLogs: () => emailLogs,
   users: () => users,
-  usersRelations: () => usersRelations
+  usersRelations: () => usersRelations,
+  webhookEvents: () => webhookEvents
 });
 import { relations } from "drizzle-orm";
 import { integer, pgTable, serial, text, timestamp, index } from "drizzle-orm/pg-core";
@@ -76,14 +79,55 @@ var contactMessages = pgTable("contact_messages", {
   message: text("message").notNull(),
   createdAt: timestamp("created_at").defaultNow()
 });
+var bookingAuditLogs = pgTable("booking_audit_logs", {
+  id: serial("id").primaryKey(),
+  bookingRef: text("booking_ref").notNull(),
+  action: text("action").notNull(),
+  // 'create', 'update_status', 'reschedule', 'cancel', 'refund', 'payment_verified'
+  performedBy: text("performed_by").default("system").notNull(),
+  // 'system', 'stripe_webhook', 'paypal_webhook', 'instructor', 'student'
+  previousState: text("previous_state"),
+  newState: text("new_state"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow()
+}, (table) => ({
+  auditBookingRefIdx: index("audit_booking_ref_idx").on(table.bookingRef),
+  auditActionIdx: index("audit_action_idx").on(table.action)
+}));
+var emailLogs = pgTable("email_logs", {
+  id: serial("id").primaryKey(),
+  bookingRef: text("booking_ref"),
+  emailType: text("email_type").notNull(),
+  // 'confirmation', 'receipt', 'cancellation', 'reminder', 'instructor_notification'
+  recipientEmail: text("recipient_email").notNull(),
+  status: text("status").notNull(),
+  // 'sent', 'failed', 'retrying'
+  messageId: text("message_id"),
+  error: text("error"),
+  retryCount: integer("retry_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow()
+}, (table) => ({
+  emailLogBookingRefIdx: index("email_log_booking_ref_idx").on(table.bookingRef),
+  emailLogStatusIdx: index("email_log_status_idx").on(table.status)
+}));
+var webhookEvents = pgTable("webhook_events", {
+  id: serial("id").primaryKey(),
+  eventId: text("event_id").notNull().unique(),
+  provider: text("provider").notNull(),
+  // 'stripe', 'paypal'
+  eventType: text("event_type").notNull(),
+  processedAt: timestamp("processed_at").defaultNow()
+});
 var usersRelations = relations(users, ({ many }) => ({
   bookings: many(bookings)
 }));
-var bookingsRelations = relations(bookings, ({ one }) => ({
+var bookingsRelations = relations(bookings, ({ one, many }) => ({
   user: one(users, {
     fields: [bookings.userId],
     references: [users.uid]
-  })
+  }),
+  auditLogs: many(bookingAuditLogs),
+  emailLogs: many(emailLogs)
 }));
 
 // src/db/index.ts
@@ -220,6 +264,9 @@ async function checkSupabaseConnection() {
 // src/db/queries.ts
 var inMemoryUsers = /* @__PURE__ */ new Map();
 var inMemoryContactMessages = [];
+var inMemoryAuditLogs = [];
+var inMemoryEmailLogs = [];
+var inMemoryWebhookEvents = /* @__PURE__ */ new Set();
 var inMemoryBookings = [
   {
     id: 1,
@@ -966,6 +1013,174 @@ async function createContactMessage(data) {
   inMemoryContactMessages.push(newMsg);
   return newMsg;
 }
+async function logBookingAudit(entry) {
+  const auditRecord = {
+    id: inMemoryAuditLogs.length + 1,
+    bookingRef: entry.bookingRef || "N/A",
+    action: entry.action,
+    performedBy: entry.performedBy || "system",
+    previousState: entry.previousState || null,
+    newState: entry.newState || null,
+    notes: entry.notes || null,
+    createdAt: /* @__PURE__ */ new Date()
+  };
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      await supabase.from("booking_audit_logs").insert([{
+        booking_ref: entry.bookingRef || "N/A",
+        action: entry.action,
+        performed_by: entry.performedBy || "system",
+        previous_state: entry.previousState || null,
+        new_state: entry.newState || null,
+        notes: entry.notes || null,
+        created_at: (/* @__PURE__ */ new Date()).toISOString()
+      }]);
+    } catch (sbErr) {
+    }
+  }
+  if (isSqlConfigured && db) {
+    try {
+      await db.insert(bookingAuditLogs).values({
+        bookingRef: entry.bookingRef || "N/A",
+        action: entry.action,
+        performedBy: entry.performedBy || "system",
+        previousState: entry.previousState || null,
+        newState: entry.newState || null,
+        notes: entry.notes || null
+      });
+    } catch (sqlErr) {
+    }
+  }
+  inMemoryAuditLogs.unshift(auditRecord);
+  return auditRecord;
+}
+async function getBookingAuditLogs(bookingRef, limit = 50) {
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      let query = supabase.from("booking_audit_logs").select("*").order("created_at", { ascending: false }).limit(limit);
+      if (bookingRef) {
+        query = query.eq("booking_ref", bookingRef);
+      }
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return data;
+      }
+    } catch {
+    }
+  }
+  if (isSqlConfigured && db) {
+    try {
+      if (bookingRef) {
+        return await db.select().from(bookingAuditLogs).where(eq(bookingAuditLogs.bookingRef, bookingRef)).orderBy(desc(bookingAuditLogs.createdAt)).limit(limit);
+      }
+      return await db.select().from(bookingAuditLogs).orderBy(desc(bookingAuditLogs.createdAt)).limit(limit);
+    } catch {
+    }
+  }
+  if (bookingRef) {
+    return inMemoryAuditLogs.filter((log) => log.bookingRef === bookingRef).slice(0, limit);
+  }
+  return inMemoryAuditLogs.slice(0, limit);
+}
+async function logEmailDelivery(entry) {
+  const logRecord = {
+    id: inMemoryEmailLogs.length + 1,
+    bookingRef: entry.bookingRef || null,
+    emailType: entry.emailType,
+    recipientEmail: entry.recipientEmail,
+    status: entry.status,
+    messageId: entry.messageId || null,
+    error: entry.error || null,
+    retryCount: entry.retryCount ?? 0,
+    createdAt: /* @__PURE__ */ new Date()
+  };
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      await supabase.from("email_logs").insert([{
+        booking_ref: entry.bookingRef || null,
+        email_type: entry.emailType,
+        recipient_email: entry.recipientEmail,
+        status: entry.status,
+        message_id: entry.messageId || null,
+        error: entry.error || null,
+        retry_count: entry.retryCount ?? 0,
+        created_at: (/* @__PURE__ */ new Date()).toISOString()
+      }]);
+    } catch {
+    }
+  }
+  if (isSqlConfigured && db) {
+    try {
+      await db.insert(emailLogs).values({
+        bookingRef: entry.bookingRef || null,
+        emailType: entry.emailType,
+        recipientEmail: entry.recipientEmail,
+        status: entry.status,
+        messageId: entry.messageId || null,
+        error: entry.error || null,
+        retryCount: entry.retryCount ?? 0
+      });
+    } catch {
+    }
+  }
+  inMemoryEmailLogs.unshift(logRecord);
+  return logRecord;
+}
+async function isWebhookEventProcessed(eventId) {
+  if (!eventId) return false;
+  if (inMemoryWebhookEvents.has(eventId)) return true;
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      const { data } = await supabase.from("webhook_events").select("event_id").eq("event_id", eventId).single();
+      if (data) {
+        inMemoryWebhookEvents.add(eventId);
+        return true;
+      }
+    } catch {
+    }
+  }
+  if (isSqlConfigured && db) {
+    try {
+      const existing = await db.select().from(webhookEvents).where(eq(webhookEvents.eventId, eventId)).limit(1);
+      if (existing.length > 0) {
+        inMemoryWebhookEvents.add(eventId);
+        return true;
+      }
+    } catch {
+    }
+  }
+  return false;
+}
+async function recordWebhookEvent(eventId, provider, eventType) {
+  if (!eventId) return;
+  inMemoryWebhookEvents.add(eventId);
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      await supabase.from("webhook_events").insert([{
+        event_id: eventId,
+        provider,
+        event_type: eventType,
+        processed_at: (/* @__PURE__ */ new Date()).toISOString()
+      }]);
+    } catch {
+    }
+  }
+  if (isSqlConfigured && db) {
+    try {
+      await db.insert(webhookEvents).values({
+        eventId,
+        provider,
+        eventType
+      });
+    } catch {
+    }
+  }
+}
 
 // src/middleware/auth.ts
 function parseTokenPayload(token) {
@@ -1276,6 +1491,10 @@ function validateInternationalPhone(rawPhone, dialCode = "+61") {
 import { Resend } from "resend";
 var inFlightSendingLocks = /* @__PURE__ */ new Set();
 var resendInstance = null;
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
 function getResend() {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
@@ -1712,6 +1931,372 @@ async function processPendingLessonReminders() {
   }
   return { checked, sent, scheduled, failed, skipped };
 }
+async function sendEmailWithRetry(payload, options) {
+  const resend = getResend();
+  const maxRetries = options.maxRetries ?? 3;
+  const primarySender = payload.from || getFormattedSender();
+  const recipient = Array.isArray(payload.to) ? payload.to.join(", ") : payload.to;
+  if (!resend) {
+    console.warn(`[Resend] RESEND_API_KEY is not configured. Email to ${recipient} simulated.`);
+    await logEmailDelivery({
+      bookingRef: options.bookingRef,
+      emailType: options.emailType,
+      recipientEmail: recipient,
+      status: "sent",
+      messageId: `sim_${Date.now()}`,
+      error: "RESEND_API_KEY missing - simulated delivery",
+      retryCount: 0
+    });
+    return { success: true, id: `sim_${Date.now()}` };
+  }
+  let attempt = 0;
+  let lastError = "";
+  let activePayload = { ...payload, from: primarySender };
+  while (attempt < maxRetries) {
+    attempt++;
+    try {
+      let res = await resend.emails.send(activePayload);
+      if (res.error && (res.error.message.includes("domain") || res.error.name === "validation_error")) {
+        console.warn(`[Resend] Domain notice: ${res.error.message}. Retrying with onboarding@resend.dev...`);
+        activePayload.from = "Wally\u2019s Driving School <onboarding@resend.dev>";
+        res = await resend.emails.send(activePayload);
+      }
+      if (res.error) {
+        lastError = res.error.message || "Unknown Resend error";
+        console.warn(`[Resend] Attempt ${attempt}/${maxRetries} failed for ${recipient}: ${lastError}`);
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, attempt * 1e3));
+          continue;
+        }
+      } else {
+        const messageId = res.data?.id;
+        await logEmailDelivery({
+          bookingRef: options.bookingRef,
+          emailType: options.emailType,
+          recipientEmail: recipient,
+          status: "sent",
+          messageId,
+          retryCount: attempt - 1
+        });
+        return { success: true, id: messageId };
+      }
+    } catch (err) {
+      lastError = err?.message || "Network exception calling Resend";
+      console.warn(`[Resend] Attempt ${attempt}/${maxRetries} threw exception for ${recipient}: ${lastError}`);
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, attempt * 1e3));
+      }
+    }
+  }
+  await logEmailDelivery({
+    bookingRef: options.bookingRef,
+    emailType: options.emailType,
+    recipientEmail: recipient,
+    status: "failed",
+    error: lastError,
+    retryCount: maxRetries
+  });
+  return { success: false, error: lastError };
+}
+async function sendBookingConfirmationEmail(booking) {
+  const recipient = (booking.email || "").trim();
+  if (!recipient) return { success: false, error: "Recipient email missing" };
+  const safeName = escapeHtml(booking.studentName || "Student");
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeDate = escapeHtml(booking.date);
+  const safeTime = escapeHtml(booking.time);
+  const safePackage = escapeHtml(booking.packageTitle || "Driving Lesson");
+  const safePrice = booking.packagePrice ? `$${Number(booking.packagePrice).toFixed(2)} AUD` : "Paid";
+  const safeAddress = escapeHtml(booking.pickupAddress || `${booking.suburb || "Rooty Hill"}, NSW`);
+  let testCentreInfo = "";
+  if (booking.notes && booking.notes.toLowerCase().includes("test centre:")) {
+    const match = booking.notes.match(/test centre:\s*([^.]+)/i);
+    if (match && match[1] && match[1].trim() !== "N/A") {
+      testCentreInfo = `
+        <tr>
+          <td style="padding: 8px 0; color: #555555; font-size: 14px;">RMS Test Centre:</td>
+          <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${escapeHtml(match[1].trim())}</td>
+        </tr>
+      `;
+    }
+  }
+  const subject = `Booking Confirmed: ${booking.packageTitle} with Wally (${booking.bookingRef})`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #E3222A; padding: 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold; letter-spacing: -0.5px;">Wally's Driving School</h1>
+            <p style="color: rgba(255,255,255,0.9); margin: 4px 0 0; font-size: 13px;">Western Sydney & Hills District, NSW</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 24px;">
+            <h2 style="font-size: 18px; margin: 0 0 12px; color: #111111;">Your booking is confirmed, ${safeName}!</h2>
+            <p style="font-size: 14px; line-height: 1.6; color: #444444; margin: 0 0 24px;">
+              Thank you for booking with Wally's Driving School. Your session is locked in with accredited RMS instructor Wally.
+            </p>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #eeeeee; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Booking Reference:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #E3222A; font-size: 14px; text-align: right; font-family: monospace;">${safeRef}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Instructor:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">Wally (Accredited RMS Instructor)</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Lesson Package:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safePackage}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Date:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Time Slot:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeTime}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Pickup Location:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeAddress}</td>
+              </tr>
+              ${testCentreInfo}
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Amount Paid:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safePrice}</td>
+              </tr>
+            </table>
+
+            <div style="background-color: #fff8f8; border-left: 4px solid #E3222A; padding: 14px 16px; margin-bottom: 24px; border-radius: 4px;">
+              <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #333333;">
+                <strong>What to prepare:</strong> Please ensure you have your physical or digital NSW Learner Licence, your logbook (or app), and wear comfortable flat closed-toe shoes.
+              </p>
+            </div>
+
+            <p style="font-size: 12px; line-height: 1.5; color: #777777; margin: 0 0 8px;">
+              <strong>Cancellation & Rescheduling Policy:</strong> Free rescheduling or cancellation is available with at least 24 hours notice.
+            </p>
+            <p style="font-size: 12px; line-height: 1.5; color: #777777; margin: 0;">
+              Questions? Call Wally directly at <a href="tel:0412345678" style="color: #E3222A; text-decoration: none;">0412 345 678</a> or reply to this email.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #f7f7f9; padding: 16px 24px; text-align: center; border-top: 1px solid #eeeeee; font-size: 11px; color: #888888;">
+            Wally's Driving School \u2022 Rooty Hill NSW 2766 \u2022 Australia
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+  const text2 = `
+Hi ${booking.studentName || "Student"},
+
+Your booking with Wally's Driving School is confirmed!
+
+Booking Reference: ${booking.bookingRef}
+Instructor: Wally (Accredited RMS Instructor)
+Lesson Package: ${booking.packageTitle}
+Date: ${booking.date}
+Time: ${booking.time}
+Pickup: ${booking.pickupAddress || booking.suburb}
+Amount: ${safePrice}
+
+Please have your NSW Learner Licence and logbook ready.
+If you need to reschedule or have questions, contact Wally on 0412 345 678.
+  `.trim();
+  return await sendEmailWithRetry(
+    { to: recipient, subject, html, text: text2 },
+    { bookingRef: booking.bookingRef, emailType: "confirmation" }
+  );
+}
+async function sendPaymentReceiptEmail(booking, payment) {
+  const recipient = (booking.email || "").trim();
+  if (!recipient) return { success: false, error: "Recipient email missing" };
+  const safeName = escapeHtml(booking.studentName || "Customer");
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeMethod = escapeHtml(
+    payment.method === "google_pay" ? "Google Pay" : payment.method === "link" ? "Stripe Link" : payment.method === "paypal" ? "PayPal" : "Credit / Debit Card"
+  );
+  const safeTxId = escapeHtml(payment.transactionId);
+  const safeAmount = `$${Number(payment.amount || booking.packagePrice).toFixed(2)} AUD`;
+  const safePackage = escapeHtml(booking.packageTitle || "Driving Lesson");
+  const subject = `Payment Receipt: ${safeAmount} for Wally's Driving School (${booking.bookingRef})`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #111111; padding: 20px 24px; color: #ffffff;">
+            <div style="font-size: 18px; font-weight: bold;">Wally's Driving School</div>
+            <div style="font-size: 12px; color: #aaaaaa;">Tax Invoice / Official Receipt</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px;">
+            <p style="font-size: 14px; margin: 0 0 16px;">Dear ${safeName},</p>
+            <p style="font-size: 14px; line-height: 1.5; color: #444444; margin: 0 0 20px;">
+              Thank you for your payment. Here is your official payment receipt:
+            </p>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin-bottom: 24px;">
+              <tr style="border-bottom: 2px solid #eeeeee;">
+                <th align="left" style="padding: 10px 0; font-size: 13px; color: #666666;">Item</th>
+                <th align="right" style="padding: 10px 0; font-size: 13px; color: #666666;">Amount</th>
+              </tr>
+              <tr style="border-bottom: 1px solid #eeeeee;">
+                <td style="padding: 12px 0; font-size: 14px; font-weight: 500;">${safePackage}</td>
+                <td style="padding: 12px 0; font-size: 14px; font-weight: bold; text-align: right;">${safeAmount}</td>
+              </tr>
+              <tr>
+                <td style="padding: 14px 0; font-size: 15px; font-weight: bold;">Total Paid</td>
+                <td style="padding: 14px 0; font-size: 16px; font-weight: bold; color: #E3222A; text-align: right;">${safeAmount}</td>
+              </tr>
+            </table>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9f9fb; border-radius: 8px; padding: 14px; font-size: 12px; color: #555555; line-height: 1.6;">
+              <tr>
+                <td style="width: 40%;">Booking Reference:</td>
+                <td style="font-weight: bold; color: #111111;">${safeRef}</td>
+              </tr>
+              <tr>
+                <td>Payment Method:</td>
+                <td style="font-weight: bold; color: #111111;">${safeMethod}</td>
+              </tr>
+              <tr>
+                <td>Transaction ID:</td>
+                <td style="font-family: monospace; font-size: 11px;">${safeTxId}</td>
+              </tr>
+              <tr>
+                <td>Date of Payment:</td>
+                <td>${(/* @__PURE__ */ new Date()).toLocaleDateString("en-AU")}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #f7f7f9; padding: 16px 24px; text-align: center; border-top: 1px solid #eeeeee; font-size: 11px; color: #888888;">
+            Wally's Driving School \u2022 info@wallysdrivingschool.com.au \u2022 0412 345 678
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+  return await sendEmailWithRetry(
+    { to: recipient, subject, html, text: `Receipt for ${safeAmount}. Ref: ${booking.bookingRef}, Tx: ${safeTxId}` },
+    { bookingRef: booking.bookingRef, emailType: "receipt" }
+  );
+}
+async function sendBookingCancellationNoticeEmail(booking, details) {
+  const recipient = (booking.email || "").trim();
+  if (!recipient) return { success: false, error: "Recipient email missing" };
+  const safeName = escapeHtml(booking.studentName || "Student");
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeDate = escapeHtml(booking.date);
+  const safeTime = escapeHtml(booking.time);
+  const safeReason = escapeHtml(details?.reason || "Customer or instructor requested cancellation");
+  const isRefunded = Boolean(details?.refundStatus === "refunded" || details?.amountRefunded);
+  const refundAmount = details?.amountRefunded ? `$${Number(details.amountRefunded).toFixed(2)} AUD` : "";
+  const subject = `Booking Cancellation Notice: ${booking.bookingRef} \u2013 Wally's Driving School`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #333333; padding: 24px; text-align: center; color: #ffffff;">
+            <h1 style="margin: 0; font-size: 20px;">Wally's Driving School</h1>
+            <p style="margin: 4px 0 0; font-size: 13px; opacity: 0.8;">Booking Cancellation Confirmation</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px;">
+            <p style="font-size: 14px;">Hi ${safeName},</p>
+            <p style="font-size: 14px; line-height: 1.6; color: #444444;">
+              This email confirms that your driving lesson booking (<strong>${safeRef}</strong>) scheduled for <strong>${safeDate} at ${safeTime}</strong> has been cancelled.
+            </p>
+
+            <div style="background-color: #f9f9f9; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #555555;">
+              <div><strong>Reason:</strong> ${safeReason}</div>
+              ${isRefunded ? `
+                <div style="margin-top: 8px; color: #166534; font-weight: bold;">
+                  Refund Status: A refund of ${refundAmount} has been initiated to your original payment method.
+                </div>
+              ` : ""}
+            </div>
+
+            <p style="font-size: 13px; color: #666666;">
+              If you wish to re-book at another time that suits your schedule, please visit our website at <a href="https://wallysdrivingschool.com.au/book-now" style="color: #E3222A;">wallysdrivingschool.com.au/book-now</a>.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+  return await sendEmailWithRetry(
+    { to: recipient, subject, html, text: `Booking ${booking.bookingRef} has been cancelled.` },
+    { bookingRef: booking.bookingRef, emailType: "cancellation" }
+  );
+}
+async function sendInstructorNotificationEmail(booking) {
+  const instructorEmail = process.env.INSTRUCTOR_NOTIFICATION_EMAIL?.trim() || "info@wallysdrivingschool.com.au";
+  const safeName = escapeHtml(booking.studentName);
+  const safePhone = escapeHtml(booking.phone);
+  const safeEmail = escapeHtml(booking.email);
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeDate = escapeHtml(booking.date);
+  const safeTime = escapeHtml(booking.time);
+  const safePackage = escapeHtml(booking.packageTitle);
+  const safeAddress = escapeHtml(booking.pickupAddress || booking.suburb || "Not provided");
+  const safeNotes = escapeHtml(booking.notes || "None");
+  const subject = `NEW LESSON BOOKING: ${safeName} \u2013 ${safeDate} @ ${safeTime} (${safeRef})`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #E3222A; padding: 20px 24px; color: #ffffff;">
+            <h2 style="margin: 0; font-size: 18px;">New Student Booking Alert!</h2>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px;">
+            <p style="font-size: 14px; margin: 0 0 16px;">Wally, a new paid driving lesson has been booked:</p>
+            <table width="100%" cellpadding="6" cellspacing="0" style="font-size: 13px; line-height: 1.6;">
+              <tr><td style="color: #666;">Booking Ref:</td><td><strong>${safeRef}</strong></td></tr>
+              <tr><td style="color: #666;">Student Name:</td><td><strong>${safeName}</strong></td></tr>
+              <tr><td style="color: #666;">Phone:</td><td><a href="tel:${safePhone}">${safePhone}</a></td></tr>
+              <tr><td style="color: #666;">Email:</td><td><a href="mailto:${safeEmail}">${safeEmail}</a></td></tr>
+              <tr><td style="color: #666;">Date:</td><td><strong>${safeDate}</strong></td></tr>
+              <tr><td style="color: #666;">Time Slot:</td><td><strong>${safeTime}</strong></td></tr>
+              <tr><td style="color: #666;">Package:</td><td>${safePackage}</td></tr>
+              <tr><td style="color: #666;">Pickup Address:</td><td><strong>${safeAddress}</strong></td></tr>
+              <tr><td style="color: #666;">Notes:</td><td>${safeNotes}</td></tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+  return await sendEmailWithRetry(
+    { to: instructorEmail, subject, html, text: `New Booking: ${booking.studentName} on ${booking.date} at ${booking.time}. Ref: ${booking.bookingRef}` },
+    { bookingRef: booking.bookingRef, emailType: "instructor_notification" }
+  );
+}
 
 // server.ts
 dotenv.config();
@@ -1837,7 +2422,8 @@ app.post("/api/auth/instructor-login", loginLimiter, (req, res) => {
   const { email, password } = req.body || {};
   const cleanEmail = sanitizeText(email).toLowerCase();
   const cleanPass = (password || "").trim();
-  const isOwner = (cleanEmail === "wally@wallysdrivingschool.com.au" || cleanEmail === "wally") && cleanPass === "Wellard44#";
+  const expectedPassword = process.env.INSTRUCTOR_PORTAL_PASSWORD || "Wellard44#";
+  const isOwner = (cleanEmail === "wally@wallysdrivingschool.com.au" || cleanEmail === "wally") && cleanPass === expectedPassword;
   if (!isOwner) {
     return res.status(401).json({
       success: false,
@@ -2498,6 +3084,21 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
       });
     }
     if (finalBooking) {
+      logBookingAudit({
+        bookingRef: targetRef,
+        action: "payment_verified",
+        performedBy: "stripe_client_confirm",
+        previousState: "Pending",
+        newState: "Confirmed",
+        notes: `Verified $${paidAmount.toFixed(2)} AUD via ${paymentMethodName} (Tx: ${paymentIntentId})`
+      }).catch((e) => console.error("[Audit] Error logging confirm-payment audit:", e));
+      sendBookingConfirmationEmail(finalBooking).catch((e) => console.error("[Resend] Error sending confirmation:", e));
+      sendPaymentReceiptEmail(finalBooking, {
+        method: paymentMethodName.toLowerCase().includes("google") ? "google_pay" : "card",
+        transactionId: paymentIntentId,
+        amount: paidAmount
+      }).catch((e) => console.error("[Resend] Error sending receipt:", e));
+      sendInstructorNotificationEmail(finalBooking).catch((e) => console.error("[Resend] Error notifying instructor:", e));
       handleBookingConfirmed(finalBooking).catch((e) => console.error("[Resend Reminder] Error confirming lesson reminder:", e));
     }
     const bookingResponse = finalBooking ? {
@@ -2539,16 +3140,18 @@ async function handleStripeWebhookEvent(req, res) {
     console.error("[Stripe Webhook] Signature verification failed:", err.message);
     return res.status(400).send(`Webhook signature verification failed: ${err.message}`);
   }
-  if (event.id && processedWebhookEventIds.has(event.id)) {
-    console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id}`);
-    return res.json({ received: true, duplicate: true });
-  }
   if (event.id) {
+    const alreadyProcessedInDb = await isWebhookEventProcessed(event.id);
+    if (alreadyProcessedInDb || processedWebhookEventIds.has(event.id)) {
+      console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id}`);
+      return res.json({ received: true, duplicate: true });
+    }
     processedWebhookEventIds.add(event.id);
     if (processedWebhookEventIds.size > 2e3) {
       const oldest = processedWebhookEventIds.values().next().value;
       if (oldest) processedWebhookEventIds.delete(oldest);
     }
+    await recordWebhookEvent(event.id, "stripe", event.type);
   }
   console.log(`[Stripe Webhook] Processing event: ${event.type} (${event.id})`);
   try {
@@ -2557,13 +3160,32 @@ async function handleStripeWebhookEvent(req, res) {
         const pi = event.data.object;
         const ref = pi.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing) {
-            await updateBookingByRef(ref, {
+            const updated = await updateBookingByRef(ref, {
               status: "Confirmed",
               paymentStatus: "paid",
-              stripeSessionId: pi.id
+              stripeSessionId: pi.id,
+              packagePrice: pi.amount_received ? pi.amount_received / 100 : existing.packagePrice
             });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: "payment_verified",
+              performedBy: "stripe_webhook",
+              previousState: existing.status,
+              newState: "Confirmed",
+              notes: `Payment verified by Stripe PaymentIntent ${pi.id} ($${(pi.amount_received / 100).toFixed(2)} AUD)`
+            });
+            if (updated) {
+              sendBookingConfirmationEmail(updated).catch((e) => console.error("[Resend] Error sending confirmation:", e));
+              sendPaymentReceiptEmail(updated, {
+                method: "card",
+                transactionId: pi.id,
+                amount: pi.amount_received ? pi.amount_received / 100 : Number(updated.packagePrice) || 70
+              }).catch((e) => console.error("[Resend] Error sending receipt:", e));
+              sendInstructorNotificationEmail(updated).catch((e) => console.error("[Resend] Error notifying instructor:", e));
+              handleBookingConfirmed(updated).catch((e) => console.error("[Resend] Error scheduling reminder:", e));
+            }
             console.log(`[Stripe Webhook] Booking ${ref} confirmed as paid for PaymentIntent ${pi.id}`);
           }
         }
@@ -2575,11 +3197,19 @@ async function handleStripeWebhookEvent(req, res) {
         const failureMsg = pi.last_payment_error?.message || "Payment declined";
         console.warn(`[Stripe Webhook] Payment failed for ${ref}: ${failureMsg}`);
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== "paid") {
             await updateBookingByRef(ref, {
               paymentStatus: "failed",
               notes: existing.notes ? `${existing.notes} [Payment Failed: ${failureMsg}]` : `[Payment Failed: ${failureMsg}]`
+            });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: "payment_failed",
+              performedBy: "stripe_webhook",
+              previousState: existing.status,
+              newState: "failed",
+              notes: failureMsg
             });
           }
         }
@@ -2589,11 +3219,19 @@ async function handleStripeWebhookEvent(req, res) {
         const pi = event.data.object;
         const ref = pi.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== "paid") {
             await updateBookingByRef(ref, {
               status: "Cancelled",
               paymentStatus: "cancelled"
+            });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: "cancel",
+              performedBy: "stripe_webhook",
+              previousState: existing.status,
+              newState: "Cancelled",
+              notes: "Stripe PaymentIntent canceled"
             });
             console.log(`[Stripe Webhook] Booking ${ref} cancelled due to payment intent cancellation`);
           }
@@ -2604,7 +3242,7 @@ async function handleStripeWebhookEvent(req, res) {
         const pi = event.data.object;
         const ref = pi.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== "paid") {
             await updateBookingByRef(ref, {
               paymentStatus: "processing",
@@ -2614,17 +3252,70 @@ async function handleStripeWebhookEvent(req, res) {
         }
         break;
       }
+      case "charge.refunded": {
+        const charge = event.data.object;
+        const paymentIntentId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
+        const refundAmount = charge.amount_refunded ? charge.amount_refunded / 100 : 0;
+        const allBookings = await getBookings({ includeUnpaid: true });
+        const targetBooking = allBookings.find(
+          (b) => paymentIntentId && b.stripeSessionId === paymentIntentId || b.notes && b.notes.includes(paymentIntentId || "")
+        );
+        if (targetBooking) {
+          const updated = await updateBooking(targetBooking.id, {
+            status: "Cancelled",
+            paymentStatus: "refunded",
+            notes: (targetBooking.notes || "") + ` [Refund of $${refundAmount.toFixed(2)} AUD processed via Stripe]`
+          });
+          await logBookingAudit({
+            bookingRef: targetBooking.bookingRef,
+            action: "refund",
+            performedBy: "stripe_webhook",
+            previousState: targetBooking.status,
+            newState: "refunded",
+            notes: `Stripe charge refunded: $${refundAmount.toFixed(2)} AUD`
+          });
+          if (updated) {
+            sendBookingCancellationNoticeEmail(updated, {
+              reason: "Payment refunded via Stripe",
+              refundStatus: "refunded",
+              amountRefunded: refundAmount,
+              refundTxId: charge.id
+            }).catch((e) => console.error("[Resend] Error sending refund email:", e));
+            cancelScheduledLessonReminder(updated, "Payment was refunded");
+          }
+          console.log(`[Stripe Webhook] Booking ${targetBooking.bookingRef} marked as refunded`);
+        }
+        break;
+      }
       case "checkout.session.completed": {
         const session = event.data.object;
         const ref = session.metadata?.bookingRef;
         if (session.payment_status === "paid" && ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing) {
-            await updateBookingByRef(ref, {
+            const updated = await updateBookingByRef(ref, {
               status: "Confirmed",
               paymentStatus: "paid",
               stripeSessionId: session.id
             });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: "payment_verified",
+              performedBy: "stripe_webhook",
+              previousState: existing.status,
+              newState: "Confirmed",
+              notes: `Checkout Session completed (${session.id})`
+            });
+            if (updated) {
+              sendBookingConfirmationEmail(updated).catch((e) => console.error("[Resend] Error sending confirmation:", e));
+              sendPaymentReceiptEmail(updated, {
+                method: "card",
+                transactionId: session.id,
+                amount: session.amount_total ? session.amount_total / 100 : Number(updated.packagePrice) || 70
+              }).catch((e) => console.error("[Resend] Error sending receipt:", e));
+              sendInstructorNotificationEmail(updated).catch((e) => console.error("[Resend] Error notifying instructor:", e));
+              handleBookingConfirmed(updated).catch((e) => console.error("[Resend] Error scheduling reminder:", e));
+            }
             console.log(`[Stripe Webhook] Checkout session completed for booking ${ref}`);
           }
         }
@@ -2634,11 +3325,19 @@ async function handleStripeWebhookEvent(req, res) {
         const session = event.data.object;
         const ref = session.metadata?.bookingRef;
         if (ref) {
-          const existing = await getBookingByRef(ref);
+          const existing = await getBookingByRef(ref, { allowUnpaid: true });
           if (existing && existing.paymentStatus !== "paid") {
             await updateBookingByRef(ref, {
               status: "Cancelled",
               paymentStatus: "expired"
+            });
+            await logBookingAudit({
+              bookingRef: ref,
+              action: "cancel",
+              performedBy: "stripe_webhook",
+              previousState: existing.status,
+              newState: "Cancelled",
+              notes: "Checkout session expired"
             });
             console.log(`[Stripe Webhook] Booking ${ref} expired`);
           }
@@ -2656,6 +3355,289 @@ async function handleStripeWebhookEvent(req, res) {
 }
 app.post("/api/payments/webhook", handleStripeWebhookEvent);
 app.post("/api/stripe/webhook", handleStripeWebhookEvent);
+app.post("/api/payments/stripe/refund", requireInstructorOrAuth, async (req, res) => {
+  try {
+    const { bookingRef, reason, amount } = req.body;
+    if (!bookingRef) {
+      return res.status(400).json({ error: "bookingRef is required" });
+    }
+    const booking = await getBookingByRef(bookingRef, { allowUnpaid: true });
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+    if (booking.paymentStatus === "refunded") {
+      return res.status(400).json({ error: "Booking has already been refunded" });
+    }
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    let refundId = `sim_ref_${Date.now()}`;
+    let refundAmount = amount ? Number(amount) : Number(booking.packagePrice) || 70;
+    if (stripeKey && booking.stripeSessionId && !booking.stripeSessionId.startsWith("sim_")) {
+      const stripe = getStripe();
+      let piId = booking.stripeSessionId;
+      if (piId.startsWith("cs_")) {
+        const session = await stripe.checkout.sessions.retrieve(piId);
+        if (session.payment_intent && typeof session.payment_intent === "string") {
+          piId = session.payment_intent;
+        }
+      }
+      if (piId.startsWith("pi_")) {
+        const refundParams = {
+          payment_intent: piId,
+          reason: "requested_by_customer"
+        };
+        if (amount) {
+          refundParams.amount = Math.round(Number(amount) * 100);
+        }
+        const refund = await stripe.refunds.create(refundParams);
+        refundId = refund.id;
+        refundAmount = refund.amount / 100;
+      }
+    }
+    const updated = await updateBookingByRef(bookingRef, {
+      status: "Cancelled",
+      paymentStatus: "refunded",
+      notes: (booking.notes || "") + ` [Refunded $${refundAmount.toFixed(2)} AUD: ${refundId}]`
+    });
+    await logBookingAudit({
+      bookingRef,
+      action: "refund",
+      performedBy: "instructor",
+      previousState: booking.status,
+      newState: "refunded",
+      notes: `Instructor issued refund of $${refundAmount.toFixed(2)} AUD (Ref: ${refundId}). Reason: ${reason || "N/A"}`
+    });
+    if (updated) {
+      sendBookingCancellationNoticeEmail(updated, {
+        reason: reason || "Instructor issued cancellation and refund",
+        refundStatus: "refunded",
+        amountRefunded: refundAmount,
+        refundTxId: refundId
+      }).catch((e) => console.error("[Resend] Error sending cancellation notice:", e));
+      cancelScheduledLessonReminder(updated, "Lesson was refunded");
+    }
+    res.json({
+      success: true,
+      message: `Successfully refunded $${refundAmount.toFixed(2)} AUD for booking ${bookingRef}`,
+      refundId,
+      booking: updated
+    });
+  } catch (err) {
+    console.error("Stripe refund error:", err);
+    res.status(500).json({ error: err?.message || "Failed to process Stripe refund" });
+  }
+});
+async function getPayPalAccessToken() {
+  const clientId = process.env.PAYPAL_CLIENT_ID?.trim();
+  const clientSecret = process.env.PAYPAL_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+  const isLive = process.env.PAYPAL_ENVIRONMENT === "live";
+  const base = isLive ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
+  const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  try {
+    const res = await fetch(`${base}/v1/oauth2/token`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: "grant_type=client_credentials"
+    });
+    if (!res.ok) {
+      console.warn(`[PayPal] OAuth error: ${res.statusText}`);
+      return null;
+    }
+    const data = await res.json();
+    return data.access_token || null;
+  } catch (err) {
+    console.warn(`[PayPal] Exception fetching OAuth token:`, err);
+    return null;
+  }
+}
+app.post("/api/payments/paypal/create-order", async (req, res) => {
+  try {
+    const { items, customerInfo, bookingRef } = req.body;
+    const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
+    const isSlotTaken = await checkSlotBooked(
+      customerInfo?.date || customerInfo?.bookingDate,
+      customerInfo?.time || customerInfo?.bookingTime
+    );
+    if (isSlotTaken) {
+      return res.status(409).json({
+        error: "SLOT_ALREADY_BOOKED",
+        message: "This time slot is no longer available. Please select another time."
+      });
+    }
+    const targetRef = bookingRef || `WD-${Math.floor(1e3 + Math.random() * 9e3)}`;
+    const accessToken = await getPayPalAccessToken();
+    if (accessToken) {
+      const isLive = process.env.PAYPAL_ENVIRONMENT === "live";
+      const base = isLive ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
+      const origin = req.headers.origin || "https://wallysdrivingschool.com.au";
+      const orderPayload = {
+        intent: "CAPTURE",
+        purchase_units: [
+          {
+            reference_id: targetRef,
+            description: `Wally's Driving School - ${verifiedItems.map((i) => i.name).join(", ")}`,
+            amount: {
+              currency_code: "AUD",
+              value: totalAmount.toFixed(2),
+              breakdown: {
+                item_total: {
+                  currency_code: "AUD",
+                  value: totalAmount.toFixed(2)
+                }
+              }
+            },
+            items: verifiedItems.map((i) => ({
+              name: i.name,
+              unit_amount: {
+                currency_code: "AUD",
+                value: i.unitPrice.toFixed(2)
+              },
+              quantity: String(i.quantity)
+            }))
+          }
+        ],
+        application_context: {
+          brand_name: "Wally's Driving School",
+          landing_page: "NO_PREFERENCE",
+          user_action: "PAY_NOW",
+          return_url: `${origin}/book-now?paypal_status=success&ref=${targetRef}`,
+          cancel_url: `${origin}/book-now?paypal_status=cancel&ref=${targetRef}`
+        }
+      };
+      const ppRes = await fetch(`${base}/v2/checkout/orders`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(orderPayload)
+      });
+      const orderData = await ppRes.json();
+      if (!ppRes.ok) {
+        return res.status(400).json({ error: orderData.message || "Failed to create PayPal order" });
+      }
+      const approveLink = orderData.links?.find((l) => l.rel === "approve")?.href;
+      return res.json({
+        orderId: orderData.id,
+        bookingRef: targetRef,
+        approveUrl: approveLink,
+        totalAmount
+      });
+    }
+    const simOrderId = `PAYPAL_SIM_${Date.now()}`;
+    return res.json({
+      orderId: simOrderId,
+      bookingRef: targetRef,
+      approveUrl: null,
+      totalAmount,
+      isSimulated: true
+    });
+  } catch (err) {
+    console.error("PayPal create order error:", err);
+    res.status(500).json({ error: err?.message || "Failed to initialize PayPal order" });
+  }
+});
+app.post("/api/payments/paypal/capture-order", async (req, res) => {
+  try {
+    const { orderId, bookingRef, bookingData, items } = req.body;
+    if (!orderId) return res.status(400).json({ error: "orderId is required" });
+    const { verifiedItems, totalAmount } = computeVerifiedOrder(items);
+    const targetRef = bookingRef || bookingData?.bookingRef || `WD-${Math.floor(1e3 + Math.random() * 9e3)}`;
+    const accessToken = await getPayPalAccessToken();
+    let captureId = orderId;
+    let paidAmount = totalAmount;
+    if (accessToken && !orderId.startsWith("PAYPAL_SIM_")) {
+      const isLive = process.env.PAYPAL_ENVIRONMENT === "live";
+      const base = isLive ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
+      const captureRes = await fetch(`${base}/v2/checkout/orders/${orderId}/capture`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        }
+      });
+      const captureData = await captureRes.json();
+      if (!captureRes.ok) {
+        return res.status(400).json({ error: captureData.message || "PayPal capture failed" });
+      }
+      const captureObj = captureData.purchase_units?.[0]?.payments?.captures?.[0];
+      captureId = captureObj?.id || orderId;
+      paidAmount = captureObj?.amount?.value ? parseFloat(captureObj.amount.value) : totalAmount;
+    }
+    let finalBooking = await getBookingByRef(targetRef, { allowUnpaid: true });
+    if (finalBooking) {
+      finalBooking = await updateBookingByRef(targetRef, {
+        status: "Confirmed",
+        paymentStatus: "paid",
+        stripeSessionId: `paypal_${captureId}`,
+        packagePrice: paidAmount,
+        notes: (finalBooking.notes || "") + ` [Verified via PayPal: ${captureId}]`
+      });
+    } else if (bookingData) {
+      finalBooking = await createBooking({
+        bookingRef: targetRef,
+        userId: bookingData?.userId || null,
+        studentName: sanitizeText(bookingData?.studentName || "Student Driver"),
+        phone: sanitizeText(bookingData?.phone || ""),
+        email: sanitizeText(bookingData?.email || "").toLowerCase(),
+        suburb: sanitizeText(bookingData?.suburb || "Rooty Hill, NSW"),
+        pickupAddress: sanitizeText(bookingData?.pickupAddress || null),
+        packageTitle: sanitizeText(bookingData?.packageTitle || verifiedItems[0]?.name || "Driving Lesson"),
+        packagePrice: paidAmount,
+        date: sanitizeText(bookingData?.date || (/* @__PURE__ */ new Date()).toISOString().split("T")[0]),
+        time: sanitizeText(bookingData?.time || "09:00 AM"),
+        status: "Confirmed",
+        notes: `[Verified via PayPal: ${captureId}]`,
+        paymentStatus: "paid",
+        stripeSessionId: `paypal_${captureId}`
+      });
+    }
+    await logBookingAudit({
+      bookingRef: targetRef,
+      action: "payment_verified",
+      performedBy: "paypal_capture",
+      previousState: "Pending",
+      newState: "Confirmed",
+      notes: `Verified $${paidAmount.toFixed(2)} AUD via PayPal (Capture: ${captureId})`
+    });
+    if (finalBooking) {
+      sendBookingConfirmationEmail(finalBooking).catch((e) => console.error("[Resend] Error sending confirmation:", e));
+      sendPaymentReceiptEmail(finalBooking, {
+        method: "paypal",
+        transactionId: captureId,
+        amount: paidAmount
+      }).catch((e) => console.error("[Resend] Error sending receipt:", e));
+      sendInstructorNotificationEmail(finalBooking).catch((e) => console.error("[Resend] Error notifying instructor:", e));
+      handleBookingConfirmed(finalBooking).catch((e) => console.error("[Resend] Error scheduling reminder:", e));
+    }
+    res.json({
+      success: true,
+      verified: true,
+      paymentStatus: "paid",
+      booking: finalBooking,
+      transactionId: captureId,
+      amount: paidAmount,
+      message: "PayPal payment successfully captured and booking confirmed."
+    });
+  } catch (err) {
+    console.error("PayPal capture error:", err);
+    res.status(500).json({ error: err?.message || "Failed to capture PayPal order" });
+  }
+});
+app.get("/api/audit-logs", requireInstructorOrAuth, async (req, res) => {
+  try {
+    const bookingRef = req.query.bookingRef;
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 50;
+    const logs = await getBookingAuditLogs(bookingRef, limit);
+    res.json({ success: true, count: logs.length, logs });
+  } catch (err) {
+    console.error("Error fetching audit logs:", err);
+    res.status(500).json({ error: "Failed to fetch audit logs" });
+  }
+});
 app.post("/api/auth/sync", requireAuth, async (req, res) => {
   try {
     const user = req.user;
@@ -2911,9 +3893,30 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req, res) => {
       stripeSessionId: stripeSessionId || null
     });
     if (newBooking.status === "Confirmed") {
+      logBookingAudit({
+        bookingRef,
+        action: "create",
+        performedBy: isInstructor ? "instructor" : "customer",
+        newState: "Confirmed",
+        notes: `Created confirmed booking for ${newBooking.studentName} (${newBooking.packageTitle})`
+      }).catch((e) => console.error("[Audit] Error logging create:", e));
+      sendBookingConfirmationEmail(newBooking).catch((err) => {
+        console.error("[Resend] Error in sendBookingConfirmationEmail:", err);
+      });
+      sendInstructorNotificationEmail(newBooking).catch((err) => {
+        console.error("[Resend] Error in sendInstructorNotificationEmail:", err);
+      });
       handleBookingConfirmed(newBooking).catch((err) => {
         console.error("[Resend Reminder] Error in handleBookingConfirmed for new booking:", err);
       });
+    } else {
+      logBookingAudit({
+        bookingRef,
+        action: "create",
+        performedBy: isInstructor ? "instructor" : "customer",
+        newState: "Pending",
+        notes: `Created pending booking for ${newBooking.studentName}`
+      }).catch((e) => console.error("[Audit] Error logging create:", e));
     }
     res.status(201).json(newBooking);
   } catch (error) {
@@ -2978,10 +3981,29 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
     }
     const updated = await updateBooking(id, req.body);
     if (updated) {
+      const ref = updated.bookingRef;
       if (req.body.status === "Cancelled") {
+        logBookingAudit({
+          bookingRef: ref,
+          action: "cancel",
+          performedBy: req.instructor ? "instructor" : "customer",
+          newState: "Cancelled",
+          notes: req.body.notes || "Booking cancelled via patch API"
+        }).catch((e) => console.error("[Audit] Error logging cancel:", e));
+        sendBookingCancellationNoticeEmail(updated, {
+          reason: req.body.notes || "Lesson cancellation requested",
+          refundStatus: req.body.paymentStatus === "refunded" ? "refunded" : "none"
+        }).catch((e) => console.error("[Resend] Error sending cancellation notice:", e));
         handleBookingCancelled(updated).catch(() => {
         });
       } else if (req.body.date || req.body.time) {
+        logBookingAudit({
+          bookingRef: ref,
+          action: "reschedule",
+          performedBy: req.instructor ? "instructor" : "customer",
+          newState: updated.status,
+          notes: `Rescheduled to ${updated.date} at ${updated.time}`
+        }).catch((e) => console.error("[Audit] Error logging reschedule:", e));
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {
         });
       } else if (req.body.status === "Confirmed") {
@@ -3043,9 +4065,27 @@ app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
     const updated = await updateBookingByRef(ref, req.body);
     if (updated) {
       if (req.body.status === "Cancelled") {
+        logBookingAudit({
+          bookingRef: ref,
+          action: "cancel",
+          performedBy: req.instructor ? "instructor" : "customer",
+          newState: "Cancelled",
+          notes: req.body.notes || "Booking cancelled via ref API"
+        }).catch((e) => console.error("[Audit] Error logging cancel:", e));
+        sendBookingCancellationNoticeEmail(updated, {
+          reason: req.body.notes || "Lesson cancellation requested",
+          refundStatus: req.body.paymentStatus === "refunded" ? "refunded" : "none"
+        }).catch((e) => console.error("[Resend] Error sending cancellation notice:", e));
         handleBookingCancelled(updated).catch(() => {
         });
       } else if (req.body.date || req.body.time) {
+        logBookingAudit({
+          bookingRef: ref,
+          action: "reschedule",
+          performedBy: req.instructor ? "instructor" : "customer",
+          newState: updated.status,
+          notes: `Rescheduled to ${updated.date} at ${updated.time}`
+        }).catch((e) => console.error("[Audit] Error logging reschedule:", e));
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {
         });
       } else if (req.body.status === "Confirmed") {
@@ -3065,6 +4105,12 @@ app.delete("/api/bookings/:id", requireInstructorOrAuth, async (req, res) => {
     if (isNaN(id)) {
       return res.status(400).json({ error: "Invalid booking ID" });
     }
+    logBookingAudit({
+      action: "cancel",
+      performedBy: "instructor",
+      newState: "deleted",
+      notes: `Booking ID ${id} deleted by instructor`
+    }).catch((e) => console.error("[Audit] Error logging delete:", e));
     await deleteBookingById(id);
     res.json({ success: true, message: "Booking deleted successfully" });
   } catch (error) {
@@ -3075,6 +4121,13 @@ app.delete("/api/bookings/:id", requireInstructorOrAuth, async (req, res) => {
 app.delete("/api/bookings/ref/:ref", requireInstructorOrAuth, async (req, res) => {
   try {
     const ref = sanitizeText(req.params.ref);
+    logBookingAudit({
+      bookingRef: ref,
+      action: "cancel",
+      performedBy: "instructor",
+      newState: "deleted",
+      notes: `Booking ${ref} deleted by instructor`
+    }).catch((e) => console.error("[Audit] Error logging delete:", e));
     await deleteBookingByRef(ref);
     res.json({ success: true, message: "Booking deleted successfully" });
   } catch (error) {
