@@ -688,7 +688,7 @@ export function BookNow() {
     } else if (activeStepId === 'cart') {
       setActiveStepId('info');
     } else if (activeStepId === 'info') {
-      const isCarHire = selectedPackage?.id?.includes('test');
+      const isCarHire = Boolean(selectedPackage?.id?.includes('test') || selectedPackage?.label?.toLowerCase().includes('car hire') || selectedPackage?.title?.toLowerCase().includes('car hire'));
       // Validate mandatory fields
       const errors: { [key: string]: string } = {};
       if (!firstName.trim()) errors.firstName = 'First name is required';
@@ -708,7 +708,9 @@ export function BookNow() {
 
       if (!address.trim()) errors.address = 'Pickup address is required';
       if (!suburbSearch.trim()) errors.suburb = 'Service suburb is required';
-      // Per business rules: Test Centre must not be required when Car Hire is selected
+      if (isCarHire && !selectedTestCentre.trim()) {
+        errors.testCentre = 'Please select a test centre for your car hire';
+      }
 
       if (Object.keys(errors).length > 0) {
         setInfoErrors(errors);
@@ -2134,42 +2136,53 @@ export function BookNow() {
                           )}
                         </div>
 
-                        {/* Test Centre Searchable Dropdown - Hidden when Car Hire is selected */}
-                        {(!isCarHire && selectedPackage?.id?.includes('test')) && (
+                        {/* Test Centre Searchable Dropdown - Shown when Car Hire package is selected */}
+                        {isCarHire && (
                         <div className="relative">
                           <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
-                            Test Centre <span className="text-brand-red">*</span>
+                            RMS Test Centre <span className="text-brand-red">*</span>
                           </label>
-                          <input 
-                            type="text"
-                            value={selectedTestCentre}
-                            onFocus={() => setTestCentreDropdownOpen(true)}
-                            onBlur={() => setTimeout(() => setTestCentreDropdownOpen(false), 200)}
-                            onChange={(e) => {
-                              setSelectedTestCentre(e.target.value);
-                              setTestCentreDropdownOpen(true);
-                              if (infoErrors.testCentre) {
-                                setInfoErrors(prev => {
-                                  const copy = { ...prev };
-                                  delete copy.testCentre;
-                                  return copy;
-                                });
-                              }
-                            }}
-                            placeholder="Type test centre or postcode (e.g. St Marys)"
-                            className={cn(
-                              "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
-                              infoErrors.testCentre ? "border-brand-red" : "border-black/10 focus:border-brand-red"
-                            )}
-                          />
+                          <div className="relative">
+                            <input 
+                              type="text"
+                              value={selectedTestCentre}
+                              onFocus={() => setTestCentreDropdownOpen(true)}
+                              onBlur={() => setTimeout(() => setTestCentreDropdownOpen(false), 200)}
+                              onChange={(e) => {
+                                setSelectedTestCentre(e.target.value);
+                                setTestCentreDropdownOpen(true);
+                                if (infoErrors.testCentre) {
+                                  setInfoErrors(prev => {
+                                    const copy = { ...prev };
+                                    delete copy.testCentre;
+                                    return copy;
+                                  });
+                                }
+                              }}
+                              placeholder="Select or type test centre (e.g. St Marys)"
+                              className={cn(
+                                "w-full bg-brand-offwhite border rounded-xl pl-4 pr-10 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
+                                infoErrors.testCentre ? "border-brand-red" : "border-black/10 focus:border-brand-red"
+                              )}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setTestCentreDropdownOpen(prev => !prev)}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-brand-black/40 hover:text-brand-black p-1 transition-colors"
+                              aria-label="Toggle test centres list"
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                          </div>
                           {infoErrors.testCentre && <span className="text-[10px] text-brand-red font-semibold">{infoErrors.testCentre}</span>}
 
                           {testCentreDropdownOpen && (
-                            <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-black/10 rounded-xl shadow-xl max-h-48 overflow-y-auto z-30">
+                            <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-black/10 rounded-xl shadow-xl max-h-52 overflow-y-auto z-30 divide-y divide-black/5">
                               {filteredTestCentres.map((tc, idx) => (
                                 <div 
                                   key={idx}
-                                  onClick={() => {
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
                                     setSelectedTestCentre(`${tc.centre} NSW ${tc.postcode}`);
                                     setTestCentreDropdownOpen(false);
                                     if (infoErrors.testCentre) {
@@ -2180,10 +2193,13 @@ export function BookNow() {
                                       });
                                     }
                                   }}
-                                  className="px-4 py-2 text-xs hover:bg-black/5 cursor-pointer flex justify-between"
+                                  className={cn(
+                                    "px-4 py-2.5 text-xs hover:bg-brand-red/5 cursor-pointer flex justify-between items-center transition-colors",
+                                    selectedTestCentre.includes(tc.centre) && "bg-brand-red/10 text-brand-red font-semibold"
+                                  )}
                                 >
-                                  <span className="font-semibold text-brand-black">{tc.centre}</span>
-                                  <span className="text-brand-black/50">{tc.postcode}</span>
+                                  <span className="font-semibold">{tc.centre} Service NSW</span>
+                                  <span className="text-brand-black/50 text-[11px] font-mono">{tc.state} {tc.postcode}</span>
                                 </div>
                               ))}
                             </div>
@@ -2193,7 +2209,7 @@ export function BookNow() {
                       </div>
 
                       {/* Test Time (Optional) */}
-                      {(selectedPackage?.id?.includes('test')) && (
+                      {isCarHire && (
                       <div>
                         <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
                           Test Time <span className="text-brand-black/40 font-normal">(optional - if RMS test is booked)</span>

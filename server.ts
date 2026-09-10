@@ -1812,8 +1812,8 @@ app.post("/api/reminders/send/:refOrId", optionalAuth, async (req, res) => {
   }
 });
 
-// Admin / System: Force run pending reminders pass
-app.post("/api/reminders/cron/run", optionalAuth, async (req, res) => {
+// Admin / System: Force run pending reminders pass (supports POST and GET for Vercel Cron)
+app.all("/api/reminders/cron/run", optionalAuth, async (req, res) => {
   try {
     const result = await processPendingLessonReminders();
     res.json({ success: true, ...result });
