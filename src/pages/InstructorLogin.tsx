@@ -130,8 +130,7 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white placeholder:text-white/30 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300 text-sm"
-                placeholder="Wally@wallysdrivingschool.com.au"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3.5 text-white focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300 text-sm"
               />
             </div>
 
