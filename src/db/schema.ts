@@ -37,6 +37,7 @@ export const bookings = pgTable('bookings', {
   reminderMessageId: text('reminder_message_id'),
   reminderError: text('reminder_error'),
   reminderRecipientPhone: text('reminder_recipient_phone'),
+  reminderRecipientEmail: text('reminder_recipient_email'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({

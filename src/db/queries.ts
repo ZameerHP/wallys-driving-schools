@@ -148,6 +148,7 @@ function mapSupabaseRowToBooking(row: any): any {
     reminderMessageId: row.reminder_message_id || row.reminderMessageId || null,
     reminderError: row.reminder_error || row.reminderError || null,
     reminderRecipientPhone: row.reminder_recipient_phone || row.reminderRecipientPhone || null,
+    reminderRecipientEmail: row.reminder_recipient_email || row.reminderRecipientEmail || row.email || null,
     createdAt: row.created_at ? new Date(row.created_at) : new Date(),
     updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
   };
@@ -685,6 +686,7 @@ export async function createBooking(data: {
   reminderMessageId?: string | null;
   reminderError?: string | null;
   reminderRecipientPhone?: string | null;
+  reminderRecipientEmail?: string | null;
 }) {
   const normDate = normalizeDate(data.date);
 
@@ -729,6 +731,7 @@ export async function createBooking(data: {
       reminderMessageId: data.reminderMessageId || null,
       reminderError: data.reminderError || null,
       reminderRecipientPhone: data.reminderRecipientPhone || null,
+      reminderRecipientEmail: data.reminderRecipientEmail || data.email || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -805,6 +808,7 @@ export async function createBooking(data: {
             reminderMessageId: data.reminderMessageId || null,
             reminderError: data.reminderError || null,
             reminderRecipientPhone: data.reminderRecipientPhone || null,
+            reminderRecipientEmail: data.reminderRecipientEmail || data.email || null,
           })
           .returning();
 

@@ -29,6 +29,7 @@ export interface BookingItem {
   reminderMessageId?: string | null;
   reminderError?: string | null;
   reminderRecipientPhone?: string | null;
+  reminderRecipientEmail?: string | null;
   lessons?: Array<{ lessonNumber: number; date: string; time: string }>;
 }
 
@@ -684,10 +685,11 @@ export function logoutOwner(): void {
   sessionStorage.removeItem(OWNER_SESSION_KEY);
 }
 
-// Fetch server WhatsApp reminder engine status
+// Fetch server Resend email reminder engine status
 export async function fetchReminderSystemStatus(): Promise<{
   configured: boolean;
-  provider: 'meta' | 'twilio' | 'none';
+  provider: 'resend' | 'none';
+  fromEmail?: string;
   timezone: string;
   intervalSeconds: number;
   stats?: {
@@ -709,21 +711,23 @@ export async function fetchReminderSystemStatus(): Promise<{
   return {
     configured: false,
     provider: 'none',
-    timezone: 'Australia/Perth',
+    timezone: 'Australia/Sydney',
     intervalSeconds: 60
   };
 }
 
-// Admin trigger to immediately send or retry WhatsApp reminder for a booking
-export async function triggerWhatsAppReminder(
+// Admin trigger to immediately schedule/send or retry Resend email reminder for a booking
+export async function triggerLessonReminder(
   bookingRefOrId: string, 
   force = false
 ): Promise<{
   success: boolean;
+  emailId?: string;
   messageId?: string;
   error?: string;
-  provider: 'meta' | 'twilio' | 'none';
+  recipientEmail?: string;
   recipientPhone?: string;
+  status?: string;
 }> {
   const token = localStorage.getItem('instructor_token');
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -738,3 +742,6 @@ export async function triggerWhatsAppReminder(
   const data = await res.json();
   return data;
 }
+
+// Compatibility alias
+export const triggerWhatsAppReminder = triggerLessonReminder;

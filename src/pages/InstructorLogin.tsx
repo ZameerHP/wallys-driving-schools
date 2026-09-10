@@ -16,6 +16,7 @@ import {
   Smartphone, 
   FileText,
   MessageCircle,
+  Mail,
   Search,
   Sparkles,
   RefreshCw,
@@ -35,7 +36,7 @@ import {
   updateBookingInDb,
   deleteBookingFromDb,
   OWNER_CREDENTIALS,
-  triggerWhatsAppReminder,
+  triggerLessonReminder,
   fetchReminderSystemStatus
 } from '../lib/bookings';
 
@@ -227,12 +228,13 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   
-  // WhatsApp Reminder Engine state
+  // Resend Email Reminder Engine state
   const [sendingReminderRef, setSendingReminderRef] = useState<string | null>(null);
   const [isRunningCron, setIsRunningCron] = useState(false);
   const [reminderStatusInfo, setReminderStatusInfo] = useState<{
     configured: boolean;
-    provider: 'meta' | 'twilio' | 'none';
+    provider: 'resend' | 'none';
+    fromEmail?: string;
     timezone: string;
     intervalSeconds: number;
     stats?: {
@@ -274,19 +276,20 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     const targetRef = apt.bookingRef || apt.ref || apt.id;
     setSendingReminderRef(targetRef);
     try {
-      const res = await triggerWhatsAppReminder(targetRef, force);
+      const res = await triggerLessonReminder(targetRef, force);
       if (res.success) {
-        setActionFeedback(`WhatsApp lesson reminder dispatched to student (${apt.studentName} at ${res.recipientPhone || apt.phone})!`);
+        const dest = res.recipientEmail || apt.email || 'student email';
+        setActionFeedback(`Resend lesson reminder email ${res.status === 'scheduled' ? 'scheduled' : 'sent'} to student (${apt.studentName} at ${dest})!`);
         setBookingsList(prev => prev.map(b => (b.ref === apt.ref || b.id === apt.id) ? {
           ...b,
-          reminderStatus: 'sent',
-          reminderSentAt: new Date().toISOString(),
-          reminderMessageId: res.messageId || null,
-          reminderRecipientPhone: res.recipientPhone || b.phone,
+          reminderStatus: (res.status as any) || 'sent',
+          reminderSentAt: res.status === 'sent' ? new Date().toISOString() : b.reminderSentAt,
+          reminderMessageId: res.emailId || res.messageId || null,
+          reminderRecipientEmail: res.recipientEmail || b.email,
           reminderError: null
         } : b));
       } else {
-        setActionFeedback(`WhatsApp reminder error: ${res.error || 'Failed to deliver message'}. Check WhatsApp API credentials.`);
+        setActionFeedback(`Resend reminder error: ${res.error || 'Failed to dispatch email'}. Check RESEND_API_KEY.`);
         setBookingsList(prev => prev.map(b => (b.ref === apt.ref || b.id === apt.id) ? {
           ...b,
           reminderStatus: 'failed',
@@ -296,7 +299,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       // Refresh reminder status stats
       fetchReminderSystemStatus().then(st => { if (st) setReminderStatusInfo(st); });
     } catch (err: any) {
-      setActionFeedback(`WhatsApp reminder exception: ${err?.message || err}`);
+      setActionFeedback(`Reminder exception: ${err?.message || err}`);
     } finally {
       setSendingReminderRef(null);
       setTimeout(() => setActionFeedback(null), 6000);
@@ -483,29 +486,29 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             )}
           </AnimatePresence>
 
-          {/* Automatic WhatsApp Reminder Engine Status Banner */}
+          {/* Automatic Resend Email Reminder Engine Status Banner */}
           <div className="bg-gradient-to-r from-emerald-950 to-neutral-900 text-white rounded-3xl p-5 mb-6 shadow-md border border-emerald-800/40">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-start sm:items-center gap-3.5">
                 <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center shrink-0 text-emerald-400">
-                  <MessageCircle className="w-5 h-5" />
+                  <Mail className="w-5 h-5" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-bold text-white tracking-wide">
-                      Automatic WhatsApp Lesson Reminder System
+                      Automatic Resend Email Lesson Reminder System
                     </h3>
                     <span className={cn(
                       "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
                       reminderStatusInfo?.configured ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
                     )}>
                       {reminderStatusInfo?.configured 
-                        ? (reminderStatusInfo.provider === 'meta' ? 'Meta Cloud API Live' : 'Twilio API Live') 
-                        : 'Ready (Awaiting Credentials)'}
+                        ? 'Resend API Live' 
+                        : 'Ready (Awaiting RESEND_API_KEY)'}
                     </span>
                   </div>
                   <p className="text-xs text-white/70 mt-0.5">
-                    Automatically sends 1 reminder to the student's exact phone number <strong>2 hours before</strong> lesson start time. Timezone: <span className="font-mono text-emerald-300">{reminderStatusInfo?.timezone || 'Australia/Perth'}</span>.
+                    Automatically sends 1 reminder email to the student's email address <strong>2 hours before</strong> lesson start time. Sender: <span className="font-mono text-emerald-300">{reminderStatusInfo?.fromEmail || 'info@wallysdrivingschool.com.au'}</span>. Timezone: <span className="font-mono text-emerald-300">{reminderStatusInfo?.timezone || 'Australia/Sydney'}</span>.
                   </p>
                 </div>
               </div>
@@ -655,28 +658,28 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                         )}
                       </div>
 
-                      {/* WhatsApp Lesson Reminder Status Row */}
+                      {/* Resend Lesson Reminder Status Row */}
                       <div className="flex flex-wrap items-center gap-2 pt-0.5">
                         {apt.reminderStatus === 'sent' ? (
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>WhatsApp Reminder Sent</span>
+                            <span>Email Reminder Sent</span>
                             {apt.reminderSentAt && (
                               <span className="text-emerald-700/80 font-normal">({new Date(apt.reminderSentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})</span>
                             )}
-                            <span className="text-emerald-700/60 font-mono text-[11px]">→ {apt.reminderRecipientPhone || apt.phone}</span>
+                            <span className="text-emerald-700/60 font-mono text-[11px]">→ {apt.reminderRecipientEmail || apt.email}</span>
                           </div>
                         ) : apt.reminderStatus === 'scheduled' ? (
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-blue-50 text-blue-800 border border-blue-200 text-xs font-semibold">
                             <Clock className="w-3.5 h-3.5 text-blue-600" />
-                            <span>WhatsApp Reminder Scheduled</span>
+                            <span>Email Reminder Scheduled</span>
                             <span className="text-blue-700/80 font-normal">(2 hrs before start)</span>
-                            <span className="text-blue-700/60 font-mono text-[11px]">→ {apt.phone}</span>
+                            <span className="text-blue-700/60 font-mono text-[11px]">→ {apt.email}</span>
                           </div>
                         ) : apt.reminderStatus === 'failed' ? (
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-red-50 text-red-800 border border-red-200 text-xs font-semibold">
                             <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                            <span className="truncate max-w-xs">Reminder Failed: {apt.reminderError || 'Provider delivery error'}</span>
+                            <span className="truncate max-w-xs">Reminder Failed: {apt.reminderError || 'Resend delivery error'}</span>
                           </div>
                         ) : apt.reminderStatus === 'cancelled' ? (
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gray-100 text-gray-500 border border-gray-200 text-xs font-medium">
@@ -759,7 +762,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                         <span>Reschedule</span>
                       </button>
 
-                      {/* Direct API Dispatch WhatsApp Reminder */}
+                      {/* Direct API Dispatch Resend Email Reminder */}
                       {apt.status !== 'Cancelled' && (
                         <button
                           onClick={() => handleTriggerReminder(apt, true)}
@@ -772,17 +775,17 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                               ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200"
                               : "bg-emerald-600 hover:bg-emerald-700 text-white border-transparent shadow-xs"
                           )}
-                          title={`Trigger real WhatsApp 2-hour lesson reminder to student's phone: ${apt.phone}`}
+                          title={`Schedule or send Resend 2-hour lesson reminder email to student: ${apt.email}`}
                         >
-                          <MessageCircle className="w-3.5 h-3.5 shrink-0" />
+                          <Mail className="w-3.5 h-3.5 shrink-0" />
                           <span>
                             {sendingReminderRef === (apt.bookingRef || apt.ref || apt.id)
                               ? "Sending..."
                               : apt.reminderStatus === 'failed'
-                              ? "Retry Reminder"
+                              ? "Retry Email Reminder"
                               : apt.reminderStatus === 'sent'
-                              ? "Resend 2h Reminder"
-                              : "Send 2h Reminder"}
+                              ? "Resend 2h Email"
+                              : "Send 2h Email"}
                           </span>
                         </button>
                       )}

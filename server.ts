@@ -23,13 +23,14 @@ import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
 import { validateAustralianPhone, validateWorkingEmail, validateInternationalPhone } from "./src/lib/validation.ts";
 import {
   processPendingLessonReminders,
-  sendLessonReminderForBooking,
-  sendWhatsAppMessage,
+  scheduleOrSendLessonReminder,
   handleBookingConfirmed,
   handleBookingRescheduled,
   handleBookingCancelled,
-  normalizePhoneNumber
-} from "./src/server/whatsapp-reminder-service.ts";
+  generateReminderEmailContent,
+  getResend,
+  getFormattedSender
+} from "./src/server/email-reminder-service.ts";
 
 dotenv.config();
 
@@ -573,7 +574,7 @@ app.get("/api/verify-checkout-session", async (req, res) => {
 
           if (lessonBooking) {
             handleBookingConfirmed(lessonBooking).catch(err => {
-              console.error(`[WhatsApp Reminder] Error in handleBookingConfirmed for ${lessonRef}:`, err);
+              console.error(`[Resend Reminder] Error in handleBookingConfirmed for ${lessonRef}:`, err);
             });
           }
 
@@ -613,7 +614,7 @@ app.get("/api/verify-checkout-session", async (req, res) => {
 
         if (finalBooking) {
           handleBookingConfirmed(finalBooking).catch(err => {
-            console.error("[WhatsApp Reminder] Error in handleBookingConfirmed on checkout verification:", err);
+            console.error("[Resend Reminder] Error in handleBookingConfirmed on checkout verification:", err);
           });
         }
       }
@@ -985,7 +986,7 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     }
 
     if (finalBooking) {
-      handleBookingConfirmed(finalBooking).catch((e) => console.error("[WhatsApp] Error confirming lesson reminder:", e));
+      handleBookingConfirmed(finalBooking).catch((e) => console.error("[Resend Reminder] Error confirming lesson reminder:", e));
     }
 
     const bookingResponse = finalBooking ? {
@@ -1423,7 +1424,7 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
 
         if (itemBooking.status === "Confirmed") {
           handleBookingConfirmed(itemBooking).catch(err => {
-            console.error(`[WhatsApp Reminder] Error in handleBookingConfirmed for ${lessonRef}:`, err);
+            console.error(`[Resend Reminder] Error in handleBookingConfirmed for ${lessonRef}:`, err);
           });
         }
 
@@ -1465,7 +1466,7 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
 
     if (newBooking.status === "Confirmed") {
       handleBookingConfirmed(newBooking).catch(err => {
-        console.error("[WhatsApp Reminder] Error in handleBookingConfirmed for new booking:", err);
+        console.error("[Resend Reminder] Error in handleBookingConfirmed for new booking:", err);
       });
     }
 
@@ -1713,21 +1714,14 @@ app.get("/api/supabase/status", async (_req, res) => {
 });
 
 // =========================================================================
-// WHATSAPP LESSON REMINDERS API ENDPOINTS
+// RESEND EMAIL LESSON REMINDERS API ENDPOINTS
 // =========================================================================
 
-// Get WhatsApp Reminder Provider and Queue Status
+// Get Resend Reminder Configuration and Queue Status
 app.get("/api/reminders/status", async (req, res) => {
   try {
-    const metaToken = !!(process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN);
-    const metaPhoneId = !!process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const twilioSid = !!process.env.TWILIO_ACCOUNT_SID;
-    const twilioToken = !!process.env.TWILIO_AUTH_TOKEN;
-    const twilioNumber = !!process.env.TWILIO_WHATSAPP_NUMBER;
-
-    let provider: 'meta' | 'twilio' | 'none' = 'none';
-    if (metaToken && metaPhoneId) provider = 'meta';
-    else if (twilioSid && twilioToken && twilioNumber) provider = 'twilio';
+    const isConfigured = !!process.env.RESEND_API_KEY;
+    const fromEmail = getFormattedSender();
 
     const bookings = await getBookings({ includeUnpaid: false });
     const confirmed = bookings.filter(b => b.status === 'Confirmed');
@@ -1738,9 +1732,10 @@ app.get("/api/reminders/status", async (req, res) => {
     const cancelled = bookings.filter(b => b.reminderStatus === 'cancelled').length;
 
     res.json({
-      configured: provider !== 'none',
-      provider,
-      timezone: process.env.SCHOOL_TIMEZONE || 'Australia/Perth',
+      configured: isConfigured,
+      provider: 'resend',
+      fromEmail,
+      timezone: process.env.SCHOOL_TIMEZONE || 'Australia/Sydney',
       intervalSeconds: 60,
       stats: {
         totalConfirmed: confirmed.length,
@@ -1755,7 +1750,41 @@ app.get("/api/reminders/status", async (req, res) => {
   }
 });
 
-// Admin: Trigger manual send or retry for a booking's reminder
+// Admin: Preview the exact reminder email that will be sent
+app.get("/api/reminders/preview/:refOrId", optionalAuth, async (req, res) => {
+  try {
+    const refOrId = req.params.refOrId;
+    const bookings = await getBookings({ includeUnpaid: true });
+    const booking = bookings.find(
+      b => (b.bookingRef && b.bookingRef.toUpperCase() === refOrId.toUpperCase()) || 
+           String(b.id) === String(refOrId)
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    const { subject, text } = generateReminderEmailContent({
+      studentName: booking.studentName || 'Student',
+      date: booking.date,
+      time: booking.time,
+      pickupAddress: booking.pickupAddress,
+      suburb: booking.suburb || 'Rooty Hill'
+    });
+
+    res.json({
+      bookingRef: booking.bookingRef || booking.ref,
+      recipientEmail: booking.email,
+      from: getFormattedSender(),
+      subject,
+      text
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to preview email reminder" });
+  }
+});
+
+// Admin: Trigger manual schedule/send or retry for a booking's reminder
 app.post("/api/reminders/send/:refOrId", optionalAuth, async (req, res) => {
   try {
     const refOrId = req.params.refOrId;
@@ -1770,12 +1799,12 @@ app.post("/api/reminders/send/:refOrId", optionalAuth, async (req, res) => {
     }
 
     const force = req.body?.force === true || req.query.force === 'true';
-    const result = await sendLessonReminderForBooking(booking, { force });
+    const result = await scheduleOrSendLessonReminder(booking, { force });
 
     res.json({
       bookingRef: booking.bookingRef || booking.ref,
       studentName: booking.studentName,
-      studentPhone: booking.phone,
+      studentEmail: booking.email,
       ...result
     });
   } catch (err: any) {
@@ -1793,25 +1822,56 @@ app.post("/api/reminders/cron/run", optionalAuth, async (req, res) => {
   }
 });
 
-// Utility: Phone number normalization tester
-app.post("/api/reminders/test-normalize", (req, res) => {
-  const { phone } = req.body;
-  const result = normalizePhoneNumber(phone);
-  res.json(result);
-});
-
-// Send a direct WhatsApp reminder or custom message to any phone number
+// Send a direct email reminder or test message via Resend
 app.post("/api/reminders/send-direct", async (req, res) => {
   try {
-    const { phone, message } = req.body;
-    if (!phone) {
-      return res.status(400).json({ error: "Phone number is required" });
+    const { to, subject, message } = req.body;
+    if (!to || !to.includes('@')) {
+      return res.status(400).json({ error: "Valid recipient email address is required" });
     }
-    const msg = message || "Hi! This is a reminder from Wally's Driving School regarding your upcoming driving lesson. Please be ready at your pickup location.";
-    const result = await sendWhatsAppMessage(phone, msg);
-    res.json(result);
+
+    const resend = getResend();
+    if (!resend) {
+      return res.status(400).json({
+        error: "RESEND_API_KEY is not configured on the server. Please add it to your server environment variables."
+      });
+    }
+
+    const fromEmail = getFormattedSender();
+    const sub = subject || "Reminder: Your Driving Lesson Today – Wally’s Driving School";
+    const body = message || [
+      "Hi Student,",
+      "",
+      "This is a friendly reminder from Wally’s Driving School that your driving lesson is scheduled for today.",
+      "",
+      "Please be ready a few minutes before your lesson.",
+      "",
+      "Thank you,",
+      "Wally’s Driving School"
+    ].join('\n');
+
+    let sendPayload: any = {
+      from: fromEmail,
+      to: [to.trim().toLowerCase()],
+      subject: sub,
+      text: body
+    };
+
+    let result = await resend.emails.send(sendPayload);
+
+    // Fallback for unverified domains during testing/sandbox mode
+    if (result.error && (result.error.message.includes('domain') || result.error.name === 'validation_error')) {
+      sendPayload.from = "Wally’s Driving School <onboarding@resend.dev>";
+      result = await resend.emails.send(sendPayload);
+    }
+
+    if (result.error) {
+      return res.status(500).json({ error: result.error.message || "Resend email send error" });
+    }
+
+    res.json({ success: true, id: result.data?.id, to });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || "Failed to send direct WhatsApp message" });
+    res.status(500).json({ error: err.message || "Failed to send direct email" });
   }
 });
 
@@ -1844,7 +1904,7 @@ async function startServer() {
   }
 
   // =========================================================================
-  // PRODUCTION-READY AUTOMATIC WHATSAPP LESSON REMINDER SCHEDULER
+  // PRODUCTION-READY AUTOMATIC RESEND EMAIL LESSON REMINDER SCHEDULER
   // =========================================================================
   // Checks every 60 seconds server-side for confirmed lessons starting in 2 hours
   // Works autonomously even if the website is closed or no admin is logged in
@@ -1854,20 +1914,20 @@ async function startServer() {
     try {
       await processPendingLessonReminders();
     } catch (err) {
-      console.error("[WhatsApp Reminder Engine] Error in periodic reminder check:", err);
+      console.error("[Resend Reminder Engine] Error in periodic reminder check:", err);
     }
   }, REMINDER_CHECK_INTERVAL_MS);
 
   // Initial pass shortly after boot
   setTimeout(() => {
     processPendingLessonReminders().catch(err => {
-      console.warn("[WhatsApp Reminder Engine] Initial check warning:", err?.message || err);
+      console.warn("[Resend Reminder Engine] Initial check warning:", err?.message || err);
     });
   }, 3000);
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`[WhatsApp Reminder Engine] Initialized in timezone: ${process.env.SCHOOL_TIMEZONE || 'Australia/Perth'}`);
+    console.log(`[Resend Reminder Engine] Initialized in timezone: ${process.env.SCHOOL_TIMEZONE || 'Australia/Sydney'}`);
   });
 }
 
