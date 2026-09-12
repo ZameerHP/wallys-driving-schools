@@ -32,9 +32,9 @@ export function getResend(): Resend | null {
 
 export function getFormattedSender(): string {
   const raw = process.env.RESEND_FROM_EMAIL?.trim();
-  if (!raw) return "Wally’s Driving School <info@wallysdrivingschool.com.au>";
+  if (!raw) return "Wallys Driving School <info@wallysdrivingschool.com.au>";
   if (raw.includes("<") && raw.includes(">")) return raw;
-  return `Wally’s Driving School <${raw}>`;
+  return `Wallys Driving School <${raw}>`;
 }
 
 export interface ReminderScheduleResult {
@@ -200,12 +200,12 @@ export function generateReminderEmailContent(booking: {
     ? booking.pickupAddress.trim()
     : `${booking.suburb || 'Rooty Hill'}, NSW`;
 
-  const subject = `Reminder: Your Driving Lesson Today – Wally’s Driving School`;
+  const subject = `Reminder: Your Driving Lesson Today – Wallys Driving School`;
 
   const text = [
     `Hi ${booking.studentName ? booking.studentName.trim() : 'Student'},`,
     ``,
-    `This is a friendly reminder from Wally’s Driving School that your driving lesson is scheduled for today.`,
+    `This is a friendly reminder from Wallys Driving School that your driving lesson is scheduled for today.`,
     ``,
     `Date: ${booking.date.trim()}`,
     `Time: ${booking.time.trim()}`,
@@ -214,7 +214,7 @@ export function generateReminderEmailContent(booking: {
     `Please be ready a few minutes before your lesson.`,
     ``,
     `Thank you,`,
-    `Wally’s Driving School`
+    `Wallys Driving School`
   ].join('\n');
 
   return { subject, text };
@@ -386,7 +386,7 @@ export async function scheduleOrSendLessonReminder(
     // If custom domain is not yet verified in Resend during testing, retry gracefully with verified onboarding domain
     if (resendResponse.error && (resendResponse.error.message.includes('domain') || resendResponse.error.name === 'validation_error')) {
       console.warn(`[Resend Reminder] Primary domain returned: ${resendResponse.error.message}. Retrying with onboarding@resend.dev...`);
-      sendPayload.from = "Wally’s Driving School <onboarding@resend.dev>";
+      sendPayload.from = "Wallys Driving School <onboarding@resend.dev>";
       resendResponse = await resend.emails.send(sendPayload);
     }
 
@@ -662,7 +662,7 @@ export async function sendEmailWithRetry(
       // Handle unverified domain gracefully by retrying with onboarding domain
       if (res.error && (res.error.message.includes('domain') || res.error.name === 'validation_error')) {
         console.warn(`[Resend] Domain notice: ${res.error.message}. Retrying with onboarding@resend.dev...`);
-        activePayload.from = "Wally’s Driving School <onboarding@resend.dev>";
+        activePayload.from = "Wallys Driving School <onboarding@resend.dev>";
         res = await resend.emails.send(activePayload as any);
       }
 
@@ -758,7 +758,7 @@ export async function sendBookingConfirmationEmail(booking: {
       <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
         <tr>
           <td style="background-color: #E3222A; padding: 24px; text-align: center;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold; letter-spacing: -0.5px;">Wally's Driving School</h1>
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold; letter-spacing: -0.5px;">Wallys Driving School</h1>
             <p style="color: rgba(255,255,255,0.9); margin: 4px 0 0; font-size: 13px;">Western Sydney & Hills District, NSW</p>
           </td>
         </tr>
@@ -766,7 +766,7 @@ export async function sendBookingConfirmationEmail(booking: {
           <td style="padding: 32px 24px;">
             <h2 style="font-size: 18px; margin: 0 0 12px; color: #111111;">Your booking is confirmed, ${safeName}!</h2>
             <p style="font-size: 14px; line-height: 1.6; color: #444444; margin: 0 0 24px;">
-              Thank you for booking with Wally's Driving School. Your session is locked in with accredited RMS instructor Wally.
+              Thank you for booking with Wallys Driving School. Your session is locked in with accredited RMS instructor Wally.
             </p>
 
             <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #eeeeee; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
@@ -817,7 +817,7 @@ export async function sendBookingConfirmationEmail(booking: {
         </tr>
         <tr>
           <td style="background-color: #f7f7f9; padding: 16px 24px; text-align: center; border-top: 1px solid #eeeeee; font-size: 11px; color: #888888;">
-            Wally's Driving School • Rooty Hill NSW 2766 • Australia
+            Wallys Driving School • Rooty Hill NSW 2766 • Australia
           </td>
         </tr>
       </table>
@@ -828,7 +828,7 @@ export async function sendBookingConfirmationEmail(booking: {
   const text = `
 Hi ${booking.studentName || 'Student'},
 
-Your booking with Wally's Driving School is confirmed!
+Your booking with Wallys Driving School is confirmed!
 
 Booking Reference: ${booking.bookingRef}
 Instructor: Wally (Accredited RMS Instructor)
@@ -881,7 +881,7 @@ export async function sendPaymentReceiptEmail(
   const safeAmount = `$${Number(payment.amount || booking.packagePrice).toFixed(2)} AUD`;
   const safePackage = escapeHtml(booking.packageTitle || 'Driving Lesson');
 
-  const subject = `Payment Receipt: ${safeAmount} for Wally's Driving School (${booking.bookingRef})`;
+  const subject = `Payment Receipt: ${safeAmount} for Wallys Driving School (${booking.bookingRef})`;
 
   const html = `
     <!DOCTYPE html>
@@ -891,7 +891,7 @@ export async function sendPaymentReceiptEmail(
       <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
         <tr>
           <td style="background-color: #111111; padding: 20px 24px; color: #ffffff;">
-            <div style="font-size: 18px; font-weight: bold;">Wally's Driving School</div>
+            <div style="font-size: 18px; font-weight: bold;">Wallys Driving School</div>
             <div style="font-size: 12px; color: #aaaaaa;">Tax Invoice / Official Receipt</div>
           </td>
         </tr>
@@ -939,7 +939,7 @@ export async function sendPaymentReceiptEmail(
         </tr>
         <tr>
           <td style="background-color: #f7f7f9; padding: 16px 24px; text-align: center; border-top: 1px solid #eeeeee; font-size: 11px; color: #888888;">
-            Wally's Driving School • info@wallysdrivingschool.com.au • 0412 345 678
+            Wallys Driving School • info@wallysdrivingschool.com.au • 0412 345 678
           </td>
         </tr>
       </table>
@@ -983,7 +983,7 @@ export async function sendBookingCancellationNoticeEmail(
   const isRefunded = Boolean(details?.refundStatus === 'refunded' || details?.amountRefunded);
   const refundAmount = details?.amountRefunded ? `$${Number(details.amountRefunded).toFixed(2)} AUD` : '';
 
-  const subject = `Booking Cancellation Notice: ${booking.bookingRef} – Wally's Driving School`;
+  const subject = `Booking Cancellation Notice: ${booking.bookingRef} – Wallys Driving School`;
 
   const html = `
     <!DOCTYPE html>
@@ -993,7 +993,7 @@ export async function sendBookingCancellationNoticeEmail(
       <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
         <tr>
           <td style="background-color: #333333; padding: 24px; text-align: center; color: #ffffff;">
-            <h1 style="margin: 0; font-size: 20px;">Wally's Driving School</h1>
+            <h1 style="margin: 0; font-size: 20px;">Wallys Driving School</h1>
             <p style="margin: 4px 0 0; font-size: 13px; opacity: 0.8;">Booking Cancellation Confirmation</p>
           </td>
         </tr>

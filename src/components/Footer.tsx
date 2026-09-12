@@ -17,13 +17,13 @@ export function Footer() {
               <div className="bg-white/95 backdrop-blur-md px-3.5 py-2 rounded-2xl shadow-[0_0_20px_rgba(227,34,42,0.3)] border border-white/20 group-hover:scale-105 transition-transform duration-300 flex items-center h-14 w-fit">
                 <img 
                   src="/assets/logo.png" 
-                  alt="Wally's Driving School" 
+                  alt="Wallys Driving School" 
                   className="h-10 w-auto object-contain max-w-[180px]" 
                 />
               </div>
             </Link>
             <p className="text-white/70 mb-6 text-sm leading-relaxed">
-              Wally's Driving School is Sydney's trusted, high-performance driving academy. Patient trainers, modern dual-controlled cars, and 99% test pass rate.
+              Wallys Driving School is Sydney's trusted, high-performance driving academy. Patient trainers, modern dual-controlled cars, and 99% test pass rate.
             </p>
             <div className="flex items-center gap-2 text-xs font-semibold text-white/60 bg-white/5 border border-white/10 px-3.5 py-2 rounded-xl w-fit mb-6">
               <ShieldCheck className="w-4 h-4 text-brand-red" />
@@ -114,7 +114,7 @@ export function Footer() {
 
         {/* Bottom bar */}
         <div className="pt-8 border-t border-white/10 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-white/50">
-          <p>© {new Date().getFullYear()} Wally's Driving School. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} Wallys Driving School. All rights reserved.</p>
           <div className="flex gap-6">
             <Link to="/coverage-area" className="hover:text-white transition-colors">Service Areas</Link>
             <Link to="/manage-booking" className="hover:text-white transition-colors">Manage Booking</Link>

@@ -23,11 +23,13 @@ import {
   Trash2,
   X,
   Plus,
-  PlusCircle
+  PlusCircle,
+  CalendarOff
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { cn } from '../lib/utils';
 import { ManualBookingModal } from '../components/ManualBookingModal';
+import { TimeOffManagement } from '../components/instructor/TimeOffManagement';
 import { 
   isOwnerLoggedIn, 
   setOwnerLoggedIn, 
@@ -95,7 +97,7 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
         >
           <div className="text-center mb-8 relative z-10">
             <div className="bg-white/95 px-4 py-2 rounded-2xl shadow-[0_0_25px_rgba(227,34,42,0.4)] mx-auto mb-5 flex items-center justify-center w-fit">
-              <img src="/assets/logo.png" alt="Wally's Driving School" className="h-11 w-auto object-contain max-w-[170px]" />
+              <img src="/assets/logo.png" alt="Wallys Driving School" className="h-11 w-auto object-contain max-w-[170px]" />
             </div>
 
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-red/20 border border-brand-red/30 text-brand-red text-xs font-bold uppercase tracking-wider mb-2">
@@ -188,7 +190,7 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
         <div className="mt-8 text-center text-white/40 text-sm">
           <Link to="/" className="hover:text-white transition-colors inline-flex items-center gap-2">
             <ArrowLeft className="w-4 h-4" />
-            Back to Wally's Driving School
+            Back to Wallys Driving School
           </Link>
         </div>
       </div>
@@ -228,15 +230,35 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   const [rescheduleTime, setRescheduleTime] = useState('');
   const [isSavingReschedule, setIsSavingReschedule] = useState(false);
 
+  // Active View Tab: Schedule vs Availability / Time Off
+  const [activeViewTab, setActiveViewTab] = useState<'schedule' | 'availability'>('schedule');
+  const [blockedCount, setBlockedCount] = useState<number>(0);
+
   // Manual booking modal state
   const [isAddBookingModalOpen, setIsAddBookingModalOpen] = useState(false);
+
+  const fetchBlockedCount = async () => {
+    try {
+      const token = localStorage.getItem('instructor_token') || 'wally_owner_session';
+      const res = await fetch('/api/instructor/time-off', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBlockedCount((data.blocks || []).length);
+      }
+    } catch (e) {
+      console.warn('Failed to load blocked count', e);
+    }
+  };
 
   const loadData = async () => {
     setIsRefreshing(true);
     try {
       const [data, reminderStats] = await Promise.all([
         fetchBookingsFromDb(),
-        fetchReminderSystemStatus()
+        fetchReminderSystemStatus(),
+        fetchBlockedCount()
       ]);
       setBookingsList(data);
       if (reminderStats) setReminderStatusInfo(reminderStats);
@@ -386,10 +408,38 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
           </div>
 
           <nav className="flex flex-col gap-2">
-            <div className="flex items-center gap-3 px-4 py-3 bg-brand-red rounded-xl font-bold text-sm shadow-[0_0_15px_rgba(227,34,42,0.3)]">
+            <button
+              onClick={() => setActiveViewTab('schedule')}
+              className={cn(
+                "flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all text-left cursor-pointer w-full",
+                activeViewTab === 'schedule'
+                  ? "bg-brand-red text-white shadow-[0_0_15px_rgba(227,34,42,0.3)]"
+                  : "text-white/80 hover:text-white hover:bg-white/10"
+              )}
+            >
               <Calendar className="w-4 h-4" />
-              Instructor Schedule
-            </div>
+              <span>Instructor Schedule</span>
+            </button>
+
+            <button
+              onClick={() => setActiveViewTab('availability')}
+              className={cn(
+                "flex items-center justify-between px-4 py-3 rounded-xl font-bold text-sm transition-all text-left cursor-pointer w-full",
+                activeViewTab === 'availability'
+                  ? "bg-brand-red text-white shadow-[0_0_15px_rgba(227,34,42,0.3)]"
+                  : "text-white/80 hover:text-white hover:bg-white/10"
+              )}
+            >
+              <div className="flex items-center gap-3">
+                <CalendarOff className="w-4 h-4 text-amber-400" />
+                <span>Availability / Time Off</span>
+              </div>
+              {blockedCount > 0 && (
+                <span className="bg-amber-400/20 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-400/30">
+                  {blockedCount}
+                </span>
+              )}
+            </button>
             
             <button 
               onClick={() => setIsAddBookingModalOpen(true)}
@@ -422,42 +472,103 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
 
       {/* Main Content */}
       <div className="flex-1 p-4 md:p-8 lg:p-12">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
-          className="max-w-5xl"
-        >
-          <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-brand-red">Active Driving Roster</span>
-              <h1 className="text-2xl sm:text-3xl font-display font-bold mb-1 text-brand-black">Wally's Instructor Schedule</h1>
-              <p className="text-brand-black/60 text-xs sm:text-sm">
-                Real-time student appointments, pickup addresses, dates, and times across Western Sydney.
-              </p>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsAddBookingModalOpen(true)}
-                className="bg-brand-red hover:bg-[#c41a21] text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-brand-red/20 hover:shadow-brand-red/30"
-                title="Manually Add Booking for Client"
-              >
-                <Plus className="w-4 h-4" />
-                <span>+ Add Booking</span>
-              </button>
+        {/* Mobile Tab Switcher */}
+        <div className="md:hidden flex items-center bg-white p-1 rounded-2xl border border-black/10 shadow-sm mb-6">
+          <button
+            onClick={() => setActiveViewTab('schedule')}
+            className={cn(
+              "flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer",
+              activeViewTab === 'schedule'
+                ? "bg-brand-red text-white shadow-sm"
+                : "text-brand-black/70 hover:text-brand-black"
+            )}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            <span>Schedule</span>
+          </button>
+          <button
+            onClick={() => setActiveViewTab('availability')}
+            className={cn(
+              "flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer",
+              activeViewTab === 'availability'
+                ? "bg-brand-red text-white shadow-sm"
+                : "text-brand-black/70 hover:text-brand-black"
+            )}
+          >
+            <CalendarOff className="w-3.5 h-3.5 text-amber-500" />
+            <span>Availability / Time Off</span>
+            {blockedCount > 0 && (
+              <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                {blockedCount}
+              </span>
+            )}
+          </button>
+        </div>
 
-              <button
-                onClick={loadData}
-                disabled={isRefreshing}
-                className="bg-white hover:bg-black/5 text-black border border-black/10 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
-                title="Refresh Live Schedule"
-              >
-                <RefreshCw className={cn("w-3.5 h-3.5 text-brand-red", isRefreshing && "animate-spin")} />
-                <span>Refresh Schedule</span>
-              </button>
+        {activeViewTab === 'availability' ? (
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <TimeOffManagement
+              onAvailabilityChanged={() => {
+                fetchBlockedCount();
+                loadData();
+              }}
+            />
+          </motion.div>
+        ) : (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15 }}
+            className="max-w-5xl"
+          >
+            <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-brand-red">Active Driving Roster</span>
+                <h1 className="text-2xl sm:text-3xl font-display font-bold mb-1 text-brand-black">Wallys Instructor Schedule</h1>
+                <p className="text-brand-black/60 text-xs sm:text-sm">
+                  Real-time student appointments, pickup addresses, dates, and times across Western Sydney.
+                </p>
+              </div>
+              
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setActiveViewTab('availability')}
+                  className="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold px-3.5 py-2.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  title="Manage Full Day Off and Blocked Time Periods"
+                >
+                  <CalendarOff className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Time Off Settings</span>
+                  {blockedCount > 0 && (
+                    <span className="bg-amber-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-black">
+                      {blockedCount}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => setIsAddBookingModalOpen(true)}
+                  className="bg-brand-red hover:bg-[#c41a21] text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-brand-red/20 hover:shadow-brand-red/30"
+                  title="Manually Add Booking for Client"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Add Booking</span>
+                </button>
+
+                <button
+                  onClick={loadData}
+                  disabled={isRefreshing}
+                  className="bg-white hover:bg-black/5 text-black border border-black/10 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  title="Refresh Live Schedule"
+                >
+                  <RefreshCw className={cn("w-3.5 h-3.5 text-brand-red", isRefreshing && "animate-spin")} />
+                  <span>Refresh Schedule</span>
+                </button>
+              </div>
             </div>
-          </div>
 
           {/* Feedback Banner */}
           <AnimatePresence>
@@ -842,6 +953,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             )}
           </div>
         </motion.div>
+        )}
       </div>
 
       {/* Instructor Reschedule Modal */}

@@ -87,7 +87,7 @@ export function Nav() {
                 <div className="bg-white/95 backdrop-blur-md px-3.5 py-1.5 rounded-2xl shadow-[0_0_20px_rgba(227,34,42,0.25)] border border-white/20 group-hover:shadow-[0_0_30px_rgba(227,34,42,0.6)] group-hover:scale-105 transition-all duration-300 flex items-center h-12">
                   <img 
                     src="/assets/logo.png" 
-                    alt="Wally's Driving School" 
+                    alt="Wallys Driving School" 
                     className="h-9 w-auto object-contain max-w-[160px]" 
                   />
                 </div>

@@ -29,7 +29,9 @@ import {
   ChevronRight as ChevronRightIcon,
   HelpCircle,
   Menu,
-  X
+  X,
+  CalendarOff,
+  AlertTriangle
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
@@ -1675,6 +1677,14 @@ export function BookNow() {
                               const isSelected = selectedDate === item.dateStr;
                               const isUnavailable = item.isPast;
 
+                              // Check if date is marked as instructor Full Day Off
+                              const isDayOff = bookedSlots.some(b => {
+                                if (b.status === 'Cancelled') return false;
+                                if (normalizeDateStr(b.date) !== item.dateStr) return false;
+                                const cleanTime = (b.time || '').trim().toLowerCase();
+                                return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+                              });
+
                               // Check if any other lesson is booked on this date
                               const otherLessonsOnDate = packageSpecs.lessonCount > 1 
                                 ? scheduledLessons.filter(l => l.date === item.dateStr && l.lessonNumber !== activeLesson.lessonNumber)
@@ -1696,10 +1706,18 @@ export function BookNow() {
                                       ? "bg-brand-red text-white font-bold shadow-md shadow-brand-red/30 scale-105" 
                                       : isUnavailable 
                                       ? "text-black/20 cursor-not-allowed line-through"
+                                      : isDayOff
+                                      ? "bg-amber-50/60 text-amber-900/70 hover:bg-amber-100 font-semibold"
                                       : "hover:bg-white text-brand-black hover:shadow-sm"
                                   )}
                                 >
                                   <span>{item.day}</span>
+                                  {isDayOff && !isSelected && (
+                                    <span 
+                                      title="Instructor Day Off"
+                                      className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500"
+                                    />
+                                  )}
                                   {otherLessonsOnDate.length > 0 && !isSelected && (
                                     <span 
                                       title={`Lesson ${otherLessonsOnDate.map(l => l.lessonNumber).join(', ')} scheduled`}
@@ -1724,48 +1742,93 @@ export function BookNow() {
                               </span>
                             </div>
                             
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5 max-h-[250px] overflow-y-auto pr-1">
-                              {availableSlotsForPackage.map((slotObj, idx) => {
-                                const status = getSlotAvailabilityStatus(slotObj.slot);
-                                const isAvailable = status.available;
-                                const isSelected = selectedTimeSlot === slotObj.slot;
+                            {(() => {
+                              // Check if selected date is marked as Full Day Off
+                              const isSelectedDayFullDayOff = bookedSlots.some(b => {
+                                if (b.status === 'Cancelled') return false;
+                                if (normalizeDateStr(b.date) !== normalizeDateStr(selectedDate)) return false;
+                                const cleanTime = (b.time || '').trim().toLowerCase();
+                                return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+                              });
 
+                              // Filter out slots blocked by instructor time off (they disappear completely)
+                              const visibleSlots = availableSlotsForPackage.filter(slotObj => {
+                                const status = getSlotAvailabilityStatus(slotObj.slot);
+                                if (status.reason === 'time_off') return false;
+                                return true;
+                              });
+
+                              if (isSelectedDayFullDayOff) {
                                 return (
-                                  <button
-                                    key={idx}
-                                    type="button"
-                                    disabled={!isAvailable}
-                                    onClick={() => {
-                                      if (isAvailable) {
-                                        handleSelectTimeSlot(slotObj.slot);
-                                      }
-                                    }}
-                                    className={cn(
-                                      "px-3 py-2 rounded-xl text-xs font-bold border transition-all text-left flex items-center justify-between",
-                                      isSelected
-                                        ? "bg-brand-red text-white border-brand-red shadow-md cursor-pointer"
-                                        : !isAvailable
-                                        ? "bg-black/[0.03] text-black/30 border-black/5 cursor-not-allowed line-through"
-                                        : "bg-white border-black/10 hover:border-brand-red/50 text-brand-black cursor-pointer"
-                                    )}
-                                  >
-                                    <span className="flex items-center gap-2">
-                                      <Clock className="w-3.5 h-3.5" />
-                                      {slotObj.slot}
-                                    </span>
-                                    {isSelected ? (
-                                      <Check className="w-3.5 h-3.5" />
-                                    ) : !isAvailable ? (
-                                      <span className="text-[9px] uppercase font-bold text-rose-600 bg-rose-100/70 px-1.5 py-0.5 rounded no-underline">
-                                        {status.reason === 'self_conflict' 
-                                          ? `In Lesson ${status.conflictingLesson}` 
-                                          : 'Booked'}
-                                      </span>
-                                    ) : null}
-                                  </button>
+                                  <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs my-2">
+                                    <div className="flex items-center gap-2 font-bold mb-1 text-amber-800">
+                                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                      <span>Instructor Day Off</span>
+                                    </div>
+                                    <p className="text-[11px] text-amber-800/90 leading-relaxed">
+                                      Instructor Wally has scheduled a Full Day Off on this date ({selectedDate}). No lesson appointments are available. Please select another date on the calendar.
+                                    </p>
+                                  </div>
                                 );
-                              })}
-                            </div>
+                              }
+
+                              if (visibleSlots.length === 0) {
+                                return (
+                                  <div className="p-5 bg-black/[0.02] rounded-2xl border border-black/5 text-center text-xs text-brand-black/60 my-2">
+                                    <CalendarOff className="w-5 h-5 mx-auto mb-1.5 text-black/40" />
+                                    <p className="font-bold text-brand-black">No lesson slots available</p>
+                                    <p className="text-[11px] text-black/40 mt-0.5">
+                                      All times for this date are booked or blocked. Please select another date on the calendar.
+                                    </p>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5 max-h-[250px] overflow-y-auto pr-1">
+                                  {visibleSlots.map((slotObj, idx) => {
+                                    const status = getSlotAvailabilityStatus(slotObj.slot);
+                                    const isAvailable = status.available;
+                                    const isSelected = selectedTimeSlot === slotObj.slot;
+
+                                    return (
+                                      <button
+                                        key={idx}
+                                        type="button"
+                                        disabled={!isAvailable}
+                                        onClick={() => {
+                                          if (isAvailable) {
+                                            handleSelectTimeSlot(slotObj.slot);
+                                          }
+                                        }}
+                                        className={cn(
+                                          "px-3 py-2 rounded-xl text-xs font-bold border transition-all text-left flex items-center justify-between",
+                                          isSelected
+                                            ? "bg-brand-red text-white border-brand-red shadow-md cursor-pointer"
+                                            : !isAvailable
+                                            ? "bg-black/[0.03] text-black/30 border-black/5 cursor-not-allowed line-through"
+                                            : "bg-white border-black/10 hover:border-brand-red/50 text-brand-black cursor-pointer"
+                                        )}
+                                      >
+                                        <span className="flex items-center gap-2">
+                                          <Clock className="w-3.5 h-3.5" />
+                                          {slotObj.slot}
+                                        </span>
+                                        {isSelected ? (
+                                          <Check className="w-3.5 h-3.5" />
+                                        ) : !isAvailable ? (
+                                          <span className="text-[9px] uppercase font-bold text-rose-600 bg-rose-100/70 px-1.5 py-0.5 rounded no-underline">
+                                            {status.reason === 'self_conflict' 
+                                              ? `In Lesson ${status.conflictingLesson}` 
+                                              : 'Booked'}
+                                          </span>
+                                        ) : null}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           {/* Advance lesson helper */}

@@ -684,7 +684,7 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
                           Conflict Detected ({conflicts.length} confirmed booking{conflicts.length > 1 ? 's' : ''}):
                         </strong>
                         <p className="text-[11px] text-amber-800 mt-0.5 leading-tight">
-                          Wally's Driving School policy strictly protects confirmed student lessons. Please reschedule these bookings before blocking this period:
+                          Wallys Driving School policy strictly protects confirmed student lessons. Please reschedule these bookings before blocking this period:
                         </p>
                       </div>
                     </div>

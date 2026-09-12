@@ -302,46 +302,69 @@ export function normalizeDateStr(rawDate: string): string {
 
 export interface SlotAvailabilityResult {
   available: boolean;
-  reason?: 'booked' | 'self_conflict';
+  reason?: 'booked' | 'self_conflict' | 'time_off';
   conflictReason?: string;
   conflictingLesson?: number;
 }
 
 /**
  * Check if a proposed slot is available:
- * 1. Checks against database booked slots (+30m buffer)
+ * 1. Checks against database booked slots and instructor time-off blocks (+30m buffer for bookings, 0 buffer for time off)
  * 2. Checks against other lessons in the student's multi-lesson batch (+30m buffer)
  */
 export function checkSlotAvailability(
   date: string,
   timeSlot: string,
-  bookedSlots: { date: string; time: string; status?: string }[],
+  bookedSlots: { date: string; time: string; status?: string; isFullDay?: boolean; reason?: string }[],
   otherLessons?: { date: string; time: string; lessonNumber?: number }[],
   currentLessonNumber?: number
 ): SlotAvailabilityResult {
-  const targetInterval = parseTimeInterval(timeSlot);
-  if (!targetInterval) return { available: true };
   const normTargetDate = normalizeDateStr(date);
+  if (!normTargetDate) return { available: true };
 
-  // 1. Check against DB booked slots
+  const targetInterval = parseTimeInterval(timeSlot);
+
+  // 1. Check against DB booked slots & time off blocks
   for (const b of bookedSlots) {
     if (b.status === 'Cancelled') continue;
     if (normalizeDateStr(b.date) === normTargetDate) {
+      // 1a. Check for Full Day Off block
+      const cleanTime = (b.time || '').trim().toLowerCase();
+      if (
+        b.isFullDay ||
+        cleanTime === 'full day off' ||
+        cleanTime === 'all day' ||
+        cleanTime.includes('day off')
+      ) {
+        return {
+          available: false,
+          reason: 'time_off',
+          conflictReason: b.reason || 'Instructor Wally has scheduled a Full Day Off on this date.'
+        };
+      }
+
+      // 1b. Check for time window conflict
+      if (!targetInterval) continue;
+
       const existingInterval = parseTimeInterval(b.time);
       if (existingInterval) {
         const buffer = b.status === 'Blocked' ? 0 : 30;
         if (isTimeSlotConflicting(targetInterval, existingInterval, buffer)) {
           return {
             available: false,
-            reason: 'booked',
-            conflictReason: b.status === 'Blocked' ? 'Blocked by instructor availability / time off' : 'Already booked with instructor Wally'
+            reason: b.status === 'Blocked' ? 'time_off' : 'booked',
+            conflictReason: b.status === 'Blocked'
+              ? (b.reason || 'Blocked by instructor availability / time off')
+              : 'Already booked with instructor Wally'
           };
         }
-      } else if (b.time.trim().toLowerCase() === timeSlot.trim().toLowerCase()) {
+      } else if (cleanTime === timeSlot.trim().toLowerCase()) {
         return {
           available: false,
-          reason: 'booked',
-          conflictReason: b.status === 'Blocked' ? 'Blocked by instructor availability / time off' : 'Already booked with instructor Wally'
+          reason: b.status === 'Blocked' ? 'time_off' : 'booked',
+          conflictReason: b.status === 'Blocked'
+            ? (b.reason || 'Blocked by instructor availability / time off')
+            : 'Already booked with instructor Wally'
         };
       }
     }

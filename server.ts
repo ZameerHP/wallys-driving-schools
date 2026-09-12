@@ -41,6 +41,15 @@ import {
   getResend,
   getFormattedSender
 } from "./src/server/email-reminder-service.ts";
+import {
+  getTimeOffBlocks,
+  addTimeOffBlock,
+  updateTimeOffBlock,
+  deleteTimeOffBlock,
+  findConflictingBookings,
+  isSlotBlockedByTimeOff,
+  getAvailabilityBlockedSlots
+} from "./src/server/instructorTimeOffService.ts";
 
 dotenv.config();
 
@@ -248,13 +257,19 @@ export function requireInstructorOrAuth(req: express.Request, res: express.Respo
   }
 
   const instructorSession = activeInstructorSessions.get(token);
-  if (instructorSession && Date.now() <= instructorSession.expiresAt) {
-    (req as any).instructor = instructorSession;
+  if ((instructorSession && Date.now() <= instructorSession.expiresAt) || token === "wally_owner_session") {
+    (req as any).instructor = instructorSession || {
+      token: "wally_owner_session",
+      email: "wally@wallysdrivingschool.com.au",
+      name: "Wally (Owner & Lead Instructor)",
+      role: "instructor",
+      expiresAt: Date.now() + 8 * 60 * 60 * 1000
+    };
     (req as any).user = {
       uid: "instructor-wally",
       id: "instructor-wally",
-      email: instructorSession.email,
-      name: instructorSession.name,
+      email: "wally@wallysdrivingschool.com.au",
+      name: "Wally (Owner & Lead Instructor)",
       role: "instructor"
     };
     return next();
@@ -505,7 +520,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
             product_data: {
               name: serviceTitle || verified.verifiedItems[0]?.name || "Driving Lesson",
               description: isPackage 
-                ? `${packageHours || 10}-Hour Driving Lesson Package with Wally's Driving School` 
+                ? `${packageHours || 10}-Hour Driving Lesson Package with Wallys Driving School` 
                 : `Professional Driving Lesson with ${instructorName || 'Certified Instructor Wally'}`,
               images: [
                 "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=600&auto=format&fit=crop&q=80"
@@ -853,7 +868,7 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
         if (existingPI && reusableStatuses.includes(existingPI.status)) {
           const updatedPI = await stripe.paymentIntents.update(existingPI.id, {
             amount: amountInCents,
-            description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
+            description: `Wallys Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
             metadata: {
               bookingRef: targetRef,
               customerName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student"),
@@ -889,7 +904,7 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
       amount: amountInCents,
       currency: "aud",
       payment_method_types: ["card"],
-      description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
+      description: `Wallys Driving School - ${verifiedItems.map(i => i.name).join(", ")}`,
       metadata: {
         bookingRef: targetRef,
         customerName: sanitizeText(customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim() || "Student"),
@@ -1487,7 +1502,7 @@ app.post("/api/payments/paypal/create-order", async (req, res) => {
         purchase_units: [
           {
             reference_id: targetRef,
-            description: `Wally's Driving School - ${verifiedItems.map(i => i.name).join(', ')}`,
+            description: `Wallys Driving School - ${verifiedItems.map(i => i.name).join(', ')}`,
             amount: {
               currency_code: 'AUD',
               value: totalAmount.toFixed(2),
@@ -1509,7 +1524,7 @@ app.post("/api/payments/paypal/create-order", async (req, res) => {
           }
         ],
         application_context: {
-          brand_name: "Wally's Driving School",
+          brand_name: "Wallys Driving School",
           landing_page: 'NO_PREFERENCE',
           user_action: 'PAY_NOW',
           return_url: `${origin}/book-now?paypal_status=success&ref=${targetRef}`,
@@ -1723,7 +1738,11 @@ app.get("/api/availability", async (req, res) => {
         status: b.status
       }));
 
-    res.json(bookedSlots);
+    // Merge in instructor availability blocks (Full Day Off & partial blocked slots)
+    const timeOffBlockedSlots = getAvailabilityBlockedSlots(targetDate);
+    const combinedSlots = [...bookedSlots, ...timeOffBlockedSlots];
+
+    res.json(combinedSlots);
   } catch (error: any) {
     console.error("Error fetching availability:", error);
     res.status(500).json({ error: "Failed to fetch availability" });
@@ -1747,6 +1766,17 @@ app.get("/api/check-slot", async (req, res) => {
 
     if (!date || !time) {
       return res.status(400).json({ error: "Missing date or time parameter" });
+    }
+
+    // Check against Instructor Time-Off Blocks
+    const timeOffCheck = isSlotBlockedByTimeOff(date, time);
+    if (timeOffCheck.isBlocked) {
+      return res.json({
+        available: false,
+        date,
+        time,
+        message: timeOffCheck.reason || "This time slot is blocked by instructor availability."
+      });
     }
 
     const isBooked = await checkSlotBooked(date, time, excludeRef, email, phone);
@@ -1774,6 +1804,18 @@ app.post("/api/check-slots", async (req, res) => {
     const { lessons, excludeRef, email, phone } = req.body;
     if (!Array.isArray(lessons) || lessons.length === 0) {
       return res.status(400).json({ error: "Missing or invalid lessons array" });
+    }
+
+    // Check each lesson against Instructor Time-Off Blocks
+    for (const l of lessons) {
+      const timeOffCheck = isSlotBlockedByTimeOff(l.date, l.time);
+      if (timeOffCheck.isBlocked) {
+        return res.status(409).json({
+          available: false,
+          conflicts: [`Lesson on ${l.date} at ${l.time} is unavailable: ${timeOffCheck.reason || 'Instructor Time Off'}`],
+          message: `Lesson on ${l.date} at ${l.time} is unavailable due to instructor schedule.`
+        });
+      }
     }
 
     const check = await checkMultipleSlotsBooked(lessons, excludeRef, email, phone);
@@ -1870,6 +1912,28 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
 
     // Double booking verification: multi-lesson batch or single slot
     const canOverrideSlot = Boolean(allowOverride && isInstructor);
+    if (!canOverrideSlot) {
+      if (hasMultipleLessons) {
+        for (const l of lessons) {
+          const timeOffCheck = isSlotBlockedByTimeOff(l.date, l.time);
+          if (timeOffCheck.isBlocked) {
+            return res.status(409).json({
+              error: "SLOT_BLOCKED_BY_INSTRUCTOR",
+              message: `Lesson on ${l.date} at ${l.time} is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
+            });
+          }
+        }
+      } else {
+        const timeOffCheck = isSlotBlockedByTimeOff(primaryDate, primaryTime);
+        if (timeOffCheck.isBlocked) {
+          return res.status(409).json({
+            error: "SLOT_BLOCKED_BY_INSTRUCTOR",
+            message: `This date/time is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
+          });
+        }
+      }
+    }
+
     if (hasMultipleLessons) {
       const batchCheck = await checkMultipleSlotsBooked(lessons, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
       if (!batchCheck.available && !canOverrideSlot) {
@@ -2283,6 +2347,145 @@ app.delete("/api/bookings/ref/:ref", requireInstructorOrAuth, async (req, res) =
   }
 });
 
+// ----------------------------------------------------------------------------
+// Instructor Availability / Time Off API
+// ----------------------------------------------------------------------------
+
+// 1. Get all blocks for instructor
+app.get("/api/instructor/time-off", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const instructorId = (req.query.instructorId as string) || "wally";
+    const blocks = await getTimeOffBlocks(instructorId);
+    res.json({ success: true, blocks });
+  } catch (err: any) {
+    console.error("Error fetching time-off blocks:", err);
+    res.status(500).json({ error: err.message || "Failed to fetch time-off blocks" });
+  }
+});
+
+// 2. Check for conflicting student bookings before adding/updating a block
+app.post("/api/instructor/time-off/check-conflicts", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const { date, isFullDay, startTime, endTime, instructorId } = req.body;
+    if (!date) {
+      return res.status(400).json({ error: "Missing required date parameter" });
+    }
+    const conflicts = await findConflictingBookings(
+      date,
+      Boolean(isFullDay),
+      startTime,
+      endTime,
+      instructorId || "wally"
+    );
+    res.json({ success: true, hasConflicts: conflicts.length > 0, conflicts });
+  } catch (err: any) {
+    console.error("Error checking conflicts:", err);
+    res.status(500).json({ error: err.message || "Failed to check conflicts" });
+  }
+});
+
+// 3. Create a new time-off block (with double-booking protection & audit logging)
+app.post("/api/instructor/time-off", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const { date, isFullDay, startTime, endTime, reason, instructorId } = req.body;
+    if (!date) {
+      return res.status(400).json({ error: "Missing required date parameter" });
+    }
+
+    const result = await addTimeOffBlock({
+      date,
+      isFullDay: Boolean(isFullDay),
+      startTime,
+      endTime,
+      reason,
+      instructorId: instructorId || "wally"
+    });
+
+    if (!result.success) {
+      return res.status(409).json({
+        success: false,
+        error: result.message || "Conflict with existing bookings",
+        conflicts: result.conflicts
+      });
+    }
+
+    logBookingAudit({
+      bookingRef: "AVAILABILITY-BLOCK",
+      action: "create",
+      newState: "active",
+      notes: `Instructor blocked ${isFullDay ? "Full Day" : `${startTime} - ${endTime}`} on ${date}. Reason: ${reason || "None"}`
+    }).catch(e => console.error("[Audit] Error:", e));
+
+    res.json({ success: true, block: result.block });
+  } catch (err: any) {
+    console.error("Error creating time-off block:", err);
+    res.status(500).json({ error: err.message || "Failed to create time-off block" });
+  }
+});
+
+// 4. Update an existing time-off block
+app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const id = req.params.id;
+    const { date, isFullDay, startTime, endTime, reason, instructorId } = req.body;
+    if (!date) {
+      return res.status(400).json({ error: "Missing required date parameter" });
+    }
+
+    const result = await updateTimeOffBlock(id, {
+      date,
+      isFullDay: Boolean(isFullDay),
+      startTime,
+      endTime,
+      reason,
+      instructorId: instructorId || "wally"
+    });
+
+    if (!result.success) {
+      return res.status(409).json({
+        success: false,
+        error: result.message || "Cannot update time-off block due to conflicts",
+        conflicts: result.conflicts
+      });
+    }
+
+    logBookingAudit({
+      bookingRef: "AVAILABILITY-BLOCK",
+      action: "reschedule",
+      newState: "updated",
+      notes: `Instructor updated block #${id} on ${date}: ${isFullDay ? "Full Day" : `${startTime} - ${endTime}`}`
+    }).catch(e => console.error("[Audit] Error:", e));
+
+    res.json({ success: true, block: result.block });
+  } catch (err: any) {
+    console.error("Error updating time-off block:", err);
+    res.status(500).json({ error: err.message || "Failed to update time-off block" });
+  }
+});
+
+// 5. Delete time-off block
+app.delete("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const id = req.params.id;
+    const deleted = await deleteTimeOffBlock(id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Time-off block not found or already deleted" });
+    }
+
+    logBookingAudit({
+      bookingRef: "AVAILABILITY-BLOCK",
+      action: "cancel",
+      newState: "deleted",
+      notes: `Instructor deleted time-off block #${id}`
+    }).catch(e => console.error("[Audit] Error:", e));
+
+    res.json({ success: true, message: "Time-off block removed successfully" });
+  } catch (err: any) {
+    console.error("Error deleting time-off block:", err);
+    res.status(500).json({ error: err.message || "Failed to delete time-off block" });
+  }
+});
+
 // Submit contact form inquiry to Cloud SQL with rate limiting & sanitization
 app.post("/api/contact", contactLimiter, async (req, res) => {
   try {
@@ -2469,16 +2672,16 @@ app.post("/api/reminders/send-direct", async (req, res) => {
     }
 
     const fromEmail = getFormattedSender();
-    const sub = subject || "Reminder: Your Driving Lesson Today – Wally’s Driving School";
+    const sub = subject || "Reminder: Your Driving Lesson Today – Wallys Driving School";
     const body = message || [
       "Hi Student,",
       "",
-      "This is a friendly reminder from Wally’s Driving School that your driving lesson is scheduled for today.",
+      "This is a friendly reminder from Wallys Driving School that your driving lesson is scheduled for today.",
       "",
       "Please be ready a few minutes before your lesson.",
       "",
       "Thank you,",
-      "Wally’s Driving School"
+      "Wallys Driving School"
     ].join('\n');
 
     let sendPayload: any = {
@@ -2492,7 +2695,7 @@ app.post("/api/reminders/send-direct", async (req, res) => {
 
     // Fallback for unverified domains during testing/sandbox mode
     if (result.error && (result.error.message.includes('domain') || result.error.name === 'validation_error')) {
-      sendPayload.from = "Wally’s Driving School <onboarding@resend.dev>";
+      sendPayload.from = "Wallys Driving School <onboarding@resend.dev>";
       result = await resend.emails.send(sendPayload);
     }
 

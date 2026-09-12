@@ -591,7 +591,7 @@ const RealStripeCheckoutForm: React.FC<RealStripeCheckoutFormProps> = ({
               {/* Recipient & Amount Banner */}
               <div className="bg-neutral-50 rounded-xl p-3.5 border border-black/5 flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-bold text-neutral-900">Wally's Driving School</div>
+                  <div className="text-xs font-bold text-neutral-900">Wallys Driving School</div>
                   <div className="text-[11px] text-neutral-500 mt-0.5">
                     {verifiedItems[0]?.name || 'Driving Lesson'} ({bookingRef})
                   </div>
@@ -956,7 +956,7 @@ const SandboxStripeCheckoutForm: React.FC<SandboxStripeCheckoutFormProps> = ({
 
       <div className="flex items-center justify-center gap-2 text-[11px] text-black/45 pt-1">
         <Lock className="w-3 h-3 text-emerald-600" />
-        <span>256-bit TLS encrypted transaction • Wally's Driving School</span>
+        <span>256-bit TLS encrypted transaction • Wallys Driving School</span>
       </div>
     </div>
   );
@@ -1201,7 +1201,7 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
             Booking Summary
           </span>
           <span className="text-[11px] text-black/50 font-medium">
-            Wally's Driving School NSW
+            Wallys Driving School NSW
           </span>
         </div>
 

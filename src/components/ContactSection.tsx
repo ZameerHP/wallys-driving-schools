@@ -139,7 +139,7 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
         <div className="text-center max-w-xl mx-auto mb-6 sm:mb-8">
           {showBreadcrumbs && (
             <div className="flex items-center justify-center gap-2 text-[11px] font-bold text-brand-black/45 mb-2 uppercase tracking-widest">
-              <Link to="/" className="hover:text-brand-red transition-colors">Wally's Driving School</Link>
+              <Link to="/" className="hover:text-brand-red transition-colors">Wallys Driving School</Link>
               <span>/</span>
               <span className="text-brand-red font-semibold">Contact</span>
             </div>
@@ -247,7 +247,7 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
                             Send a Message
                           </h3>
                           <p className="text-xs text-brand-black/55">
-                            Send your inquiry directly to Wally's instructor team.
+                            Send your inquiry directly to Wallys instructor team.
                           </p>
                         </div>
                         <span className="text-[10px] font-bold uppercase tracking-wider bg-brand-red/10 text-brand-red px-2.5 py-1 rounded-full">
@@ -350,7 +350,7 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
                           <span>{isSubmitting ? 'Sending...' : 'Send Message'}</span>
                         </button>
                         <p className="text-[11px] text-center text-brand-black/50 mt-1.5">
-                          Direct inquiry delivered to Wally's instructor team.
+                          Direct inquiry delivered to Wallys instructor team.
                         </p>
                       </div>
 

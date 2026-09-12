@@ -1,4 +1,4 @@
-// Data layer for Wally's Driving School bookings
+// Data layer for Wallys Driving School bookings
 // Seamlessly syncs between Supabase, Cloud SQL PostgreSQL (/api/bookings), and local cache
 
 import { getSupabase, isSupabaseConfigured } from './supabase';
