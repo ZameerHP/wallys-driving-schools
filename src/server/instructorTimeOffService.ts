@@ -264,6 +264,7 @@ export async function addTimeOffBlock(data: {
   endTime?: string | null;
   reason?: string | null;
   instructorId?: string;
+  overrideConflicts?: boolean;
 }): Promise<{ success: boolean; block?: TimeOffBlock; conflicts?: ConflictingBooking[]; message?: string }> {
   initIfNeeded();
   const instructorId = data.instructorId || 'wally';
@@ -293,11 +294,11 @@ export async function addTimeOffBlock(data: {
     instructorId
   );
 
-  if (conflicts.length > 0) {
+  if (conflicts.length > 0 && !data.overrideConflicts) {
     return {
       success: false,
       conflicts,
-      message: `Cannot block: There are ${conflicts.length} active student booking(s) during this time. Please reschedule them first.`
+      message: `Cannot block: There are ${conflicts.length} active student booking(s) during this time. Please reschedule them first or enable override.`
     };
   }
 
@@ -331,6 +332,7 @@ export async function updateTimeOffBlock(
     endTime?: string | null;
     reason?: string | null;
     instructorId?: string;
+    overrideConflicts?: boolean;
   }
 ): Promise<{ success: boolean; block?: TimeOffBlock; conflicts?: ConflictingBooking[]; message?: string }> {
   initIfNeeded();
@@ -351,7 +353,7 @@ export async function updateTimeOffBlock(
     instructorId
   );
 
-  if (conflicts.length > 0) {
+  if (conflicts.length > 0 && !data.overrideConflicts) {
     return {
       success: false,
       conflicts,

@@ -134,6 +134,7 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
   // Conflict Checking State
   const [isCheckingConflicts, setIsCheckingConflicts] = useState(false);
   const [conflicts, setConflicts] = useState<ConflictingBooking[]>([]);
+  const [overrideConflicts, setOverrideConflicts] = useState(false);
 
   // Editing State
   const [editingBlock, setEditingBlock] = useState<TimeOffBlockItem | null>(null);
@@ -146,16 +147,26 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
   const [filterType, setFilterType] = useState<'all' | 'full' | 'partial' | 'upcoming'>('upcoming');
 
   const getAuthHeaders = () => {
-    const token = localStorage.getItem('instructor_token') || 'wally_owner_session';
+    let token = localStorage.getItem('instructor_token');
+    if (!token) {
+      token = 'wally_owner_session';
+      try {
+        localStorage.setItem('instructor_token', 'wally_owner_session');
+      } catch {}
+    }
     return {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
+      'Authorization': `Bearer ${token}`,
+      'x-instructor-token': token
     };
   };
 
   const todayStr = useMemo(() => {
     const d = new Date();
-    return d.toISOString().split('T')[0];
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   }, []);
 
   // Fetch all time off blocks from backend API
@@ -169,7 +180,7 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
         const data = await res.json();
         setBlocks(data.blocks || []);
       } else {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         console.warn('Could not load time off blocks:', err);
       }
     } catch (error) {
@@ -248,6 +259,7 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
     setEndTime('01:00 PM');
     setReason('');
     setConflicts([]);
+    setOverrideConflicts(false);
   };
 
   // Populate form for editing
@@ -260,12 +272,13 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
       setEndTime(block.endTime);
     }
     setReason(block.reason || '');
+    setOverrideConflicts(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // Save or update block
-  const handleSaveBlock = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveBlock = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!selectedDate) {
       setFeedback({ type: 'error', message: 'Please select a date for the block.' });
       return;
@@ -276,10 +289,10 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
       return;
     }
 
-    if (conflicts.length > 0) {
+    if (conflicts.length > 0 && !overrideConflicts) {
       setFeedback({
         type: 'error',
-        message: 'Cannot save block: Existing student bookings conflict with this period. Please reschedule or resolve them first.'
+        message: `Cannot block: There are ${conflicts.length} confirmed student booking(s) on this date. Reschedule them or check "Override & Block Anyway" below.`
       });
       return;
     }
@@ -302,7 +315,8 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
           startTime: isFullDay ? null : startTime,
           endTime: isFullDay ? null : endTime,
           reason: reason.trim() || null,
-          instructorId
+          instructorId,
+          overrideConflicts
         })
       });
 
@@ -312,7 +326,7 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
           type: 'success',
           message: editingBlock 
             ? 'Availability block successfully updated.' 
-            : (isFullDay ? `Full day off saved for ${formatDateDisplay(selectedDate)}.` : `Time block saved for ${formatDateDisplay(selectedDate)}.`)
+            : (isFullDay ? `Full day off successfully saved for ${formatDateDisplay(selectedDate)}!` : `Time block successfully saved for ${formatDateDisplay(selectedDate)}!`)
         });
         resetForm();
         await fetchBlocks();
@@ -330,7 +344,9 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
       setFeedback({ type: 'error', message: err?.message || 'Server communication error.' });
     } finally {
       setIsSaving(false);
-      setTimeout(() => setFeedback(null), 6000);
+      setTimeout(() => {
+        setFeedback(prev => prev?.type === 'success' ? null : prev);
+      }, 7000);
     }
   };
 
@@ -703,6 +719,18 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
                         </div>
                       ))}
                     </div>
+
+                    <label className="flex items-start gap-2.5 p-2.5 bg-amber-100/70 border border-amber-300 rounded-xl cursor-pointer select-none mt-2">
+                      <input
+                        type="checkbox"
+                        checked={overrideConflicts}
+                        onChange={(e) => setOverrideConflicts(e.target.checked)}
+                        className="mt-0.5 w-4 h-4 rounded text-brand-red focus:ring-brand-red cursor-pointer"
+                      />
+                      <span className="text-[11px] font-semibold text-amber-950 leading-tight">
+                        Override &amp; Block Anyway (I will manage or reschedule these confirmed students)
+                      </span>
+                    </label>
                   </div>
                 ) : (
                   <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2 font-medium">
@@ -712,15 +740,43 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
                 )}
               </div>
 
+              {/* In-form Immediate Feedback Alert */}
+              {feedback && (
+                <div className={cn(
+                  "p-3 rounded-xl border text-xs font-semibold flex items-center justify-between shadow-sm animate-in fade-in duration-200",
+                  feedback.type === 'success'
+                    ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                    : "bg-red-50 border-red-300 text-red-900"
+                )}>
+                  <div className="flex items-center gap-2">
+                    {feedback.type === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                    )}
+                    <span>{feedback.message}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFeedback(null)}
+                    className="text-neutral-400 hover:text-neutral-700 p-0.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={isSaving || !isTimeOrderValid || conflicts.length > 0}
+                disabled={isSaving}
                 className={cn(
                   "w-full py-3.5 px-4 rounded-xl font-bold text-sm text-white transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md",
-                  (isSaving || !isTimeOrderValid || conflicts.length > 0)
-                    ? "bg-neutral-300 cursor-not-allowed text-neutral-500 shadow-none"
-                    : "bg-brand-red hover:bg-brand-red/90 active:scale-[0.99]"
+                  isSaving
+                    ? "bg-neutral-400 cursor-not-allowed text-neutral-100 shadow-none"
+                    : (!isTimeOrderValid || (conflicts.length > 0 && !overrideConflicts))
+                      ? "bg-amber-600 hover:bg-amber-700 active:scale-[0.99]"
+                      : "bg-brand-red hover:bg-brand-red/90 active:scale-[0.99]"
                 )}
               >
                 {isSaving ? (
