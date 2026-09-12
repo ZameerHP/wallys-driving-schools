@@ -20,7 +20,8 @@ import {
   logBookingAudit,
   getBookingAuditLogs,
   isWebhookEventProcessed,
-  recordWebhookEvent
+  recordWebhookEvent,
+  syncAllBookingsToSupabase
 } from "./src/db/queries.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
@@ -164,6 +165,10 @@ const rateLimits = new Map<string, RateLimitEntry>();
 
 function createRateLimiter(windowMs: number, maxRequests: number, message: string) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // Authenticated instructor / owner requests bypass public rate limits
+    if ((req as any).instructor || req.headers["x-instructor-token"]) {
+      return next();
+    }
     const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "ip_default";
     const key = `${req.baseUrl || req.path}:${ip}`;
     const now = Date.now();
@@ -206,22 +211,57 @@ interface InstructorSession {
 }
 const activeInstructorSessions = new Map<string, InstructorSession>();
 
+export function attachInstructorOrAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  let token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+  if (!token && typeof req.headers["x-instructor-token"] === "string") {
+    token = req.headers["x-instructor-token"];
+  }
+
+  if (token) {
+    const instructorSession = activeInstructorSessions.get(token);
+    if (instructorSession && Date.now() <= instructorSession.expiresAt) {
+      (req as any).instructor = instructorSession;
+      (req as any).user = {
+        uid: "instructor-wally",
+        id: "instructor-wally",
+        email: instructorSession.email,
+        name: instructorSession.name,
+        role: "instructor"
+      };
+      return next();
+    }
+  }
+
+  return optionalAuth(req as AuthRequest, res, next);
+}
+
 export function requireInstructorOrAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  let token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+  if (!token && typeof req.headers["x-instructor-token"] === "string") {
+    token = req.headers["x-instructor-token"];
+  }
+
+  if (!token) {
     return res.status(401).json({ error: "UNAUTHORIZED", message: "Instructor or authorized authentication required." });
   }
 
-  const token = authHeader.split(" ")[1];
   const instructorSession = activeInstructorSessions.get(token);
-
   if (instructorSession && Date.now() <= instructorSession.expiresAt) {
     (req as any).instructor = instructorSession;
+    (req as any).user = {
+      uid: "instructor-wally",
+      id: "instructor-wally",
+      email: instructorSession.email,
+      name: instructorSession.name,
+      role: "instructor"
+    };
     return next();
   }
 
-  // Fallback to optional standard auth if token matches standard bearer
-  return next();
+  // Fallback to standard Supabase auth if token provided
+  return requireAuth(req as AuthRequest, res, next);
 }
 
 // Instructor Login Endpoint with Rate Limiting
@@ -1756,7 +1796,7 @@ app.post("/api/check-slots", async (req, res) => {
   }
 });
 
-app.get("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
+app.get("/api/bookings", attachInstructorOrAuth, async (req: AuthRequest, res) => {
   try {
     const email = (req.query.email as string) || undefined;
     const userId = req.user?.uid;
@@ -1770,7 +1810,7 @@ app.get("/api/bookings", optionalAuth, async (req: AuthRequest, res) => {
 });
 
 // Lookup booking by reference code (WD-XXXX) - only returns paid bookings to customers
-app.get("/api/bookings/:ref", optionalAuth, async (req: AuthRequest, res) => {
+app.get("/api/bookings/:ref", attachInstructorOrAuth, async (req: AuthRequest, res) => {
   try {
     const ref = req.params.ref;
     const isInstructor = Boolean((req as any).instructor);
@@ -1786,7 +1826,7 @@ app.get("/api/bookings/:ref", optionalAuth, async (req: AuthRequest, res) => {
 });
 
 // Create a new driving lesson booking in Cloud SQL with slot check & rate limiting
-app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest, res) => {
+app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: AuthRequest, res) => {
   try {
     const {
       studentName,
@@ -1802,9 +1842,13 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       notes,
       paymentStatus,
       stripeSessionId,
-      lessons
+      lessons,
+      transmission,
+      allowOverride,
+      sendConfirmation
     } = req.body;
 
+    const isInstructor = Boolean((req as any).instructor);
     const hasMultipleLessons = Array.isArray(lessons) && lessons.length > 0;
     const primaryDate = hasMultipleLessons ? lessons[0]?.date : date;
     const primaryTime = hasMultipleLessons ? lessons[0]?.time : time;
@@ -1825,9 +1869,10 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
     }
 
     // Double booking verification: multi-lesson batch or single slot
+    const canOverrideSlot = Boolean(allowOverride && isInstructor);
     if (hasMultipleLessons) {
       const batchCheck = await checkMultipleSlotsBooked(lessons, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
-      if (!batchCheck.available) {
+      if (!batchCheck.available && !canOverrideSlot) {
         return res.status(409).json({
           error: "SLOT_ALREADY_BOOKED",
           message: batchCheck.conflicts[0] || "One or more selected lesson slots are no longer available. Please select another time."
@@ -1835,7 +1880,7 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       }
     } else {
       const isSlotTaken = await checkSlotBooked(primaryDate, primaryTime, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
-      if (isSlotTaken) {
+      if (isSlotTaken && !canOverrideSlot) {
         return res.status(409).json({
           error: "SLOT_ALREADY_BOOKED",
           message: "This time slot is no longer available. Please select another time."
@@ -1844,7 +1889,6 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
     }
 
     // Enforce that bookings must have successful payment or be marked pending (e.g. cash in car)
-    const isInstructor = Boolean((req as any).instructor);
     const finalPaymentStatus = paymentStatus || (isInstructor ? "paid" : "unpaid");
     const isPendingOrCash = (status === "Pending" || req.body.paymentMethod === "cash" || finalPaymentStatus === "unpaid");
     if (finalPaymentStatus !== "paid" && !isInstructor && !isPendingOrCash) {
@@ -1857,6 +1901,16 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const bookingRef = req.body.bookingRef || `WD-${randomNum}`;
 
+    // Format transmission and manual entry metadata in notes
+    const chosenTransmission = transmission ? sanitizeText(transmission) : 'Automatic';
+    let baseNotes = sanitizeText(notes) || '';
+    if (chosenTransmission && !baseNotes.toLowerCase().includes('transmission:')) {
+      baseNotes = `[Transmission: ${chosenTransmission}] ${baseNotes}`.trim();
+    }
+    if (isInstructor && !baseNotes.includes('[Created:')) {
+      baseNotes = `[Created: Owner Manual Entry] ${baseNotes}`.trim();
+    }
+
     if (hasMultipleLessons && lessons.length > 1) {
       // Atomic multi-lesson package creation
       const createdBookings = [];
@@ -1867,7 +1921,7 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
         const lessonNum = l.lessonNumber || i + 1;
         const lessonRef = i === 0 ? bookingRef : `${bookingRef}-L${lessonNum}`;
         const lessonPrice = i === 0 ? totalAmount : 0;
-        const lessonNote = `[Package: ${sanitizeText(packageTitle)}] [Lesson ${lessonNum} of ${lessons.length}] ${sanitizeText(notes) || ''}`.trim();
+        const lessonNote = `[Package: ${sanitizeText(packageTitle)}] [Lesson ${lessonNum} of ${lessons.length}] ${baseNotes}`.trim();
 
         const itemBooking = await createBooking({
           bookingRef: lessonRef,
@@ -1907,6 +1961,22 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
         }))
       };
 
+      if (isInstructor) {
+        logBookingAudit({
+          bookingRef,
+          action: 'create',
+          performedBy: 'instructor',
+          newState: masterBooking.status,
+          notes: `Manual booking package (${lessons.length} lessons) created by Wally (Owner) for ${masterBooking.studentName} [Ref: ${bookingRef}]`
+        }).catch(e => console.error("[Audit] Error logging manual create:", e));
+      }
+
+      if (sendConfirmation !== false && masterBooking.status === "Confirmed") {
+        sendBookingConfirmationEmail(masterBooking).catch(err => {
+          console.error("[Resend] Error in sendBookingConfirmationEmail:", err);
+        });
+      }
+
       return res.status(201).json(masterBooking);
     }
 
@@ -1924,7 +1994,7 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
       date: sanitizeText(primaryDate),
       time: sanitizeText(primaryTime),
       status: status || (finalPaymentStatus === "paid" ? "Confirmed" : "Pending"),
-      notes: sanitizeText(notes) || null,
+      notes: baseNotes || null,
       paymentStatus: finalPaymentStatus,
       stripeSessionId: stripeSessionId || null,
     });
@@ -1935,12 +2005,16 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
         action: 'create',
         performedBy: isInstructor ? 'instructor' : 'customer',
         newState: 'Confirmed',
-        notes: `Created confirmed booking for ${newBooking.studentName} (${newBooking.packageTitle})`
+        notes: isInstructor
+          ? `Manual booking created by Wally (Owner) for ${newBooking.studentName} (${newBooking.packageTitle}) [Ref: ${bookingRef}]`
+          : `Created confirmed booking for ${newBooking.studentName} (${newBooking.packageTitle})`
       }).catch(e => console.error("[Audit] Error logging create:", e));
 
-      sendBookingConfirmationEmail(newBooking).catch(err => {
-        console.error("[Resend] Error in sendBookingConfirmationEmail:", err);
-      });
+      if (sendConfirmation !== false) {
+        sendBookingConfirmationEmail(newBooking).catch(err => {
+          console.error("[Resend] Error in sendBookingConfirmationEmail:", err);
+        });
+      }
       sendInstructorNotificationEmail(newBooking).catch(err => {
         console.error("[Resend] Error in sendInstructorNotificationEmail:", err);
       });
@@ -1953,7 +2027,9 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
         action: 'create',
         performedBy: isInstructor ? 'instructor' : 'customer',
         newState: 'Pending',
-        notes: `Created pending booking for ${newBooking.studentName}`
+        notes: isInstructor
+          ? `Manual pending booking created by Wally (Owner) for ${newBooking.studentName}`
+          : `Created pending booking for ${newBooking.studentName}`
       }).catch(e => console.error("[Audit] Error logging create:", e));
     }
 
@@ -1971,7 +2047,7 @@ app.post("/api/bookings", optionalAuth, bookingLimiter, async (req: AuthRequest,
 });
 
 // Update booking by ID (status, rescheduling, notes)
-app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
+app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -2070,7 +2146,7 @@ app.patch("/api/bookings/:id", optionalAuth, async (req, res) => {
 });
 
 // Update booking by reference code (WD-XXXX)
-app.patch("/api/bookings/ref/:ref", optionalAuth, async (req, res) => {
+app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => {
   try {
     const ref = sanitizeText(req.params.ref);
     
@@ -2255,6 +2331,16 @@ app.get("/api/supabase/status", async (_req, res) => {
     res.json(status);
   } catch (err: any) {
     res.status(500).json({ configured: false, error: err?.message || "Failed to check Supabase connection" });
+  }
+});
+
+// Supabase sync endpoint - syncs all existing bookings to Supabase
+app.post("/api/supabase/sync", async (_req, res) => {
+  try {
+    const result = await syncAllBookingsToSupabase();
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to sync to Supabase" });
   }
 });
 

@@ -36,13 +36,14 @@ export interface BookingItem {
 const STORAGE_KEY = 'wallys_bookings_v3';
 
 // Retrieve bookings cached in local storage
-export function getStoredBookings(): BookingItem[] {
+export function getStoredBookings(includeUnpaid = false): BookingItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     const list = Array.isArray(parsed) ? parsed : [];
-    return list.filter(b => b.paymentStatus === 'paid');
+    if (includeUnpaid || isOwnerLoggedIn()) return list;
+    return list.filter(b => b.paymentStatus === 'paid' || b.status === 'Confirmed');
   } catch (err) {
     console.error('Failed to parse cached bookings:', err);
     return [];
@@ -210,9 +211,11 @@ export async function fetchBookingsFromDb(token?: string | null): Promise<Bookin
 
   // 1. Load from Backend API (/api/bookings) - primary source of truth
   try {
+    const effectiveToken = token || (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null);
     const headers: Record<string, string> = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (effectiveToken) {
+      headers['Authorization'] = `Bearer ${effectiveToken}`;
+      headers['x-instructor-token'] = effectiveToken;
     }
     const res = await fetch('/api/bookings', { headers });
     if (res.ok) {
@@ -364,13 +367,35 @@ export async function lookupBookingFromDb(ref: string): Promise<BookingItem | nu
   return matches.length > 0 ? matches[0] : null;
 }
 
+export interface ManualBookingData {
+  studentName: string;
+  phone: string;
+  email: string;
+  suburb: string;
+  pickupAddress?: string;
+  packageTitle: string;
+  packagePrice: number;
+  date: string;
+  time: string;
+  status?: BookingItem['status'];
+  paymentStatus?: 'paid' | 'unpaid' | string;
+  paymentMethod?: string;
+  notes?: string;
+  transmission?: 'Automatic' | 'Manual' | string;
+  allowOverride?: boolean;
+  sendConfirmation?: boolean;
+  bookingRef?: string;
+  lessons?: Array<{ lessonNumber: number; date: string; time: string }>;
+}
+
 // Create new driving lesson booking across database, Supabase, and local storage
 export async function createBookingInDb(
-  booking: Omit<BookingItem, 'id' | 'ref' | 'createdAt'>, 
+  booking: Omit<BookingItem, 'id' | 'ref' | 'createdAt'> & Partial<ManualBookingData>, 
   token?: string | null
 ): Promise<BookingItem> {
+  const effectiveToken = token || (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null);
   const randomNum = Math.floor(1000 + Math.random() * 9000);
-  const bookingRef = `WD-${randomNum}`;
+  const bookingRef = booking.bookingRef || `WD-${randomNum}`;
 
   let finalItem: BookingItem | null = null;
 
@@ -379,8 +404,9 @@ export async function createBookingInDb(
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (effectiveToken) {
+      headers['Authorization'] = `Bearer ${effectiveToken}`;
+      headers['x-instructor-token'] = effectiveToken;
     }
     const res = await fetch('/api/bookings', {
       method: 'POST',
@@ -395,14 +421,14 @@ export async function createBookingInDb(
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.message || 'This time slot is no longer available. Please select another time.');
+      throw new Error(errData.message || errData.error || 'Failed to create booking in database.');
     }
 
     const data = await res.json();
     finalItem = mapDbToBookingItem(data);
   } catch (err: any) {
     // If backend threw an availability error or validation error, rethrow immediately
-    if (err?.message?.includes('time slot') || err?.message?.includes('reserved') || err?.message?.includes('available')) {
+    if (err?.message?.includes('time slot') || err?.message?.includes('reserved') || err?.message?.includes('available') || err?.message?.includes('required') || err?.message?.includes('phone') || err?.message?.includes('email')) {
       throw err;
     }
     console.warn('Backend API error, falling back:', err);
@@ -414,6 +440,10 @@ export async function createBookingInDb(
       ...booking,
       ref: bookingRef,
     } as any);
+  } else {
+    // Update local storage cache
+    const current = getStoredBookings(true);
+    saveBookings([finalItem, ...current.filter(c => c.ref !== finalItem!.ref)]);
   }
 
   // 2. Send to Supabase if configured
@@ -493,6 +523,23 @@ export async function createBookingInDb(
   return finalItem;
 }
 
+// Create a manual booking for a client by the owner/instructor with auto database sync
+export async function createManualBookingByInstructor(
+  data: ManualBookingData,
+  token?: string | null
+): Promise<BookingItem> {
+  const effectiveToken = token || (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null);
+  return createBookingInDb({
+    ...data,
+    status: data.status || 'Confirmed',
+    paymentStatus: data.paymentStatus || 'paid',
+    paymentMethod: data.paymentMethod || 'cash',
+    transmission: data.transmission || 'Automatic',
+    allowOverride: data.allowOverride !== false,
+    sendConfirmation: data.sendConfirmation !== false,
+  }, effectiveToken);
+}
+
 // Update booking in backend API, Supabase, and local storage
 export async function updateBookingInDb(
   id: string, 
@@ -502,13 +549,20 @@ export async function updateBookingInDb(
   const refToMatch = targetRef || (id.startsWith('WD-') ? id : undefined);
   let serverUpdatedItem: any = null;
 
+  const token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+    headers['x-instructor-token'] = token;
+  }
+
   // 1. Update Backend API
   try {
     let res: Response | null = null;
     if (refToMatch) {
       res = await fetch(`/api/bookings/ref/${encodeURIComponent(refToMatch)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(updates),
       });
     } else {
@@ -516,7 +570,7 @@ export async function updateBookingInDb(
       if (!isNaN(numId)) {
         res = await fetch(`/api/bookings/${numId}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(updates),
         });
       }
@@ -542,33 +596,25 @@ export async function updateBookingInDb(
       try {
         const sbUpdates: Record<string, any> = {};
         if (updates.status) sbUpdates.status = updates.status;
-        if (updates.paymentStatus) sbUpdates.payment_status = updates.paymentStatus;
-        else if (serverUpdatedItem?.paymentStatus) sbUpdates.payment_status = serverUpdatedItem.paymentStatus;
-        if (updates.studentName) sbUpdates.student_name = updates.studentName;
-        if (updates.phone) sbUpdates.phone = updates.phone;
-        if (updates.email) sbUpdates.email = updates.email;
-        if (updates.suburb) sbUpdates.suburb = updates.suburb;
-        if (updates.pickupAddress !== undefined) sbUpdates.pickup_address = updates.pickupAddress;
-        if (updates.date) sbUpdates.date = updates.date;
-        if (updates.time) sbUpdates.time = updates.time;
-        if (updates.packageTitle) sbUpdates.package_title = updates.packageTitle;
-        if (updates.packagePrice) sbUpdates.package_price = updates.packagePrice;
+        if (updates.date) sbUpdates.lesson_date = updates.date;
+        if (updates.time) sbUpdates.start_time = updates.time;
+        if (updates.packageTitle) sbUpdates.lesson_type = updates.packageTitle;
         if (updates.notes !== undefined) sbUpdates.notes = updates.notes;
         else if (serverUpdatedItem?.notes) sbUpdates.notes = serverUpdatedItem.notes;
-        if (updates.isRescheduled !== undefined) sbUpdates.is_rescheduled = updates.isRescheduled;
+        sbUpdates.updated_at = new Date().toISOString();
 
         if (refToMatch) {
-          await sb.from('bookings').update(sbUpdates).eq('booking_ref', refToMatch);
+          await sb.from('bookings').update(sbUpdates).ilike('notes', `%${refToMatch}%`);
         } else {
           const numId = parseInt(id.replace(/^b-/, ''), 10);
           if (!isNaN(numId)) {
             await sb.from('bookings').update(sbUpdates).eq('id', numId);
           } else {
-            await sb.from('bookings').update(sbUpdates).eq('booking_ref', id);
+            await sb.from('bookings').update(sbUpdates).ilike('notes', `%${id}%`);
           }
         }
       } catch (err) {
-        console.warn('Supabase booking update failed:', err);
+        console.warn('Supabase booking update notice:', err);
       }
     }
   }
@@ -628,13 +674,14 @@ export async function deleteBookingFromDb(id: string, targetRef?: string): Promi
     if (sb) {
       try {
         if (refToMatch) {
-          await sb.from('bookings').delete().eq('booking_ref', refToMatch);
-        }
-        if (!isNaN(numId)) {
+          await sb.from('bookings').delete().ilike('notes', `%${refToMatch}%`);
+        } else if (!isNaN(numId)) {
           await sb.from('bookings').delete().eq('id', numId);
+        } else {
+          await sb.from('bookings').delete().ilike('notes', `%${id}%`);
         }
       } catch (err) {
-        console.warn('Supabase booking deletion failed:', err);
+        console.warn('Supabase booking deletion notice:', err);
       }
     }
   }

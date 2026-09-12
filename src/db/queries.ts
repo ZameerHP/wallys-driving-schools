@@ -739,52 +739,33 @@ export async function createBooking(data: {
       updatedAt: new Date(),
     };
 
-    // 2. Save to Supabase if configured
-    const supabase = getSupabaseServerClient();
-    if (supabase) {
-      try {
-        let studentId: any = null;
-        if (data.studentName) {
-          try {
-            const { data: stdData } = await supabase
-              .from('students')
-              .upsert({
-                full_name: data.studentName,
-                phone: data.phone,
-                email: data.email,
-              })
-              .select('id')
-              .single();
-            if (stdData?.id) studentId = stdData.id;
-          } catch {}
-        }
-
-        const formattedNotes = `[BookingRef: ${data.bookingRef}] [Price: $${data.packagePrice}] [Suburb: ${data.suburb}] ${data.pickupAddress ? `[Pickup: ${data.pickupAddress}]` : ''} ${data.notes || ''}`.trim();
-
-        const { data: sbRow, error: sbErr } = await supabase
-          .from('bookings')
-          .insert({
-            student_id: studentId,
-            lesson_type: data.packageTitle,
-            lesson_date: data.date,
-            start_time: data.time,
-            status: data.status || 'Pending',
-            notes: formattedNotes,
-          })
-          .select('*, students(*), instructors(*)')
-          .single();
-
-        if (!sbErr && sbRow) {
-          const mapped = mapSupabaseRowToBooking(sbRow);
-          inMemoryBookings.unshift(mapped);
-          return mapped;
-        }
-      } catch (err: any) {
-        console.warn('[Supabase Server] createBooking fallback:', err?.message || err);
+    // 2. Save to Supabase (Priority Data Store for User)
+    let savedSupabaseBooking: any = null;
+    try {
+      const sbResult = await saveBookingToSupabase({
+        bookingRef: data.bookingRef,
+        studentName: data.studentName,
+        phone: data.phone,
+        email: data.email,
+        suburb: data.suburb,
+        pickupAddress: data.pickupAddress,
+        packageTitle: data.packageTitle,
+        packagePrice: data.packagePrice,
+        date: data.date,
+        time: data.time,
+        status: data.status || 'Confirmed',
+        notes: data.notes,
+        paymentStatus: data.paymentStatus || 'unpaid',
+      });
+      if (sbResult.success && sbResult.data) {
+        savedSupabaseBooking = sbResult.data;
       }
+    } catch (err: any) {
+      console.warn('[Supabase Server] createBooking note:', err?.message || err);
     }
 
     // 3. Save to Cloud SQL if configured
+    let savedSqlBooking: any = null;
     if (isSqlConfigured && db) {
       try {
         const result = await db
@@ -816,18 +797,208 @@ export async function createBooking(data: {
           .returning();
 
         if (result[0]) {
-          inMemoryBookings.unshift(result[0]);
-          return result[0];
+          savedSqlBooking = result[0];
         }
       } catch (error: any) {
         console.warn('[AI Studio] PostgreSQL createBooking fallback:', error?.message);
       }
     }
 
-    // 4. Fallback to in-memory store
-    inMemoryBookings.unshift(newBooking);
-    return newBooking;
+    // 4. Update in-memory store and return unified object
+    const finalBooking = savedSupabaseBooking || savedSqlBooking || newBooking;
+    inMemoryBookings.unshift(finalBooking);
+    return finalBooking;
   });
+}
+
+// Helper to persist a single booking to Supabase
+export async function saveBookingToSupabase(data: {
+  bookingRef: string;
+  studentName: string;
+  phone: string;
+  email: string;
+  suburb: string;
+  pickupAddress?: string | null;
+  packageTitle: string;
+  packagePrice: number;
+  date: string;
+  time: string;
+  status: string;
+  notes?: string | null;
+  paymentStatus?: string;
+}): Promise<{ success: boolean; data?: any; error?: string }> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    return { success: false, error: 'Supabase client is not configured' };
+  }
+
+  try {
+    // 1. Resolve or create Student record
+    let studentId: any = null;
+    if (data.studentName) {
+      try {
+        let query = supabase.from('students').select('id');
+        if (data.email && data.phone) {
+          query = query.or(`email.eq.${data.email},phone.eq.${data.phone}`);
+        } else if (data.email) {
+          query = query.eq('email', data.email);
+        } else if (data.phone) {
+          query = query.eq('phone', data.phone);
+        }
+        const { data: existingStudent } = await query.limit(1).maybeSingle();
+
+        if (existingStudent?.id) {
+          studentId = existingStudent.id;
+        } else {
+          const { data: stdData, error: stdErr } = await supabase
+            .from('students')
+            .insert({
+              full_name: data.studentName,
+              phone: data.phone || '',
+              email: data.email || '',
+            })
+            .select('id')
+            .single();
+
+          if (stdData?.id) {
+            studentId = stdData.id;
+          } else if (stdErr) {
+            console.warn('[Supabase] student insert error:', stdErr.message);
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Supabase] student lookup/insert notice:', err?.message || err);
+      }
+    }
+
+    // 2. Resolve Instructor record if available
+    let instructorId: any = null;
+    try {
+      const { data: inst } = await supabase
+        .from('instructors')
+        .select('id')
+        .limit(1)
+        .maybeSingle();
+      if (inst?.id) instructorId = inst.id;
+    } catch {}
+
+    // 3. Format metadata notes for full fidelity
+    const formattedNotes = `[BookingRef: ${data.bookingRef}] [Price: $${data.packagePrice}] [Suburb: ${data.suburb}] ${data.pickupAddress ? `[Pickup: ${data.pickupAddress}]` : ''} [Payment: ${data.paymentStatus || 'unpaid'}] ${data.notes || ''}`.trim();
+
+    let endTime: string | null = null;
+    if (data.time && data.time.includes('–')) {
+      const parts = data.time.split('–');
+      endTime = parts[1]?.trim() || null;
+    }
+
+    // 4. Check if this booking ref already exists in Supabase to avoid duplicates
+    const { data: existingRows } = await supabase
+      .from('bookings')
+      .select('id')
+      .ilike('notes', `%${data.bookingRef}%`)
+      .limit(1);
+
+    if (existingRows && existingRows.length > 0) {
+      const existingId = existingRows[0].id;
+      const { data: updatedRow, error: updateErr } = await supabase
+        .from('bookings')
+        .update({
+          student_id: studentId,
+          lesson_type: data.packageTitle,
+          lesson_date: data.date,
+          start_time: data.time,
+          ...(endTime ? { end_time: endTime } : {}),
+          status: data.status || 'Confirmed',
+          notes: formattedNotes,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingId)
+        .select('*, students(*), instructors(*)')
+        .single();
+
+      if (!updateErr && updatedRow) {
+        return { success: true, data: mapSupabaseRowToBooking(updatedRow) };
+      }
+    }
+
+    // 5. Insert new booking row
+    const insertPayload: Record<string, any> = {
+      student_id: studentId,
+      lesson_type: data.packageTitle,
+      lesson_date: data.date,
+      start_time: data.time,
+      status: data.status || 'Confirmed',
+      notes: formattedNotes,
+    };
+    if (instructorId) insertPayload.instructor_id = instructorId;
+    if (endTime) insertPayload.end_time = endTime;
+
+    const { data: sbRow, error: sbErr } = await supabase
+      .from('bookings')
+      .insert(insertPayload)
+      .select('*, students(*), instructors(*)')
+      .single();
+
+    if (sbErr) {
+      console.warn('[Supabase Server] insert error:', sbErr.message, sbErr.details || '');
+      return { success: false, error: sbErr.message };
+    }
+
+    if (sbRow) {
+      console.log(`[Supabase Server] Successfully saved booking #${data.bookingRef} to Supabase!`);
+      return { success: true, data: mapSupabaseRowToBooking(sbRow) };
+    }
+
+    return { success: false, error: 'Unknown Supabase insert response' };
+  } catch (err: any) {
+    console.warn('[Supabase Server] saveBookingToSupabase catch:', err?.message || err);
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
+// Sync all existing bookings to Supabase
+export async function syncAllBookingsToSupabase(): Promise<{
+  total: number;
+  synced: number;
+  skipped: number;
+  errors: string[];
+}> {
+  const allBookings = await getBookings({ includeUnpaid: true });
+  const result = {
+    total: allBookings.length,
+    synced: 0,
+    skipped: 0,
+    errors: [] as string[],
+  };
+
+  for (const b of allBookings) {
+    const res = await saveBookingToSupabase({
+      bookingRef: b.bookingRef,
+      studentName: b.studentName,
+      phone: b.phone,
+      email: b.email,
+      suburb: b.suburb,
+      pickupAddress: b.pickupAddress,
+      packageTitle: b.packageTitle,
+      packagePrice: b.packagePrice,
+      date: b.date,
+      time: b.time,
+      status: b.status,
+      notes: b.notes,
+      paymentStatus: b.paymentStatus,
+    });
+
+    if (res.success) {
+      result.synced++;
+    } else {
+      result.skipped++;
+      if (res.error && !result.errors.includes(res.error)) {
+        result.errors.push(res.error);
+      }
+    }
+  }
+
+  return result;
 }
 
 // Update existing booking by ID
