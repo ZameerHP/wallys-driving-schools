@@ -23,12 +23,7 @@ import {
   Trash2,
   X,
   Plus,
-  PlusCircle,
-  Database,
-  Copy,
-  ExternalLink,
-  ShieldAlert,
-  Server
+  PlusCircle
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { cn } from '../lib/utils';
@@ -236,65 +231,6 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   // Manual booking modal state
   const [isAddBookingModalOpen, setIsAddBookingModalOpen] = useState(false);
 
-  // Supabase Database Connection & Persistence State
-  const [supabaseStatus, setSupabaseStatus] = useState<{
-    configured: boolean;
-    url: string;
-    hasServiceRoleKey: boolean;
-    hasAnonKey: boolean;
-    connected: boolean;
-    canWrite: boolean;
-    writeMessage?: string | null;
-    counts?: {
-      bookings: number;
-      students: number;
-      instructors: number;
-    };
-  } | null>(null);
-  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
-  const [showSqlHelper, setShowSqlHelper] = useState(false);
-  const [copiedSql, setCopiedSql] = useState(false);
-
-  const fetchSupabaseStatus = async () => {
-    try {
-      const res = await fetch('/api/supabase/status');
-      if (res.ok) {
-        const data = await res.json();
-        setSupabaseStatus(data);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch Supabase status:', e);
-    }
-  };
-
-  const handleSyncToSupabase = async () => {
-    setIsSyncingSupabase(true);
-    try {
-      const res = await fetch('/api/supabase/sync', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setActionFeedback(`Supabase Sync Successful: ${data.synced} bookings synced directly into Supabase!`);
-        await fetchSupabaseStatus();
-        await loadData();
-      } else {
-        setActionFeedback(`Supabase sync note: ${data.error || 'Check write permissions'}`);
-      }
-    } catch (err: any) {
-      setActionFeedback(`Supabase sync error: ${err?.message || err}`);
-    } finally {
-      setIsSyncingSupabase(false);
-      setTimeout(() => setActionFeedback(null), 6000);
-    }
-  };
-
-  const handleCopySql = () => {
-    const sql = `-- Run this in Supabase Dashboard -> SQL Editor to allow saving bookings:\nALTER TABLE public.bookings DISABLE ROW LEVEL SECURITY;\nALTER TABLE public.students DISABLE ROW LEVEL SECURITY;\nALTER TABLE public.instructors DISABLE ROW LEVEL SECURITY;`;
-    navigator.clipboard.writeText(sql).then(() => {
-      setCopiedSql(true);
-      setTimeout(() => setCopiedSql(false), 3000);
-    });
-  };
-
   const loadData = async () => {
     setIsRefreshing(true);
     try {
@@ -304,7 +240,6 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       ]);
       setBookingsList(data);
       if (reminderStats) setReminderStatusInfo(reminderStats);
-      await fetchSupabaseStatus();
     } catch (err) {
       console.error('Failed to load bookings:', err);
     } finally {
@@ -602,112 +537,6 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                 </button>
               </div>
             </div>
-          </div>
-
-          {/* Supabase Database Live Persistence Banner */}
-          <div className="bg-gradient-to-r from-zinc-950 to-neutral-900 text-white rounded-3xl p-5 mb-6 shadow-md border border-zinc-800">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-start sm:items-center gap-3.5">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 text-emerald-400">
-                  <Database className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-sm font-bold text-white tracking-wide">
-                      Supabase Cloud Database
-                    </h3>
-                    <span className={cn(
-                      "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border",
-                      supabaseStatus?.connected && supabaseStatus?.canWrite
-                        ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-                        : supabaseStatus?.connected
-                          ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
-                          : "bg-zinc-700/50 text-zinc-400 border-zinc-600"
-                    )}>
-                      {supabaseStatus?.connected && supabaseStatus?.canWrite
-                        ? "Live Sync Active"
-                        : supabaseStatus?.connected
-                          ? "Connected (RLS Notice)"
-                          : "Connecting..."}
-                    </span>
-                    {supabaseStatus?.url && (
-                      <span className="text-[11px] font-mono text-zinc-400">
-                        {supabaseStatus.url}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-white/70 mt-0.5">
-                    {supabaseStatus?.connected && supabaseStatus?.canWrite
-                      ? `Bookings are automatically persisted to the Supabase bookings and students tables. Currently storing ${supabaseStatus?.counts?.bookings || 0} bookings and ${supabaseStatus?.counts?.students || 0} students.`
-                      : supabaseStatus?.connected
-                        ? "Supabase instance connected. Tables: bookings, students, instructors. To allow writing without permission restrictions, add SUPABASE_SERVICE_ROLE_KEY in Settings or run the RLS SQL statement."
-                        : "Checking connection to your Supabase project..."}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5 shrink-0 self-end sm:self-center">
-                {supabaseStatus && !supabaseStatus.canWrite && (
-                  <button
-                    onClick={() => setShowSqlHelper(!showSqlHelper)}
-                    className="px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <ShieldAlert className="w-3.5 h-3.5" />
-                    <span>{showSqlHelper ? "Hide SQL Helper" : "Fix Write Permissions"}</span>
-                  </button>
-                )}
-
-                <button
-                  onClick={handleSyncToSupabase}
-                  disabled={isSyncingSupabase}
-                  className="px-3.5 py-2 bg-brand-red hover:bg-[#c41a21] text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-                  title="Sync all current roster bookings to your Supabase database"
-                >
-                  <RefreshCw className={cn("w-3.5 h-3.5", isSyncingSupabase && "animate-spin")} />
-                  <span>{isSyncingSupabase ? "Syncing..." : "Sync All to Supabase"}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Expandable RLS Helper */}
-            <AnimatePresence>
-              {showSqlHelper && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="mt-4 pt-4 border-t border-zinc-800 text-xs text-zinc-300"
-                >
-                  <div className="bg-black/40 rounded-2xl p-4 border border-zinc-800/80">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-bold text-white flex items-center gap-1.5">
-                        <Server className="w-3.5 h-3.5 text-emerald-400" />
-                        Option A (Quickest): Run in Supabase Dashboard &rarr; SQL Editor
-                      </span>
-                      <button
-                        onClick={handleCopySql}
-                        className="px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer"
-                      >
-                        {copiedSql ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                        <span>{copiedSql ? "Copied!" : "Copy SQL"}</span>
-                      </button>
-                    </div>
-                    <pre className="bg-black/60 p-3 rounded-xl font-mono text-[11px] text-emerald-300 overflow-x-auto border border-white/5">
-                      {`ALTER TABLE public.bookings DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.students DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.instructors DISABLE ROW LEVEL SECURITY;`}
-                    </pre>
-
-                    <div className="mt-3 pt-3 border-t border-zinc-800 flex items-start gap-2">
-                      <span className="font-bold text-white shrink-0">Option B:</span>
-                      <p className="text-zinc-400">
-                        In AI Studio <strong>Settings &rarr; Environment Variables</strong>, add <code className="text-emerald-300 font-mono">SUPABASE_SERVICE_ROLE_KEY</code> from your Supabase Dashboard (Project Settings &rarr; API &rarr; service_role). The server will then automatically bypass RLS.
-                      </p>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
 
           {/* Search & Filter Bar */}
