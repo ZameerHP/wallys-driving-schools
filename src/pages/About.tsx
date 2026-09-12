@@ -16,7 +16,7 @@ export function About() {
           className="mb-16"
         >
           <div className="flex items-center gap-2 text-xs font-bold text-brand-black/50 mb-3 uppercase tracking-widest">
-            <Link to="/" className="hover:text-brand-red transition-colors">Wally's Driving School</Link>
+            <Link to="/" className="hover:text-brand-red transition-colors">Wallys Driving School</Link>
             <span>/</span>
             <span className="text-brand-red font-semibold">About Our Academy</span>
           </div>
@@ -34,7 +34,7 @@ export function About() {
           >
             <img 
               src="/assets/images/about-driving-lesson.jpg" 
-              alt="About Wally's Driving School" 
+              alt="About Wallys Driving School" 
               onError={(e) => {
                 e.currentTarget.src = "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&q=80&w=1200";
               }}
@@ -63,7 +63,7 @@ export function About() {
               Building Safe & Confident Drivers For Life
             </h2>
             <p className="text-base sm:text-lg text-brand-black/75 mb-6 leading-relaxed">
-              Wally's Driving School is proud to be one of Sydney's fastest-growing driving academies. Our team is composed of highly qualified, patient Driver Trainers who are friendly and supportive, ensuring every learner feels completely at ease behind the wheel.
+              Wallys Driving School is proud to be one of Sydney's fastest-growing driving academies. Our team is composed of highly qualified, patient Driver Trainers who are friendly and supportive, ensuring every learner feels completely at ease behind the wheel.
             </p>
             <p className="text-base sm:text-lg text-brand-black/75 mb-8 leading-relaxed">
               We provide Class C licence training in dual-controlled automatic vehicles, creating a calm and secure environment. Every standard 1-hour lesson gives you <strong>3 Logbook Hours</strong> under the NSW 3-for-1 scheme (up to 30 hours).
@@ -116,7 +116,7 @@ export function About() {
               {
                 id: 'wally',
                 name: 'Wally',
-                role: "Wally's Driving School Instructor",
+                role: "Wallys Driving School Instructor",
                 image: '/instructor.jpg',
                 fallback: '/assets/images/about-instructor.jpg',
                 exp: 'Expert Instructor'

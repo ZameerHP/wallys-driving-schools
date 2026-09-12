@@ -480,7 +480,7 @@ export function BookNow() {
       if (bNorm === targetNorm) {
         const t2 = parseTime(b.time);
         if (t2) {
-          const buffer = 30;
+          const buffer = b.status === 'Blocked' ? 0 : 30;
           if (t1.start < t2.end + buffer && t1.end > t2.start - buffer) {
             return false;
           }
@@ -1030,7 +1030,7 @@ export function BookNow() {
               </h2>
               <p className="text-brand-black/70 text-xs sm:text-sm mb-5 max-w-md mx-auto">
                 {confirmedBooking.paymentStatus === 'paid' 
-                  ? "Your driving lesson booking is confirmed and payment has been processed. A receipt has been issued and Wally's team has reserved your slot."
+                  ? "Your driving lesson booking is confirmed and payment has been processed. A receipt has been issued and Wallys team has reserved your slot."
                   : "Your driving lesson booking has been received. Wally (Owner & Instructor) will review your appointment and mark it Confirmed in the instructor portal."}
               </p>
 
@@ -1596,7 +1596,7 @@ export function BookNow() {
                               Continuous {formatDurationDisplay(packageSpecs.durationMinutes)} Test Package Booking Block
                             </h4>
                             <p className="text-[11px] text-amber-900/80 mt-0.5">
-                              Includes RMS test car hire + {packageSpecs.durationMinutes === 150 ? '1-hour' : '2-hour'} pre-test warmup lesson. Wally’s vehicle is reserved continuously for this entire duration.
+                              Includes RMS test car hire + {packageSpecs.durationMinutes === 150 ? '1-hour' : '2-hour'} pre-test warmup lesson. Wallys vehicle is reserved continuously for this entire duration.
                             </p>
                           </div>
                         </div>

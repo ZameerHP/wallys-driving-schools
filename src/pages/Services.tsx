@@ -29,7 +29,7 @@ export function Services() {
             Our Premium Services
           </h1>
           <p className="text-base sm:text-lg text-brand-black/70 leading-relaxed">
-            Beyond everyday learner driving sessions, Wally's provides comprehensive road safety accreditation, instructor career pathways, and overseas licence conversion preparation.
+            Beyond everyday learner driving sessions, Wallys provides comprehensive road safety accreditation, instructor career pathways, and overseas licence conversion preparation.
           </p>
         </motion.div>
 

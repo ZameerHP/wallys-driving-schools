@@ -956,7 +956,7 @@ const SandboxStripeCheckoutForm: React.FC<SandboxStripeCheckoutFormProps> = ({
 
       <div className="flex items-center justify-center gap-2 text-[11px] text-black/45 pt-1">
         <Lock className="w-3 h-3 text-emerald-600" />
-        <span>256-bit TLS encrypted transaction • Wally's Driving School WA</span>
+        <span>256-bit TLS encrypted transaction • Wally's Driving School</span>
       </div>
     </div>
   );

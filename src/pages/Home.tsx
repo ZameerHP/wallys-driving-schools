@@ -418,7 +418,7 @@ export function Home() {
                 Ready to Learn Driving in Our Latest Models Vehicles
               </h2>
               <p className="text-xs sm:text-sm text-brand-black/70 mb-3 leading-relaxed">
-                Wally's Driving School is proud to be one of Sydney's fastest-growing driving schools with patient, RMS-accredited trainers ensuring every student feels at ease behind the wheel.
+                Wallys Driving School is proud to be one of Sydney's fastest-growing driving schools with patient, RMS-accredited trainers ensuring every student feels at ease behind the wheel.
               </p>
               
               <div className="bg-white p-3.5 sm:p-4 rounded-2xl shadow-sm border border-black/5 mb-3.5 w-full">

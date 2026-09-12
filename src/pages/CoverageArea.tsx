@@ -31,7 +31,7 @@ export function CoverageArea() {
           className="mb-14"
         >
           <div className="flex items-center gap-2 text-xs font-bold text-brand-black/50 mb-3 uppercase tracking-widest">
-            <Link to="/" className="hover:text-brand-red transition-colors">Wally's Driving School</Link>
+            <Link to="/" className="hover:text-brand-red transition-colors">Wallys Driving School</Link>
             <span>/</span>
             <span className="text-brand-red font-semibold">Service Coverage</span>
           </div>

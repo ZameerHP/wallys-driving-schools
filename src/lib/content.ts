@@ -2,7 +2,7 @@ export const INSTRUCTORS = [
   {
     id: 'wally',
     name: 'Wally',
-    role: "Wally's Driving School Instructor",
+    role: "Wallys Driving School Instructor",
     image: '/instructor.jpg'
   }
 ];
@@ -103,7 +103,7 @@ export const TESTIMONIALS: TestimonialItem[] = [
     author: 'Ishan Wickremasinghe',
     title: 'Driving Student',
     rating: 5,
-    quote: "Had a great experience with Wally's Driving School! My instructor was patient, calm and explained everything clearly. They were flexible with scheduling and really helped build my confidence behind the wheel. Highly recommend if you are looking for a supportive and professional driving instructor",
+    quote: "Had a great experience with Wallys Driving School! My instructor was patient, calm and explained everything clearly. They were flexible with scheduling and really helped build my confidence behind the wheel. Highly recommend if you are looking for a supportive and professional driving instructor",
     dpType: 'badge',
     dpText: 'ASPHALT',
     dpBg: 'bg-zinc-950 border border-amber-500/40',
@@ -255,7 +255,7 @@ export const BLOG_POSTS = [
 export const FAQS = [
   {
     question: 'How long will it take me to learn how to drive?',
-    answer: "At Wally's Driving School we understand that everyone learns at different speeds. Regardless of your stage in the learning process, with our accelerated learning programme you will need less lessons than with any of our competitors."
+    answer: "At Wallys Driving School we understand that everyone learns at different speeds. Regardless of your stage in the learning process, with our accelerated learning programme you will need less lessons than with any of our competitors."
   },
   {
     question: 'When should I get driving lessons?',

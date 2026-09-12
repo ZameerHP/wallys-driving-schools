@@ -223,7 +223,7 @@ export function isTimeSlotConflicting(
 }
 
 /**
- * Standard candidate start times within Wally's 8:00 AM - 6:00 PM operating window
+ * Standard candidate start times within Wallys 8:00 AM - 6:00 PM operating window
  */
 export const STANDARD_START_TIMES = [
   { label: '8:00 AM', startMinutes: 480 },
@@ -329,18 +329,19 @@ export function checkSlotAvailability(
     if (normalizeDateStr(b.date) === normTargetDate) {
       const existingInterval = parseTimeInterval(b.time);
       if (existingInterval) {
-        if (isTimeSlotConflicting(targetInterval, existingInterval, 30)) {
+        const buffer = b.status === 'Blocked' ? 0 : 30;
+        if (isTimeSlotConflicting(targetInterval, existingInterval, buffer)) {
           return {
             available: false,
             reason: 'booked',
-            conflictReason: 'Already booked with instructor Wally'
+            conflictReason: b.status === 'Blocked' ? 'Blocked by instructor availability / time off' : 'Already booked with instructor Wally'
           };
         }
       } else if (b.time.trim().toLowerCase() === timeSlot.trim().toLowerCase()) {
         return {
           available: false,
           reason: 'booked',
-          conflictReason: 'Already booked with instructor Wally'
+          conflictReason: b.status === 'Blocked' ? 'Blocked by instructor availability / time off' : 'Already booked with instructor Wally'
         };
       }
     }

@@ -39,7 +39,7 @@ export function Packages() {
         >
           <div>
             <div className="flex items-center justify-center sm:justify-start gap-2 text-[10px] font-bold text-brand-black/50 mb-2 uppercase tracking-widest">
-              <Link to="/" className="hover:text-brand-red transition-colors">Wally's Driving School</Link>
+              <Link to="/" className="hover:text-brand-red transition-colors">Wallys Driving School</Link>
               <span>/</span>
               <span className="text-brand-red font-semibold">Pricing</span>
             </div>

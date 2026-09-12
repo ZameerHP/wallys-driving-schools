@@ -1,5 +1,5 @@
 /**
- * Wally's Driving School Validation Utilities
+ * Wallys Driving School Validation Utilities
  * Enforces Australian phone numbers and real working email addresses.
  */
 
