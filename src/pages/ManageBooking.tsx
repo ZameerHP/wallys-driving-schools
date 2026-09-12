@@ -173,17 +173,22 @@ export function ManageBooking() {
 
     for (const b of rescheduleBookedSlots) {
       if (b.status === 'Cancelled') continue;
+      const cleanTime = (b.time || '').trim().toLowerCase();
+      const isFullDay = (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+      if (isFullDay) {
+        return false;
+      }
       // Skip the booking's own original slot if same date & time
       if (b.date === selectedBooking.date && b.time === selectedBooking.time && newDate === selectedBooking.date) {
         continue;
       }
       const t2 = parseTimeInterval(b.time);
       if (t2) {
-        const BUFFER_MINUTES = 30;
+        const BUFFER_MINUTES = b.status === 'Blocked' ? 0 : 30;
         if (t1.start < t2.end + BUFFER_MINUTES && t1.end > t2.start - BUFFER_MINUTES) {
           return false;
         }
-      } else if (b.time.trim().toLowerCase() === timeSlot.trim().toLowerCase()) {
+      } else if (cleanTime === timeSlot.trim().toLowerCase()) {
         return false;
       }
     }
@@ -925,6 +930,23 @@ export function ManageBooking() {
                     }}
                     className="w-full bg-brand-offwhite border border-black/10 rounded-xl px-4 py-3 text-sm font-semibold text-brand-black focus:outline-none focus:border-brand-red"
                   />
+                  {(() => {
+                    const blockedInfo = rescheduleBookedSlots.find(b => {
+                      if (b.status === 'Cancelled') return false;
+                      const cleanTime = (b.time || '').trim().toLowerCase();
+                      return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+                    });
+                    if (blockedInfo) {
+                      const reason = (blockedInfo as any).reason || 'Instructor Day Off';
+                      return (
+                        <div className="mt-2 p-2.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                          <span>This date is blocked off by the instructor ({reason}). Rescheduling to this date is not allowed.</span>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div>

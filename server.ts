@@ -454,8 +454,17 @@ app.post("/api/create-checkout-session", async (req, res) => {
     const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : `http://localhost:${PORT}`);
     const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    // Authoritative slot check before creating checkout session
+    // Authoritative slot check & Time-Off check before creating checkout session
     if (Array.isArray(lessons) && lessons.length > 0) {
+      for (const l of lessons) {
+        const timeOffCheck = isSlotBlockedByTimeOff(l.date, l.time);
+        if (timeOffCheck.isBlocked) {
+          return res.status(409).json({
+            error: "SLOT_BLOCKED_BY_INSTRUCTOR",
+            message: `Lesson on ${l.date} is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
+          });
+        }
+      }
       const batchCheck = await checkMultipleSlotsBooked(lessons, targetRef, studentEmail, studentPhone);
       if (!batchCheck.available) {
         return res.status(409).json({
@@ -464,6 +473,13 @@ app.post("/api/create-checkout-session", async (req, res) => {
         });
       }
     } else if (bookingDate && bookingTime) {
+      const timeOffCheck = isSlotBlockedByTimeOff(bookingDate, bookingTime);
+      if (timeOffCheck.isBlocked) {
+        return res.status(409).json({
+          error: "SLOT_BLOCKED_BY_INSTRUCTOR",
+          message: `The date ${bookingDate} is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
+        });
+      }
       const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef, studentEmail, studentPhone);
       if (isTaken) {
         return res.status(409).json({
@@ -1761,6 +1777,40 @@ app.get("/api/availability", async (req, res) => {
   }
 });
 
+// Fetch all instructor blocked days (public, real-time zero-cache for calendar disabled day rendering)
+app.get("/api/availability/blocked-days", async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+    const blocks = await getTimeOffBlocks();
+    const fullDayOffDates = blocks
+      .filter(b => b.isFullDay)
+      .map(b => ({
+        date: b.date,
+        reason: b.reason || "Instructor Day Off"
+      }));
+
+    res.json({
+      success: true,
+      fullDayOffDates,
+      blocks: blocks.map(b => ({
+        id: b.id,
+        date: b.date,
+        isFullDay: b.isFullDay,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        reason: b.reason
+      }))
+    });
+  } catch (error: any) {
+    console.error("Error fetching blocked days:", error);
+    res.status(500).json({ error: "Failed to fetch blocked days" });
+  }
+});
+
 // Fast real-time check for a single date & time slot
 app.get("/api/check-slot", async (req, res) => {
   try {
@@ -2171,6 +2221,13 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
     }
 
     if (req.body.date && req.body.time) {
+      const timeOffCheck = isSlotBlockedByTimeOff(req.body.date, req.body.time);
+      if (timeOffCheck.isBlocked) {
+        return res.status(409).json({
+          error: "SLOT_BLOCKED_BY_INSTRUCTOR",
+          message: `The selected reschedule date/time is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
+        });
+      }
       const isTaken = await checkSlotBooked(req.body.date, req.body.time, String(id));
       if (isTaken) {
         return res.status(409).json({
@@ -2267,6 +2324,13 @@ app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => 
     }
     
     if (req.body.date && req.body.time) {
+      const timeOffCheck = isSlotBlockedByTimeOff(req.body.date, req.body.time);
+      if (timeOffCheck.isBlocked) {
+        return res.status(409).json({
+          error: "SLOT_BLOCKED_BY_INSTRUCTOR",
+          message: `The selected reschedule date/time is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
+        });
+      }
       const isTaken = await checkSlotBooked(req.body.date, req.body.time, ref);
       if (isTaken) {
         return res.status(409).json({

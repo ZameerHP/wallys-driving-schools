@@ -296,7 +296,8 @@ export function BookNow() {
   const [testCentreDropdownOpen, setTestCentreDropdownOpen] = useState(false);
   const [testTime, setTestTime] = useState('');
   const [infoErrors, setInfoErrors] = useState<{ [key: string]: string }>({});
-  const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string; status?: string }[]>([]);
+  const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string; status?: string; isFullDay?: boolean; reason?: string }[]>([]);
+  const [blockedOffDays, setBlockedOffDays] = useState<Map<string, { isFullDay: boolean; reason?: string }>>(new Map());
   const [isRefreshingSlots, setIsRefreshingSlots] = useState(false);
   const [slotConflictError, setSlotConflictError] = useState<string | null>(null);
 
@@ -433,6 +434,28 @@ export function BookNow() {
     return null;
   };
 
+  // Fetch owner/instructor blocked days with zero caching
+  const refreshBlockedDays = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/availability/blocked-days?_t=${Date.now()}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        const map = new Map<string, { isFullDay: boolean; reason?: string }>();
+        if (Array.isArray(data.blocks)) {
+          for (const b of data.blocks) {
+            const norm = normalizeDateStr(b.date);
+            if (norm && b.isFullDay) {
+              map.set(norm, { isFullDay: true, reason: b.reason || 'Instructor Day Off' });
+            }
+          }
+        }
+        setBlockedOffDays(map);
+      }
+    } catch (err) {
+      console.warn('Failed to load blocked off days:', err);
+    }
+  }, []);
+
   // Real-time availability loader with zero cache
   const refreshAvailability = useCallback(async (targetDate?: string) => {
     try {
@@ -447,11 +470,32 @@ export function BookNow() {
           setBookedSlots(data);
         }
       }
+      refreshBlockedDays();
     } catch (err) {
       console.warn('Failed to refresh availability:', err);
     } finally {
       setIsRefreshingSlots(false);
     }
+  }, [refreshBlockedDays]);
+
+  // Helper to find next non-blocked, upcoming available date
+  const findNextAvailableDate = useCallback((startDateStr: string, blockedMap: Map<string, { isFullDay: boolean; reason?: string }>, offsetDays = 0) => {
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    base.setDate(base.getDate() + 2 + offsetDays);
+
+    for (let i = 0; i < 90; i++) {
+      const candidate = new Date(base);
+      candidate.setDate(base.getDate() + i);
+      const y = candidate.getFullYear();
+      const m = String(candidate.getMonth() + 1).padStart(2, '0');
+      const d = String(candidate.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${d}`;
+      if (!blockedMap.has(dateStr)) {
+        return dateStr;
+      }
+    }
+    return startDateStr;
   }, []);
 
   // Immediately refresh availability when customer changes date
@@ -461,14 +505,56 @@ export function BookNow() {
     }
   }, [selectedDate, refreshAvailability]);
 
-  // Poll availability every 10s to keep slot view real-time
+  // Initial load and continuous sync of blocked days and availability
   useEffect(() => {
+    refreshBlockedDays();
     refreshAvailability();
     const timer = setInterval(() => {
       refreshAvailability();
-    }, 10000);
+      refreshBlockedDays();
+    }, 8000);
     return () => clearInterval(timer);
-  }, [refreshAvailability]);
+  }, [refreshAvailability, refreshBlockedDays]);
+
+  // Auto-advance away from blocked days if initial or selected date is blocked off by the owner
+  useEffect(() => {
+    if (blockedOffDays.size === 0) return;
+
+    const norm = normalizeDateStr(selectedDate);
+    if (norm && blockedOffDays.has(norm)) {
+      const nextDate = findNextAvailableDate(selectedDate, blockedOffDays);
+      if (nextDate && nextDate !== selectedDate) {
+        setSelectedDate(nextDate);
+        setScheduledLessons(prev => {
+          const next = [...prev];
+          if (next[activeLessonIndex]) {
+            next[activeLessonIndex] = {
+              ...next[activeLessonIndex],
+              date: nextDate
+            };
+          }
+          return next;
+        });
+      }
+    }
+
+    setScheduledLessons(prev => {
+      let changed = false;
+      const updated = prev.map((l, idx) => {
+        const lNorm = normalizeDateStr(l.date);
+        if (lNorm && blockedOffDays.has(lNorm)) {
+          changed = true;
+          const nextDate = findNextAvailableDate(l.date, blockedOffDays, idx);
+          return {
+            ...l,
+            date: nextDate || l.date
+          };
+        }
+        return l;
+      });
+      return changed ? updated : prev;
+    });
+  }, [blockedOffDays, findNextAvailableDate, selectedDate, activeLessonIndex]);
   
   // Determine if a slot is available based on DB bookings + 30 min buffer
   const isSlotAvailable = useCallback((date: string, time: string) => {
@@ -512,6 +598,12 @@ export function BookNow() {
 
   // Update date for the currently active lesson
   const handleSelectCalendarDate = (dateStr: string) => {
+    const norm = normalizeDateStr(dateStr);
+    if (blockedOffDays.has(norm)) {
+      const reason = blockedOffDays.get(norm)?.reason || 'Owner Day Off';
+      setSlotConflictError(`Cannot book on ${dateStr}: Blocked off by the instructor (${reason}). Please select an available date.`);
+      return;
+    }
     setSelectedDate(dateStr);
     refreshAvailability(dateStr);
     setSlotConflictError(null);
@@ -646,6 +738,18 @@ export function BookNow() {
       if (incomplete) {
         setSlotConflictError(`Please select a date and time for Lesson ${incomplete.lessonNumber} of ${packageSpecs.lessonCount}.`);
         setActiveLessonIndex(incomplete.lessonNumber - 1);
+        return;
+      }
+
+      // Check if any scheduled lesson is on a day blocked off by the owner
+      const blockedLesson = scheduledLessons.find(l => {
+        const norm = normalizeDateStr(l.date);
+        return blockedOffDays.has(norm);
+      });
+      if (blockedLesson) {
+        const reason = blockedOffDays.get(normalizeDateStr(blockedLesson.date))?.reason || 'Owner Day Off';
+        setSlotConflictError(`Lesson ${blockedLesson.lessonNumber} is scheduled on ${blockedLesson.date}, which has been blocked off by the instructor (${reason}). Please select an available date on the calendar.`);
+        setActiveLessonIndex(blockedLesson.lessonNumber - 1);
         return;
       }
 
@@ -848,6 +952,20 @@ export function BookNow() {
 
     const targetDate = primaryItem.date || selectedDate;
     const targetTime = primaryItem.time || selectedTimeSlot;
+
+    // Check if target date or any lesson date is blocked by the owner
+    const blockedLesson = scheduledLessons.find(l => {
+      const norm = normalizeDateStr(l.date);
+      return blockedOffDays.has(norm);
+    });
+    if (blockedLesson) {
+      setIsProcessing(false);
+      const reason = blockedOffDays.get(normalizeDateStr(blockedLesson.date))?.reason || 'Owner Day Off';
+      setSlotConflictError(`Cannot complete booking: Date ${blockedLesson.date} has been blocked off by the instructor (${reason}). Please choose an available date.`);
+      setActiveStepId('datetime');
+      setActiveLessonIndex(blockedLesson.lessonNumber - 1);
+      return;
+    }
 
     // 1. Authoritative real-time check against database immediately before charging or creating booking
     try {
@@ -1677,13 +1795,20 @@ export function BookNow() {
                               const isSelected = selectedDate === item.dateStr;
                               const isUnavailable = item.isPast;
 
-                              // Check if date is marked as instructor Full Day Off
-                              const isDayOff = bookedSlots.some(b => {
+                              // Check if date is marked as instructor/owner Full Day Off
+                              const isDayOff = blockedOffDays.has(item.dateStr) || bookedSlots.some(b => {
                                 if (b.status === 'Cancelled') return false;
                                 if (normalizeDateStr(b.date) !== item.dateStr) return false;
                                 const cleanTime = (b.time || '').trim().toLowerCase();
                                 return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
                               });
+
+                              const dayOffReason = blockedOffDays.get(item.dateStr)?.reason || bookedSlots.find(b => {
+                                if (b.status === 'Cancelled') return false;
+                                if (normalizeDateStr(b.date) !== item.dateStr) return false;
+                                const cleanTime = (b.time || '').trim().toLowerCase();
+                                return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+                              })?.reason || 'Owner Day Off';
 
                               // Check if any other lesson is booked on this date
                               const otherLessonsOnDate = packageSpecs.lessonCount > 1 
@@ -1694,31 +1819,44 @@ export function BookNow() {
                                 <button
                                   key={idx}
                                   type="button"
-                                  disabled={isUnavailable}
+                                  disabled={isUnavailable || isDayOff}
+                                  aria-disabled={isUnavailable || isDayOff}
                                   onClick={() => {
+                                    if (isUnavailable || isDayOff) return;
                                     if (item.dateStr) {
                                       handleSelectCalendarDate(item.dateStr);
                                     }
                                   }}
+                                  title={
+                                    isDayOff
+                                      ? `Date blocked off by owner (${dayOffReason}) - Bookings disabled`
+                                      : isUnavailable
+                                      ? "Past date unavailable"
+                                      : isSelected
+                                      ? "Selected Date"
+                                      : `Select ${item.dateStr}`
+                                  }
                                   className={cn(
-                                    "relative h-8 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer text-xs",
-                                    isSelected 
-                                      ? "bg-brand-red text-white font-bold shadow-md shadow-brand-red/30 scale-105" 
+                                    "relative h-8 rounded-lg flex items-center justify-center transition-all duration-200 text-xs select-none",
+                                    isDayOff
+                                      ? "bg-neutral-100/90 text-neutral-400 cursor-not-allowed line-through border border-dashed border-neutral-300 opacity-60 pointer-events-none"
                                       : isUnavailable 
                                       ? "text-black/20 cursor-not-allowed line-through"
-                                      : isDayOff
-                                      ? "bg-amber-50/60 text-amber-900/70 hover:bg-amber-100 font-semibold"
-                                      : "hover:bg-white text-brand-black hover:shadow-sm"
+                                      : isSelected 
+                                      ? "bg-brand-red text-white font-bold shadow-md shadow-brand-red/30 scale-105 cursor-pointer" 
+                                      : "hover:bg-white text-brand-black hover:shadow-sm cursor-pointer"
                                   )}
                                 >
                                   <span>{item.day}</span>
-                                  {isDayOff && !isSelected && (
+                                  {isDayOff && (
                                     <span 
-                                      title="Instructor Day Off"
-                                      className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500"
-                                    />
+                                      title={`Blocked by owner: ${dayOffReason}`}
+                                      className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-neutral-400 text-[8px] text-white font-bold shadow-xs"
+                                    >
+                                      ✕
+                                    </span>
                                   )}
-                                  {otherLessonsOnDate.length > 0 && !isSelected && (
+                                  {otherLessonsOnDate.length > 0 && !isSelected && !isDayOff && (
                                     <span 
                                       title={`Lesson ${otherLessonsOnDate.map(l => l.lessonNumber).join(', ')} scheduled`}
                                       className="absolute bottom-0.5 w-1 h-1 rounded-full bg-brand-red"
@@ -1727,6 +1865,18 @@ export function BookNow() {
                                 </button>
                               );
                             })}
+                          </div>
+
+                          {/* Calendar Legend */}
+                          <div className="mt-2.5 pt-2 border-t border-black/5 flex flex-wrap items-center justify-between gap-2 text-[10px] text-brand-black/60">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded bg-brand-red inline-block"></span>
+                              <span>Selected</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded bg-neutral-200 border border-dashed border-neutral-400 inline-flex items-center justify-center text-[7px] text-neutral-600 font-bold">✕</span>
+                              <span>Blocked / Day Off (Disabled)</span>
+                            </div>
                           </div>
                         </div>
 
@@ -1744,7 +1894,7 @@ export function BookNow() {
                             
                             {(() => {
                               // Check if selected date is marked as Full Day Off
-                              const isSelectedDayFullDayOff = bookedSlots.some(b => {
+                              const isSelectedDayFullDayOff = blockedOffDays.has(normalizeDateStr(selectedDate)) || bookedSlots.some(b => {
                                 if (b.status === 'Cancelled') return false;
                                 if (normalizeDateStr(b.date) !== normalizeDateStr(selectedDate)) return false;
                                 const cleanTime = (b.time || '').trim().toLowerCase();
@@ -1759,14 +1909,15 @@ export function BookNow() {
                               });
 
                               if (isSelectedDayFullDayOff) {
+                                const reason = blockedOffDays.get(normalizeDateStr(selectedDate))?.reason || 'Owner Day Off';
                                 return (
-                                  <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs my-2">
-                                    <div className="flex items-center gap-2 font-bold mb-1 text-amber-800">
-                                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                      <span>Instructor Day Off</span>
+                                  <div className="p-4 bg-red-50 rounded-2xl border border-red-200 text-red-900 text-xs my-2">
+                                    <div className="flex items-center gap-2 font-bold mb-1 text-red-800">
+                                      <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                                      <span>Date Blocked by Owner</span>
                                     </div>
-                                    <p className="text-[11px] text-amber-800/90 leading-relaxed">
-                                      Instructor Wally has scheduled a Full Day Off on this date ({selectedDate}). No lesson appointments are available. Please select another date on the calendar.
+                                    <p className="text-[11px] text-red-800/90 leading-relaxed">
+                                      The owner has blocked off this date ({selectedDate}) for &quot;{reason}&quot;. No lesson bookings are permitted on this day. Please select another date on the calendar.
                                     </p>
                                   </div>
                                 );
@@ -2360,14 +2511,33 @@ export function BookNow() {
                   </div>
 
                   <div>
-                    <button
-                      type="button"
-                      onClick={goToNextStep}
-                      className="bg-brand-red hover:bg-[#c41a21] text-white font-bold px-7 py-2.5 rounded-xl shadow-md shadow-brand-red/25 transition-all text-xs sm:text-sm flex items-center gap-2 cursor-pointer"
-                    >
-                      <span>Continue</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                    {(() => {
+                      const isAnyScheduledDateBlocked = activeStepId === 'datetime' && scheduledLessons.some(l => {
+                        const norm = normalizeDateStr(l.date);
+                        return norm && (blockedOffDays.has(norm) || bookedSlots.some(b => {
+                          if (b.status === 'Cancelled') return false;
+                          if (normalizeDateStr(b.date) !== norm) return false;
+                          const cleanTime = (b.time || '').trim().toLowerCase();
+                          return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+                        }));
+                      });
+
+                      return (
+                        <button
+                          type="button"
+                          disabled={isAnyScheduledDateBlocked}
+                          onClick={goToNextStep}
+                          title={isAnyScheduledDateBlocked ? "Please select a date that is not blocked off by the instructor" : undefined}
+                          className={cn(
+                            "bg-brand-red hover:bg-[#c41a21] text-white font-bold px-7 py-2.5 rounded-xl shadow-md shadow-brand-red/25 transition-all text-xs sm:text-sm flex items-center gap-2 cursor-pointer",
+                            isAnyScheduledDateBlocked && "opacity-50 cursor-not-allowed hover:bg-brand-red shadow-none pointer-events-none"
+                          )}
+                        >
+                          <span>Continue</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               )}
