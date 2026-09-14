@@ -147,8 +147,8 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
   const [filterType, setFilterType] = useState<'all' | 'full' | 'partial' | 'upcoming'>('upcoming');
 
   const getAuthHeaders = () => {
-    let token = localStorage.getItem('instructor_token');
-    if (!token) {
+    let token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
+    if (!token || token === 'undefined' || token === 'null') {
       token = 'wally_owner_session';
       try {
         localStorage.setItem('instructor_token', 'wally_owner_session');

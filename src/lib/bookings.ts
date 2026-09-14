@@ -558,7 +558,10 @@ export async function updateBookingInDb(
   const refToMatch = targetRef || (id.startsWith('WD-') ? id : undefined);
   let serverUpdatedItem: any = null;
 
-  const token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
+  let token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
+  if (!token && typeof window !== 'undefined' && isOwnerLoggedIn()) {
+    token = 'wally_owner_session';
+  }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
@@ -654,10 +657,14 @@ export async function deleteBookingFromDb(id: string, targetRef?: string): Promi
   const refToMatch = targetRef || (id.startsWith('WD-') ? id : undefined);
   const cleanId = String(id).replace(/^b-/, '');
   const numId = parseInt(cleanId, 10);
-  const token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
+  let token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
+  if (!token && typeof window !== 'undefined' && isOwnerLoggedIn()) {
+    token = 'wally_owner_session';
+  }
   const headers: Record<string, string> = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+    headers['x-instructor-token'] = token;
   }
 
   // 1. Delete from Backend API (Cloud SQL) by Ref

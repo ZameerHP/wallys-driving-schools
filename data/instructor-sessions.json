@@ -1,0 +1,16 @@
+[
+  {
+    "token": "wally_owner_session",
+    "email": "wally@wallysdrivingschool.com.au",
+    "name": "Wally (Owner & Lead Instructor)",
+    "role": "instructor",
+    "expiresAt": 1791973843388
+  },
+  {
+    "token": "inst_1789381856592_hoy5636a19k",
+    "email": "wally@wallysdrivingschool.com.au",
+    "name": "Wally (Owner & Lead Instructor)",
+    "role": "instructor",
+    "expiresAt": 1791973856592
+  }
+]
