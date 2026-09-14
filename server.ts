@@ -14,6 +14,7 @@ import {
   createContactMessage,
   getOrCreateUser,
   checkSlotBooked,
+  checkSlotDetailed,
   checkMultipleSlotsBooked,
   getPendingBookingForCustomer,
   normalizeDate,
@@ -546,16 +547,16 @@ app.post("/api/create-checkout-session", async (req, res) => {
       const batchCheck = await checkMultipleSlotsBooked(lessons, targetRef, studentEmail, studentPhone);
       if (!batchCheck.available) {
         return res.status(409).json({
-          error: "SLOT_ALREADY_BOOKED",
+          error: batchCheck.code || "SLOT_ALREADY_BOOKED",
           message: batchCheck.conflicts[0] || "One or more selected time slots are no longer available. Please select another time."
         });
       }
     } else if (bookingDate && bookingTime) {
-      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef, studentEmail, studentPhone);
-      if (isTaken) {
+      const slotCheck = await checkSlotDetailed(bookingDate, bookingTime, targetRef, studentEmail, studentPhone);
+      if (!slotCheck.available) {
         return res.status(409).json({
-          error: "SLOT_ALREADY_BOOKED",
-          message: "This time slot is no longer available. Please select another time."
+          error: slotCheck.code || "SLOT_ALREADY_BOOKED",
+          message: slotCheck.reason || "This time slot is no longer available. Please select another time."
         });
       }
     }
@@ -932,11 +933,11 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
 
     // Server-side slot availability check (prevent double-booking, allowing customer to resume their checkout)
     if (bookingDate && bookingTime) {
-      const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef, customerEmail, customerPhone);
-      if (isTaken) {
+      const slotCheck = await checkSlotDetailed(bookingDate, bookingTime, targetRef, customerEmail, customerPhone);
+      if (!slotCheck.available) {
         return res.status(409).json({
-          error: "SLOT_ALREADY_BOOKED",
-          message: `The ${bookingTime} slot on ${bookingDate} is already reserved. Please select another slot.`
+          error: slotCheck.code || "SLOT_ALREADY_BOOKED",
+          message: slotCheck.reason || `The ${bookingTime} slot on ${bookingDate} is already reserved. Please select another slot.`
         });
       }
     }
@@ -1914,7 +1915,7 @@ app.get("/api/availability", async (req, res) => {
 });
 
 // Lightweight public endpoint returning upcoming time off blocks (no PII) for calendar indicators
-app.get("/api/availability/time-off", async (req, res) => {
+app.get(["/api/availability/time-off", "/api/availability/blocked-days"], async (req, res) => {
   try {
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -1955,17 +1956,23 @@ app.get("/api/check-slot", async (req, res) => {
     const excludeRef = (req.query.excludeRef as string) || undefined;
     const email = (req.query.email as string) || undefined;
     const phone = (req.query.phone as string) || undefined;
+    const instructorId = (req.query.instructorId as string) || undefined;
 
     if (!date || !time) {
       return res.status(400).json({ error: "Missing date or time parameter" });
     }
 
-    const isBooked = await checkSlotBooked(date, time, excludeRef, email, phone);
+    const check = await checkSlotDetailed(date, time, excludeRef, email, phone, instructorId);
     res.json({
-      available: !isBooked,
+      available: check.available,
+      isTimeOff: Boolean(check.isTimeOff),
+      isFullDay: Boolean(check.isFullDay),
+      code: check.code,
       date,
       time,
-      message: isBooked ? "This time slot is no longer available. Please select another time." : "Slot available"
+      message: check.available 
+        ? "Slot available" 
+        : (check.reason || (check.isTimeOff ? "Instructor unavailable. Please select another time." : "This time slot is no longer available. Please select another time."))
     });
   } catch (error: any) {
     console.error("Error checking slot:", error);
@@ -1991,6 +1998,8 @@ app.post("/api/check-slots", async (req, res) => {
     if (!check.available) {
       return res.status(409).json({
         available: false,
+        isTimeOff: Boolean(check.hasTimeOff),
+        code: check.code || (check.hasTimeOff ? "INSTRUCTOR_TIME_OFF" : "SLOT_ALREADY_BOOKED"),
         conflicts: check.conflicts,
         message: check.conflicts[0] || "One or more selected lessons are no longer available"
       });
@@ -2077,22 +2086,22 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
       return res.status(400).json({ error: phoneCheck.error || "Please enter a valid phone number" });
     }
 
-    // Double booking verification: multi-lesson batch or single slot
+    // Double booking & availability verification: multi-lesson batch or single slot
     const canOverrideSlot = Boolean(allowOverride && isInstructor);
     if (hasMultipleLessons) {
       const batchCheck = await checkMultipleSlotsBooked(lessons, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
       if (!batchCheck.available && !canOverrideSlot) {
         return res.status(409).json({
-          error: "SLOT_ALREADY_BOOKED",
+          error: batchCheck.code || "SLOT_ALREADY_BOOKED",
           message: batchCheck.conflicts[0] || "One or more selected lesson slots are no longer available. Please select another time."
         });
       }
     } else {
-      const isSlotTaken = await checkSlotBooked(primaryDate, primaryTime, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
-      if (isSlotTaken && !canOverrideSlot) {
+      const slotCheck = await checkSlotDetailed(primaryDate, primaryTime, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
+      if (!slotCheck.available && !canOverrideSlot) {
         return res.status(409).json({
-          error: "SLOT_ALREADY_BOOKED",
-          message: "This time slot is no longer available. Please select another time."
+          error: slotCheck.code || "SLOT_ALREADY_BOOKED",
+          message: slotCheck.reason || "This time slot is no longer available. Please select another time."
         });
       }
     }
@@ -2594,12 +2603,13 @@ app.post("/api/instructor/time-off", requireInstructorOrAuth, async (req: expres
 // Update time off block
 app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const rawId = req.params.id;
+    if (!rawId || String(rawId).trim() === "") {
       return res.status(400).json({ error: "Invalid block ID" });
     }
+    const id = (!isNaN(Number(rawId)) && Number(rawId) <= 2147483647 && Number(rawId) > 0) ? Number(rawId) : rawId;
 
-    const { date, isFullDay, startTime, endTime, reason } = req.body || {};
+    const { date, isFullDay, startTime, endTime, reason, overrideConflicts } = req.body || {};
     if (!date) {
       return res.status(400).json({ error: "Date is required" });
     }
@@ -2614,7 +2624,8 @@ app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: exp
       isFullDay: isFull,
       startTime: isFull ? undefined : startTime,
       endTime: isFull ? undefined : endTime,
-      reason
+      reason,
+      overrideConflicts: Boolean(overrideConflicts)
     });
 
     logBookingAudit({
@@ -2634,6 +2645,12 @@ app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: exp
         conflicts: error.conflicts || []
       });
     }
+    if (error.message?.includes("no longer exists") || error.message?.includes("not found")) {
+      return res.status(404).json({
+        error: "NOT_FOUND",
+        message: "This time off block no longer exists. Please refresh."
+      });
+    }
     console.error("Error updating time off block:", error);
     res.status(400).json({ error: error.message || "Failed to update time off block" });
   }
@@ -2642,10 +2659,11 @@ app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: exp
 // Delete time off block to restore availability
 app.delete("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const rawId = req.params.id;
+    if (!rawId || String(rawId).trim() === "") {
       return res.status(400).json({ error: "Invalid block ID" });
     }
+    const id = (!isNaN(Number(rawId)) && Number(rawId) <= 2147483647 && Number(rawId) > 0) ? Number(rawId) : rawId;
 
     await deleteTimeOffBlock(id);
     logBookingAudit({
@@ -2657,6 +2675,12 @@ app.delete("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: 
 
     res.json({ success: true, message: "Time off block removed. Availability restored." });
   } catch (error: any) {
+    if (error.message?.includes("no longer exists") || error.message?.includes("not found")) {
+      return res.status(404).json({
+        error: "NOT_FOUND",
+        message: "This time off block no longer exists. Please refresh."
+      });
+    }
     console.error("Error deleting time off block:", error);
     res.status(500).json({ error: error.message || "Failed to delete time off block" });
   }

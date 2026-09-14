@@ -621,6 +621,15 @@ export function BookNow() {
 
   // Update time for the currently active lesson
   const handleSelectTimeSlot = (slotStr: string) => {
+    const status = getSlotAvailabilityStatus(slotStr);
+    if (!status.available) {
+      if (status.reason === 'time_off') {
+        setSlotConflictError(`Instructor is unavailable for ${slotStr} (${status.conflictReason || 'Scheduled time off'}). Please choose an available time slot.`);
+      } else {
+        setSlotConflictError(`Time slot ${slotStr} is already booked. Please choose an available time slot.`);
+      }
+      return;
+    }
     setSelectedTimeSlot(slotStr);
     setSlotConflictError(null);
     setScheduledLessons(prev => {
@@ -1829,7 +1838,7 @@ export function BookNow() {
                                   }}
                                   title={
                                     isDayOff
-                                      ? `Date blocked off by owner (${dayOffReason}) - Bookings disabled`
+                                      ? `Instructor unavailable (${dayOffReason}) - Date blocked`
                                       : isUnavailable
                                       ? "Past date unavailable"
                                       : isSelected
@@ -1850,7 +1859,7 @@ export function BookNow() {
                                   <span>{item.day}</span>
                                   {isDayOff && (
                                     <span 
-                                      title={`Blocked by owner: ${dayOffReason}`}
+                                      title={`Instructor unavailable: ${dayOffReason}`}
                                       className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-neutral-400 text-[8px] text-white font-bold shadow-xs"
                                     >
                                       ✕
@@ -1875,7 +1884,7 @@ export function BookNow() {
                             </div>
                             <div className="flex items-center gap-1.5">
                               <span className="w-2.5 h-2.5 rounded bg-neutral-200 border border-dashed border-neutral-400 inline-flex items-center justify-center text-[7px] text-neutral-600 font-bold">✕</span>
-                              <span>Blocked / Day Off (Disabled)</span>
+                              <span>Instructor unavailable / Day Off</span>
                             </div>
                           </div>
                         </div>
@@ -1901,29 +1910,24 @@ export function BookNow() {
                                 return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
                               });
 
-                              // Filter out slots blocked by instructor time off (they disappear completely)
-                              const visibleSlots = availableSlotsForPackage.filter(slotObj => {
-                                const status = getSlotAvailabilityStatus(slotObj.slot);
-                                if (status.reason === 'time_off') return false;
-                                return true;
-                              });
+                              const allSlots = availableSlotsForPackage;
 
                               if (isSelectedDayFullDayOff) {
-                                const reason = blockedOffDays.get(normalizeDateStr(selectedDate))?.reason || 'Owner Day Off';
+                                const reason = blockedOffDays.get(normalizeDateStr(selectedDate))?.reason || 'Instructor Day Off';
                                 return (
-                                  <div className="p-4 bg-red-50 rounded-2xl border border-red-200 text-red-900 text-xs my-2">
-                                    <div className="flex items-center gap-2 font-bold mb-1 text-red-800">
-                                      <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                                      <span>Date Blocked by Owner</span>
+                                  <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs my-2">
+                                    <div className="flex items-center gap-2 font-bold mb-1 text-amber-800">
+                                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                      <span>Instructor Unavailable</span>
                                     </div>
-                                    <p className="text-[11px] text-red-800/90 leading-relaxed">
-                                      The owner has blocked off this date ({selectedDate}) for &quot;{reason}&quot;. No lesson bookings are permitted on this day. Please select another date on the calendar.
+                                    <p className="text-[11px] text-amber-800/90 leading-relaxed">
+                                      Instructor is unavailable on this date ({selectedDate}) for &quot;{reason}&quot;. No lesson bookings are permitted on this day. Please select another date on the calendar.
                                     </p>
                                   </div>
                                 );
                               }
 
-                              if (visibleSlots.length === 0) {
+                              if (allSlots.length === 0) {
                                 return (
                                   <div className="p-5 bg-black/[0.02] rounded-2xl border border-black/5 text-center text-xs text-brand-black/60 my-2">
                                     <CalendarOff className="w-5 h-5 mx-auto mb-1.5 text-black/40" />
@@ -1937,10 +1941,11 @@ export function BookNow() {
 
                               return (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5 max-h-[250px] overflow-y-auto pr-1">
-                                  {visibleSlots.map((slotObj, idx) => {
+                                  {allSlots.map((slotObj, idx) => {
                                     const status = getSlotAvailabilityStatus(slotObj.slot);
                                     const isAvailable = status.available;
                                     const isSelected = selectedTimeSlot === slotObj.slot;
+                                    const isTimeOff = !isAvailable && status.reason === 'time_off';
 
                                     return (
                                       <button
@@ -1952,10 +1957,19 @@ export function BookNow() {
                                             handleSelectTimeSlot(slotObj.slot);
                                           }
                                         }}
+                                        title={
+                                          isTimeOff
+                                            ? (status.conflictReason || 'Instructor unavailable during this time window')
+                                            : !isAvailable
+                                            ? (status.conflictReason || 'Slot already booked')
+                                            : `Select ${slotObj.slot}`
+                                        }
                                         className={cn(
                                           "px-3 py-2 rounded-xl text-xs font-bold border transition-all text-left flex items-center justify-between",
                                           isSelected
                                             ? "bg-brand-red text-white border-brand-red shadow-md cursor-pointer"
+                                            : isTimeOff
+                                            ? "bg-amber-500/5 text-amber-900/60 border-amber-200/50 cursor-not-allowed select-none"
                                             : !isAvailable
                                             ? "bg-black/[0.03] text-black/30 border-black/5 cursor-not-allowed line-through"
                                             : "bg-white border-black/10 hover:border-brand-red/50 text-brand-black cursor-pointer"
@@ -1963,10 +1977,16 @@ export function BookNow() {
                                       >
                                         <span className="flex items-center gap-2">
                                           <Clock className="w-3.5 h-3.5" />
-                                          {slotObj.slot}
+                                          <span className={cn(!isAvailable && !isTimeOff && "line-through")}>
+                                            {slotObj.slot}
+                                          </span>
                                         </span>
                                         {isSelected ? (
                                           <Check className="w-3.5 h-3.5" />
+                                        ) : isTimeOff ? (
+                                          <span className="text-[9px] uppercase font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded no-underline">
+                                            Instructor unavailable
+                                          </span>
                                         ) : !isAvailable ? (
                                           <span className="text-[9px] uppercase font-bold text-rose-600 bg-rose-100/70 px-1.5 py-0.5 rounded no-underline">
                                             {status.reason === 'self_conflict' 

@@ -20,7 +20,7 @@ import {
 import { cn } from '../lib/utils';
 
 export interface TimeOffItem {
-  id: number;
+  id: number | string;
   date: string;
   isFullDay: boolean;
   startTime?: string | null;
@@ -73,7 +73,7 @@ export function InstructorAvailability() {
 
   // Form State
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingBlockId, setEditingBlockId] = useState<number | null>(null);
+  const [editingBlockId, setEditingBlockId] = useState<number | string | null>(null);
   const [date, setDate] = useState(() => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -140,7 +140,7 @@ export function InstructorAvailability() {
     start: string,
     end: string,
     instId: string,
-    excludeId?: number | null
+    excludeId?: number | string | null
   ) => {
     if (!targetDate) return;
     setIsCheckingConflicts(true);
@@ -191,6 +191,17 @@ export function InstructorAvailability() {
   };
 
   const handleEditBlock = (b: TimeOffItem) => {
+    // Validate block still exists in latest state
+    const blockExists = blocks.some(item => String(item.id) === String(b.id));
+    if (!blockExists) {
+      setFeedback({
+        type: 'error',
+        message: 'This time off block no longer exists. Please refresh.'
+      });
+      loadTimeOff();
+      return;
+    }
+
     setEditingBlockId(b.id);
     setDate(b.date);
     setIsFullDay(b.isFullDay);
@@ -206,6 +217,20 @@ export function InstructorAvailability() {
   const handleSaveBlock = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!date) return;
+
+    // Validate block exists if editing
+    if (editingBlockId) {
+      const blockExists = blocks.some(item => String(item.id) === String(editingBlockId));
+      if (!blockExists) {
+        setFeedback({
+          type: 'error',
+          message: 'This time off block no longer exists. Please refresh.'
+        });
+        setIsFormOpen(false);
+        await loadTimeOff();
+        return;
+      }
+    }
 
     if (conflicts.length > 0) {
       setFeedback({
@@ -240,8 +265,22 @@ export function InstructorAvailability() {
         body: JSON.stringify(payload)
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (
+          res.status === 404 || 
+          data.error === 'NOT_FOUND' || 
+          data.message?.includes('no longer exists') || 
+          data.message?.includes('not found')
+        ) {
+          setFeedback({
+            type: 'error',
+            message: 'This time off block no longer exists. Please refresh.'
+          });
+          setIsFormOpen(false);
+          await loadTimeOff();
+          return;
+        }
         throw new Error(data.message || data.error || 'Failed to save time off block');
       }
 
@@ -267,6 +306,17 @@ export function InstructorAvailability() {
   };
 
   const handleDeleteBlock = async (block: TimeOffItem) => {
+    // Validate block exists in current state
+    const blockExists = blocks.some(item => String(item.id) === String(block.id));
+    if (!blockExists) {
+      setFeedback({
+        type: 'error',
+        message: 'This time off block no longer exists. Please refresh.'
+      });
+      loadTimeOff();
+      return;
+    }
+
     if (!window.confirm(`Are you sure you want to remove this time off block on ${block.date}? This will restore normal booking availability for students on this date.`)) {
       return;
     }
@@ -279,15 +329,28 @@ export function InstructorAvailability() {
         headers
       });
 
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setFeedback({
           type: 'success',
           message: `Time off on ${block.date} removed. Booking availability restored!`
         });
-        setBlocks(prev => prev.filter(b => b.id !== block.id));
+        await loadTimeOff();
         setTimeout(() => setFeedback(null), 5000);
       } else {
-        const data = await res.json();
+        if (
+          res.status === 404 || 
+          data.error === 'NOT_FOUND' || 
+          data.message?.includes('no longer exists') || 
+          data.message?.includes('not found')
+        ) {
+          setFeedback({
+            type: 'error',
+            message: 'This time off block no longer exists. Please refresh.'
+          });
+          await loadTimeOff();
+          return;
+        }
         throw new Error(data.message || data.error || 'Failed to remove block');
       }
     } catch (err: any) {

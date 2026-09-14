@@ -544,15 +544,17 @@ export const bookingLock = new BookingLockManager();
 // ============================================================================
 
 export interface TimeOffBlock {
-  id: number;
+  id: number | string;
   instructorId: string;
   instructorName: string;
   date: string; // 'YYYY-MM-DD'
   isFullDay: boolean; // true = full day off, false = partial time window
-  startTime?: string | null; // e.g. "01:00 PM"
-  endTime?: string | null;   // e.g. "03:00 PM"
-  startMinutes?: number | null; // e.g. 780
-  endMinutes?: number | null;   // e.g. 900
+  startTime?: string | null; // 24-hour e.g. "09:00"
+  endTime?: string | null;   // 24-hour e.g. "13:00"
+  startMinutes?: number | null; // e.g. 540
+  endMinutes?: number | null;   // e.g. 780
+  displayStartTime?: string | null; // e.g. "09:00 AM"
+  displayEndTime?: string | null;   // e.g. "01:00 PM"
   reason?: string | null;
   createdAt?: string | Date;
   updatedAt?: string | Date;
@@ -624,6 +626,26 @@ export function minutesToTimeString(minutes: number): string {
   return `${h12}:${mStr} ${ampm}`;
 }
 
+export function minutesTo24HourTime(minutes: number): string {
+  const h24 = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  return `${String(h24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+export function to24HourTime(timeStr?: string | null): string | null {
+  if (!timeStr) return null;
+  const mins = timeStringToMinutes(timeStr);
+  if (mins === null) return null;
+  return minutesTo24HourTime(mins);
+}
+
+export function to12HourDisplay(timeStr?: string | null): string | null {
+  if (!timeStr) return null;
+  const mins = timeStringToMinutes(timeStr);
+  if (mins === null) return timeStr;
+  return minutesToTimeString(mins);
+}
+
 let timeOffTableInitialized = false;
 async function ensureTimeOffTable() {
   if (!db || !isSqlConfigured || timeOffTableInitialized) return;
@@ -660,21 +682,31 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
   if (db && isSqlConfigured) {
     try {
       const rows = await db.select().from(instructorTimeOff);
-      if (rows && rows.length >= 0) {
-        const mapped: TimeOffBlock[] = rows.map(r => ({
-          id: r.id,
-          instructorId: r.instructorId || 'wally',
-          instructorName: r.instructorName || 'Wally',
-          date: r.date,
-          isFullDay: Boolean(r.isFullDay),
-          startTime: r.startTime,
-          endTime: r.endTime,
-          startMinutes: r.startMinutes,
-          endMinutes: r.endMinutes,
-          reason: r.reason,
-          createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
-          updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
-        }));
+      if (rows && rows.length > 0) {
+        const mapped: TimeOffBlock[] = rows.map(r => {
+          const sMin = r.startMinutes ?? (r.startTime ? timeStringToMinutes(r.startTime) : null);
+          const eMin = r.endMinutes ?? (r.endTime ? timeStringToMinutes(r.endTime) : null);
+          const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (r.startTime ? to24HourTime(r.startTime) : null);
+          const e24 = eMin !== null ? minutesTo24HourTime(eMin) : (r.endTime ? to24HourTime(r.endTime) : null);
+          const isFull = Boolean(r.isFullDay);
+
+          return {
+            id: r.id,
+            instructorId: r.instructorId || 'wally',
+            instructorName: r.instructorName || 'Wally',
+            date: normalizeDate(r.date) || r.date,
+            isFullDay: isFull,
+            startTime: isFull ? null : s24,
+            endTime: isFull ? null : e24,
+            startMinutes: isFull ? null : sMin,
+            endMinutes: isFull ? null : eMin,
+            displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(r.startTime)),
+            displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(r.endTime)),
+            reason: r.reason,
+            createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+            updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
+          };
+        });
 
         // Keep in-memory store and file synced with latest DB state
         inMemoryTimeOff = mapped;
@@ -684,6 +716,53 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
           return mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
         }
         return mapped;
+      } else {
+        // If SQL returned 0 rows, check if we have disk file blocks to seed into SQL
+        const diskBlocks = readTimeOffFile();
+        if (diskBlocks.length > 0) {
+          try {
+            for (const b of diskBlocks) {
+              const sMin = b.startMinutes ?? (b.startTime ? timeStringToMinutes(b.startTime) : null);
+              const eMin = b.endMinutes ?? (b.endTime ? timeStringToMinutes(b.endTime) : null);
+              await db.insert(instructorTimeOff).values({
+                instructorId: b.instructorId || 'wally',
+                instructorName: b.instructorName || 'Wally',
+                date: normalizeDate(b.date) || b.date,
+                isFullDay: b.isFullDay ? 1 : 0,
+                startTime: b.isFullDay ? null : (to24HourTime(b.startTime) || b.startTime),
+                endTime: b.isFullDay ? null : (to24HourTime(b.endTime) || b.endTime),
+                startMinutes: b.isFullDay ? null : sMin,
+                endMinutes: b.isFullDay ? null : eMin,
+                reason: b.reason || null,
+              });
+            }
+            // Re-query newly seeded rows
+            const newRows = await db.select().from(instructorTimeOff);
+            if (newRows && newRows.length > 0) {
+              const mapped: TimeOffBlock[] = newRows.map(r => ({
+                id: r.id,
+                instructorId: r.instructorId || 'wally',
+                instructorName: r.instructorName || 'Wally',
+                date: normalizeDate(r.date) || r.date,
+                isFullDay: Boolean(r.isFullDay),
+                startTime: r.startTime,
+                endTime: r.endTime,
+                startMinutes: r.startMinutes,
+                endMinutes: r.endMinutes,
+                displayStartTime: to12HourDisplay(r.startTime),
+                displayEndTime: to12HourDisplay(r.endTime),
+                reason: r.reason,
+                createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+                updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
+              }));
+              inMemoryTimeOff = mapped;
+              writeTimeOffFile(mapped);
+              return instructorId ? mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase()) : mapped;
+            }
+          } catch (seedErr) {
+            console.warn('[TimeOff] Failed seeding disk blocks into SQL:', seedErr);
+          }
+        }
       }
     } catch (err) {
       console.warn('[TimeOff] SQL fetch error, falling back to cached file/memory store:', err);
@@ -695,10 +774,29 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
     inMemoryTimeOff = readTimeOffFile();
   }
 
+  const normalizedMem = inMemoryTimeOff.map(b => {
+    const sMin = b.startMinutes ?? (b.startTime ? timeStringToMinutes(b.startTime) : null);
+    const eMin = b.endMinutes ?? (b.endTime ? timeStringToMinutes(b.endTime) : null);
+    const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (b.startTime ? to24HourTime(b.startTime) : null);
+    const e24 = eMin !== null ? minutesTo24HourTime(eMin) : (b.endTime ? to24HourTime(b.endTime) : null);
+    const isFull = Boolean(b.isFullDay);
+    return {
+      ...b,
+      date: normalizeDate(b.date) || b.date,
+      isFullDay: isFull,
+      startTime: isFull ? null : s24,
+      endTime: isFull ? null : e24,
+      startMinutes: isFull ? null : sMin,
+      endMinutes: isFull ? null : eMin,
+      displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(b.startTime)),
+      displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(b.endTime)),
+    };
+  });
+
   if (instructorId) {
-    return inMemoryTimeOff.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
+    return normalizedMem.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
   }
-  return inMemoryTimeOff;
+  return normalizedMem;
 }
 
 // Check for conflicting active bookings before saving a time-off block
@@ -708,7 +806,7 @@ export async function checkTimeOffBookingConflicts(
   startMinutes?: number,
   endMinutes?: number,
   instructorId?: string,
-  excludeBlockId?: number
+  excludeBlockId?: number | string
 ): Promise<{ hasConflict: boolean; conflicts: any[] }> {
   const normTargetDate = normalizeDate(date);
   if (!normTargetDate) return { hasConflict: false, conflicts: [] };
@@ -742,10 +840,15 @@ export async function checkTimeOffBookingConflicts(
     }
 
     if (startMinutes !== undefined && endMinutes !== undefined) {
-      const bInterval = parseTimeInterval(b.time);
+      let bInterval = parseTimeInterval(b.time);
+      if (!bInterval) {
+        const bStart = timeStringToMinutes(b.time);
+        if (bStart !== null) {
+          bInterval = { start: bStart, end: bStart + 60 };
+        }
+      }
       if (bInterval) {
-        // A lesson overlaps the block if:
-        // lesson starts before block ends AND lesson ends after block starts
+        // A lesson overlaps the block if: bookingStart < blockEnd AND bookingEnd > blockStart
         const overlaps = (bInterval.start < endMinutes) && (bInterval.end > startMinutes);
         if (overlaps) {
           conflicts.push({
@@ -782,6 +885,7 @@ export async function createTimeOffBlock(data: {
   startTime?: string;
   endTime?: string;
   reason?: string;
+  overrideConflicts?: boolean;
 }): Promise<TimeOffBlock> {
   await ensureTimeOffTable();
 
@@ -789,6 +893,8 @@ export async function createTimeOffBlock(data: {
   const isFull = Boolean(data.isFullDay);
   let startMin: number | null = null;
   let endMin: number | null = null;
+  let s24: string | null = null;
+  let e24: string | null = null;
 
   if (!isFull && data.startTime && data.endTime) {
     startMin = timeStringToMinutes(data.startTime);
@@ -796,22 +902,26 @@ export async function createTimeOffBlock(data: {
     if (startMin === null || endMin === null || endMin <= startMin) {
       throw new Error("Invalid time window: End time must be after start time.");
     }
+    s24 = minutesTo24HourTime(startMin);
+    e24 = minutesTo24HourTime(endMin);
   }
 
   // Pre-check for booking conflicts
-  const conflictCheck = await checkTimeOffBookingConflicts(
-    normDate,
-    isFull,
-    startMin ?? undefined,
-    endMin ?? undefined,
-    data.instructorId
-  );
+  if (!data.overrideConflicts) {
+    const conflictCheck = await checkTimeOffBookingConflicts(
+      normDate,
+      isFull,
+      startMin ?? undefined,
+      endMin ?? undefined,
+      data.instructorId
+    );
 
-  if (conflictCheck.hasConflict) {
-    const error: any = new Error(`Cannot block time: this period overlaps ${conflictCheck.conflicts.length} existing booking(s). Please resolve them first.`);
-    error.code = 'BOOKING_CONFLICT';
-    error.conflicts = conflictCheck.conflicts;
-    throw error;
+    if (conflictCheck.hasConflict) {
+      const error: any = new Error(`Cannot block time: this period overlaps ${conflictCheck.conflicts.length} existing booking(s). Please resolve them first.`);
+      error.code = 'BOOKING_CONFLICT';
+      error.conflicts = conflictCheck.conflicts;
+      throw error;
+    }
   }
 
   const now = new Date();
@@ -824,8 +934,8 @@ export async function createTimeOffBlock(data: {
         instructorName: data.instructorName || 'Wally',
         date: normDate,
         isFullDay: isFull ? 1 : 0,
-        startTime: isFull ? null : data.startTime,
-        endTime: isFull ? null : data.endTime,
+        startTime: isFull ? null : s24,
+        endTime: isFull ? null : e24,
         startMinutes: startMin,
         endMinutes: endMin,
         reason: data.reason?.trim() || null,
@@ -843,6 +953,8 @@ export async function createTimeOffBlock(data: {
         endTime: inserted.endTime,
         startMinutes: inserted.startMinutes,
         endMinutes: inserted.endMinutes,
+        displayStartTime: isFull ? null : to12HourDisplay(inserted.startTime),
+        displayEndTime: isFull ? null : to12HourDisplay(inserted.endTime),
         reason: inserted.reason,
         createdAt: inserted.createdAt ? new Date(inserted.createdAt) : now,
         updatedAt: inserted.updatedAt ? new Date(inserted.updatedAt) : now,
@@ -855,10 +967,12 @@ export async function createTimeOffBlock(data: {
         instructorName: data.instructorName || 'Wally',
         date: normDate,
         isFullDay: isFull,
-        startTime: isFull ? null : data.startTime,
-        endTime: isFull ? null : data.endTime,
+        startTime: isFull ? null : s24,
+        endTime: isFull ? null : e24,
         startMinutes: startMin,
         endMinutes: endMin,
+        displayStartTime: isFull ? null : to12HourDisplay(data.startTime),
+        displayEndTime: isFull ? null : to12HourDisplay(data.endTime),
         reason: data.reason?.trim() || null,
         createdAt: now,
         updatedAt: now,
@@ -871,10 +985,12 @@ export async function createTimeOffBlock(data: {
       instructorName: data.instructorName || 'Wally',
       date: normDate,
       isFullDay: isFull,
-      startTime: isFull ? null : data.startTime,
-      endTime: isFull ? null : data.endTime,
+      startTime: isFull ? null : s24,
+      endTime: isFull ? null : e24,
       startMinutes: startMin,
       endMinutes: endMin,
+      displayStartTime: isFull ? null : to12HourDisplay(data.startTime),
+      displayEndTime: isFull ? null : to12HourDisplay(data.endTime),
       reason: data.reason?.trim() || null,
       createdAt: now,
       updatedAt: now,
@@ -890,21 +1006,27 @@ export async function createTimeOffBlock(data: {
 
 // Update an existing time off block
 export async function updateTimeOffBlock(
-  id: number,
+  id: number | string,
   data: {
     date: string;
     isFullDay: boolean;
     startTime?: string;
     endTime?: string;
     reason?: string;
+    overrideConflicts?: boolean;
   }
 ): Promise<TimeOffBlock> {
   await ensureTimeOffTable();
+
+  const strId = String(id).trim();
+  const numId = (!isNaN(Number(id)) && Number(id) <= 2147483647 && Number(id) > 0) ? Number(id) : null;
 
   const normDate = normalizeDate(data.date) || data.date;
   const isFull = Boolean(data.isFullDay);
   let startMin: number | null = null;
   let endMin: number | null = null;
+  let s24: string | null = null;
+  let e24: string | null = null;
 
   if (!isFull && data.startTime && data.endTime) {
     startMin = timeStringToMinutes(data.startTime);
@@ -912,42 +1034,47 @@ export async function updateTimeOffBlock(
     if (startMin === null || endMin === null || endMin <= startMin) {
       throw new Error("Invalid time window: End time must be after start time.");
     }
+    s24 = minutesTo24HourTime(startMin);
+    e24 = minutesTo24HourTime(endMin);
   }
 
   // Pre-check for booking conflicts
-  const conflictCheck = await checkTimeOffBookingConflicts(
-    normDate,
-    isFull,
-    startMin ?? undefined,
-    endMin ?? undefined,
-    undefined,
-    id
-  );
+  if (!data.overrideConflicts) {
+    const conflictCheck = await checkTimeOffBookingConflicts(
+      normDate,
+      isFull,
+      startMin ?? undefined,
+      endMin ?? undefined,
+      undefined,
+      id
+    );
 
-  if (conflictCheck.hasConflict) {
-    const error: any = new Error(`Cannot update block: this period overlaps ${conflictCheck.conflicts.length} existing booking(s). Please resolve them first.`);
-    error.code = 'BOOKING_CONFLICT';
-    error.conflicts = conflictCheck.conflicts;
-    throw error;
+    if (conflictCheck.hasConflict) {
+      const error: any = new Error(`Cannot update block: this period overlaps ${conflictCheck.conflicts.length} existing booking(s). Please resolve them first.`);
+      error.code = 'BOOKING_CONFLICT';
+      error.conflicts = conflictCheck.conflicts;
+      throw error;
+    }
   }
 
   const now = new Date();
   let updatedBlock: TimeOffBlock | null = null;
 
-  if (db && isSqlConfigured) {
+  // 1. Try SQL update if SQL is configured and numId is a valid Postgres serial integer
+  if (db && isSqlConfigured && numId !== null) {
     try {
       const [updated] = await db.update(instructorTimeOff)
         .set({
           date: normDate,
           isFullDay: isFull ? 1 : 0,
-          startTime: isFull ? null : data.startTime,
-          endTime: isFull ? null : data.endTime,
+          startTime: isFull ? null : s24,
+          endTime: isFull ? null : e24,
           startMinutes: startMin,
           endMinutes: endMin,
           reason: data.reason?.trim() || null,
           updatedAt: now,
         })
-        .where(eq(instructorTimeOff.id, id))
+        .where(eq(instructorTimeOff.id, numId))
         .returning();
 
       if (updated) {
@@ -961,6 +1088,8 @@ export async function updateTimeOffBlock(
           endTime: updated.endTime,
           startMinutes: updated.startMinutes,
           endMinutes: updated.endMinutes,
+          displayStartTime: isFull ? null : to12HourDisplay(updated.startTime),
+          displayEndTime: isFull ? null : to12HourDisplay(updated.endTime),
           reason: updated.reason,
           createdAt: updated.createdAt ? new Date(updated.createdAt) : now,
           updatedAt: updated.updatedAt ? new Date(updated.updatedAt) : now,
@@ -971,47 +1100,80 @@ export async function updateTimeOffBlock(
     }
   }
 
-  const idx = inMemoryTimeOff.findIndex(b => b.id === id);
+  // 2. Locate in in-memory array and file store
+  if (inMemoryTimeOff.length === 0) {
+    inMemoryTimeOff = readTimeOffFile();
+  }
+
+  let idx = inMemoryTimeOff.findIndex(b => String(b.id) === strId);
+  if (idx === -1) {
+    // Re-read file from disk in case of fresh writes
+    inMemoryTimeOff = readTimeOffFile();
+    idx = inMemoryTimeOff.findIndex(b => String(b.id) === strId);
+  }
+
   if (idx !== -1) {
-    updatedBlock = {
-      ...inMemoryTimeOff[idx],
+    const existing = inMemoryTimeOff[idx];
+    const updatedMem: TimeOffBlock = {
+      ...existing,
       date: normDate,
       isFullDay: isFull,
-      startTime: isFull ? null : data.startTime,
-      endTime: isFull ? null : data.endTime,
+      startTime: isFull ? null : s24,
+      endTime: isFull ? null : e24,
       startMinutes: startMin,
       endMinutes: endMin,
+      displayStartTime: isFull ? null : to12HourDisplay(data.startTime || existing.startTime),
+      displayEndTime: isFull ? null : to12HourDisplay(data.endTime || existing.endTime),
       reason: data.reason?.trim() || null,
       updatedAt: now,
     };
-    inMemoryTimeOff[idx] = updatedBlock;
+    inMemoryTimeOff[idx] = updatedMem;
     writeTimeOffFile(inMemoryTimeOff);
+    if (!updatedBlock) {
+      updatedBlock = updatedMem;
+    }
   }
 
   if (!updatedBlock) {
-    throw new Error(`Time off block with id ${id} not found.`);
+    throw new Error("This time off block no longer exists. Please refresh.");
   }
 
   return updatedBlock;
 }
 
 // Delete a time off block to restore availability
-export async function deleteTimeOffBlock(id: number, instructorId?: string): Promise<boolean> {
+export async function deleteTimeOffBlock(id: number | string, instructorId?: string): Promise<boolean> {
   await ensureTimeOffTable();
 
-  if (db && isSqlConfigured) {
+  const strId = String(id).trim();
+  const numId = (!isNaN(Number(id)) && Number(id) <= 2147483647 && Number(id) > 0) ? Number(id) : null;
+  let sqlDeleted = false;
+
+  if (db && isSqlConfigured && numId !== null) {
     try {
-      await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, id));
+      const result = await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId)).returning();
+      if (result && result.length > 0) {
+        sqlDeleted = true;
+      }
     } catch (err) {
       console.warn('[TimeOff] Failed deleting from SQL:', err);
     }
   }
 
+  if (inMemoryTimeOff.length === 0) {
+    inMemoryTimeOff = readTimeOffFile();
+  }
+
   const initialLen = inMemoryTimeOff.length;
-  inMemoryTimeOff = inMemoryTimeOff.filter(b => b.id !== id);
+  inMemoryTimeOff = inMemoryTimeOff.filter(b => String(b.id) !== strId);
+  const memDeleted = inMemoryTimeOff.length < initialLen;
   writeTimeOffFile(inMemoryTimeOff);
 
-  return inMemoryTimeOff.length < initialLen || Boolean(db && isSqlConfigured);
+  if (!sqlDeleted && !memDeleted) {
+    throw new Error("This time off block no longer exists. Please refresh.");
+  }
+
+  return true;
 }
 
 // Authoritatively test if a date or time slot is blocked by instructor availability
@@ -1019,9 +1181,9 @@ export async function checkDateOrSlotBlockedByTimeOff(
   date: string,
   time: string,
   instructorId?: string
-): Promise<boolean> {
+): Promise<{ blocked: boolean; reason?: string; isFullDay?: boolean }> {
   const normDate = normalizeDate(date);
-  if (!normDate) return false;
+  if (!normDate) return { blocked: false };
 
   const allBlocks = await getTimeOffBlocks(instructorId);
   const dateBlocks = allBlocks.filter(b => {
@@ -1032,55 +1194,92 @@ export async function checkDateOrSlotBlockedByTimeOff(
     return true;
   });
 
-  if (dateBlocks.length === 0) return false;
+  if (dateBlocks.length === 0) return { blocked: false };
 
   // 1. Any full day off block makes the whole day unavailable
-  if (dateBlocks.some(b => b.isFullDay)) {
-    return true;
+  const fullDayBlock = dateBlocks.find(b => b.isFullDay);
+  if (fullDayBlock) {
+    return {
+      blocked: true,
+      isFullDay: true,
+      reason: fullDayBlock.reason || 'Instructor unavailable (Day Off)'
+    };
   }
 
-  // 2. Partial blocks check
+  // 2. Partial blocks check: bookingStart < blockEnd AND bookingEnd > blockStart
+  let bookingStart: number | null = null;
+  let bookingEnd: number | null = null;
+
   const slotInterval = parseTimeInterval(time);
-  if (!slotInterval) {
-    const min = timeStringToMinutes(time);
-    if (min === null) return false;
-    const testInterval = { start: min, end: min + 60 };
-    return dateBlocks.some(b => {
-      if (b.isFullDay) return true;
-      if (b.startMinutes !== undefined && b.startMinutes !== null && b.endMinutes !== undefined && b.endMinutes !== null) {
-        return (testInterval.start < b.endMinutes) && (testInterval.end > b.startMinutes);
-      }
-      return false;
-    });
+  if (slotInterval) {
+    bookingStart = slotInterval.start;
+    bookingEnd = slotInterval.end;
+  } else {
+    bookingStart = timeStringToMinutes(time);
+    if (bookingStart !== null) {
+      bookingEnd = bookingStart + 60;
+    }
   }
 
-  // Lesson is blocked if it overlaps any partial block:
-  // slot starts before block ends AND slot ends after block starts
-  return dateBlocks.some(b => {
-    if (b.isFullDay) return true;
-    if (b.startMinutes !== undefined && b.startMinutes !== null && b.endMinutes !== undefined && b.endMinutes !== null) {
-      return (slotInterval.start < b.endMinutes) && (slotInterval.end > b.startMinutes);
+  if (bookingStart === null || bookingEnd === null) {
+    return { blocked: false };
+  }
+
+  for (const b of dateBlocks) {
+    if (b.isFullDay) {
+      return {
+        blocked: true,
+        isFullDay: true,
+        reason: b.reason || 'Instructor unavailable'
+      };
     }
-    return false;
-  });
+
+    let bStart = b.startMinutes;
+    let bEnd = b.endMinutes;
+    if (bStart === null || bStart === undefined) {
+      bStart = b.startTime ? timeStringToMinutes(b.startTime) : null;
+    }
+    if (bEnd === null || bEnd === undefined) {
+      bEnd = b.endTime ? timeStringToMinutes(b.endTime) : null;
+    }
+
+    if (bStart !== null && bStart !== undefined && bEnd !== null && bEnd !== undefined) {
+      // Overlap logic: bookingStart < blockEnd AND bookingEnd > blockStart
+      if (bookingStart < bEnd && bookingEnd > bStart) {
+        return {
+          blocked: true,
+          isFullDay: false,
+          reason: b.reason || 'Time blocked by instructor'
+        };
+      }
+    }
+  }
+
+  return { blocked: false };
 }
 
-// Check if a time slot on a specific date is already taken by an active booking or blocked by instructor time off
-export async function checkSlotBooked(
+// Check detailed availability for a specific slot, distinguishing instructor time off from bookings
+export async function checkSlotDetailed(
   date: string, 
   time: string, 
   excludeRef?: string,
   customerEmail?: string,
   customerPhone?: string,
   instructorId?: string
-): Promise<boolean> {
+): Promise<{ available: boolean; isTimeOff?: boolean; code?: string; reason?: string; isFullDay?: boolean }> {
   const normTargetDate = normalizeDate(date);
-  if (!normTargetDate) return false;
+  if (!normTargetDate) return { available: false, reason: "Invalid date" };
 
   // 0. Authoritatively enforce Instructor Availability / Time Off blocks first
-  const isTimeOffBlocked = await checkDateOrSlotBlockedByTimeOff(normTargetDate, time, instructorId);
-  if (isTimeOffBlocked) {
-    return true;
+  const timeOffResult = await checkDateOrSlotBlockedByTimeOff(normTargetDate, time, instructorId);
+  if (timeOffResult.blocked) {
+    return {
+      available: false,
+      isTimeOff: true,
+      isFullDay: timeOffResult.isFullDay,
+      code: "INSTRUCTOR_TIME_OFF",
+      reason: "This time is unavailable because the instructor is off. Please choose another time."
+    };
   }
 
   const targetInterval = parseTimeInterval(time);
@@ -1098,13 +1297,12 @@ export async function checkSlotBooked(
       continue;
     }
 
-    // 2. Ignore cancelled bookings (both inside and outside 24h release the instructor's schedule)
+    // 2. Ignore cancelled bookings
     if (r.status === 'Cancelled') {
       continue;
     }
 
     // 3. Match date using canonical date normalization
-    // IMPORTANT: Different date + same time must be allowed!
     const bookingNormDate = normalizeDate(r.date);
     if (!bookingNormDate || bookingNormDate !== normTargetDate) {
       continue;
@@ -1117,7 +1315,6 @@ export async function checkSlotBooked(
     if (targetInterval && existingInterval) {
       timeConflicts = isTimeSlotConflicting(targetInterval, existingInterval, 30);
     } else {
-      // Fallback exact match if parsing fails
       const cleanT1 = time.replace(/\s+/g, ' ').toLowerCase();
       const cleanT2 = (r.time || '').replace(/\s+/g, ' ').toLowerCase();
       timeConflicts = cleanT1 === cleanT2;
@@ -1129,7 +1326,12 @@ export async function checkSlotBooked(
 
     // 5. Confirmed or paid bookings unconditionally block the slot
     if (r.status === 'Confirmed' || r.paymentStatus === 'paid') {
-      return true;
+      return {
+        available: false,
+        isTimeOff: false,
+        code: "SLOT_ALREADY_BOOKED",
+        reason: "This time slot is no longer available. Please select another time."
+      };
     }
 
     // 6. Pending bookings block the slot unless it is the same customer resuming checkout or timed out
@@ -1146,11 +1348,29 @@ export async function checkSlotBooked(
         continue;
       }
 
-      return true;
+      return {
+        available: false,
+        isTimeOff: false,
+        code: "SLOT_ALREADY_BOOKED",
+        reason: "This time slot is currently on hold by another checkout. Please choose another time or wait 15 minutes."
+      };
     }
   }
 
-  return false;
+  return { available: true };
+}
+
+// Check if a time slot on a specific date is already taken by an active booking or blocked by instructor time off
+export async function checkSlotBooked(
+  date: string, 
+  time: string, 
+  excludeRef?: string,
+  customerEmail?: string,
+  customerPhone?: string,
+  instructorId?: string
+): Promise<boolean> {
+  const result = await checkSlotDetailed(date, time, excludeRef, customerEmail, customerPhone, instructorId);
+  return !result.available;
 }
 
 // Authoritatively validate an entire batch of lessons for multi-lesson packages
@@ -1159,8 +1379,9 @@ export async function checkMultipleSlotsBooked(
   excludeRef?: string,
   customerEmail?: string,
   customerPhone?: string
-): Promise<{ available: boolean; conflicts: string[] }> {
+): Promise<{ available: boolean; conflicts: string[]; hasTimeOff?: boolean; code?: string }> {
   const conflicts: string[] = [];
+  let hasTimeOff = false;
 
   // Check each lesson against DB
   for (let i = 0; i < lessons.length; i++) {
@@ -1170,9 +1391,14 @@ export async function checkMultipleSlotsBooked(
       conflicts.push(`Lesson ${num} is missing date or time`);
       continue;
     }
-    const isBooked = await checkSlotBooked(l.date, l.time, excludeRef, customerEmail, customerPhone);
-    if (isBooked) {
-      conflicts.push(`Lesson ${num} (${l.date} at ${l.time}) is no longer available`);
+    const check = await checkSlotDetailed(l.date, l.time, excludeRef, customerEmail, customerPhone);
+    if (!check.available) {
+      if (check.isTimeOff) {
+        hasTimeOff = true;
+        conflicts.push(`Lesson ${num} (${l.date} at ${l.time}): This time is unavailable because the instructor is off. Please choose another time.`);
+      } else {
+        conflicts.push(`Lesson ${num} (${l.date} at ${l.time}) is no longer available`);
+      }
     }
   }
 
@@ -1197,7 +1423,9 @@ export async function checkMultipleSlotsBooked(
 
   return {
     available: conflicts.length === 0,
-    conflicts
+    conflicts,
+    hasTimeOff,
+    code: hasTimeOff ? "INSTRUCTOR_TIME_OFF" : "SLOT_ALREADY_BOOKED"
   };
 }
 
@@ -1230,8 +1458,8 @@ export async function createBooking(data: {
 
   // Run check-and-insert under mutual exclusion lock for this date to prevent race conditions
   return await bookingLock.runExclusive(normDate || 'all-dates', async () => {
-    // 1. Authoritative double-booking verification inside the lock
-    const isTaken = await checkSlotBooked(
+    // 1. Authoritative double-booking & time-off verification inside the lock
+    const slotCheck = await checkSlotDetailed(
       data.date, 
       data.time, 
       data.bookingRef, 
@@ -1239,9 +1467,13 @@ export async function createBooking(data: {
       data.phone
     );
 
-    if (isTaken) {
-      const err: any = new Error("This time slot was just booked by another customer. Please select another time.");
-      err.code = "SLOT_ALREADY_BOOKED";
+    if (!slotCheck.available) {
+      const err: any = new Error(
+        slotCheck.isTimeOff 
+          ? "This time is unavailable because the instructor is off. Please choose another time."
+          : "This time slot was just booked by another customer. Please select another time."
+      );
+      err.code = slotCheck.isTimeOff ? "INSTRUCTOR_TIME_OFF" : "SLOT_ALREADY_BOOKED";
       err.status = 409;
       throw err;
     }

@@ -264,6 +264,15 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
 
   // Populate form for editing
   const startEditing = (block: TimeOffBlockItem) => {
+    const blockExists = blocks.some(item => String(item.id) === String(block.id));
+    if (!blockExists) {
+      setFeedback({
+        type: 'error',
+        message: 'This time off block no longer exists. Please refresh.'
+      });
+      fetchBlocks();
+      return;
+    }
     setEditingBlock(block);
     setIsFullDay(block.isFullDay);
     setSelectedDate(block.date);
@@ -276,12 +285,39 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Open delete dialog after checking block exists
+  const confirmDelete = (block: TimeOffBlockItem) => {
+    const blockExists = blocks.some(item => String(item.id) === String(block.id));
+    if (!blockExists) {
+      setFeedback({
+        type: 'error',
+        message: 'This time off block no longer exists. Please refresh.'
+      });
+      fetchBlocks();
+      return;
+    }
+    setDeletingBlock(block);
+  };
+
   // Save or update block
   const handleSaveBlock = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!selectedDate) {
       setFeedback({ type: 'error', message: 'Please select a date for the block.' });
       return;
+    }
+
+    if (editingBlock) {
+      const blockExists = blocks.some(item => String(item.id) === String(editingBlock.id));
+      if (!blockExists) {
+        setFeedback({
+          type: 'error',
+          message: 'This time off block no longer exists. Please refresh.'
+        });
+        resetForm();
+        await fetchBlocks();
+        return;
+      }
     }
 
     if (!isFullDay && !isTimeOrderValid) {
@@ -320,7 +356,7 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
         })
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         setFeedback({
           type: 'success',
@@ -332,6 +368,20 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
         await fetchBlocks();
         if (onAvailabilityChanged) onAvailabilityChanged();
       } else {
+        if (
+          res.status === 404 || 
+          data.error === 'NOT_FOUND' || 
+          data.message?.includes('no longer exists') || 
+          data.message?.includes('not found')
+        ) {
+          setFeedback({
+            type: 'error',
+            message: 'This time off block no longer exists. Please refresh.'
+          });
+          resetForm();
+          await fetchBlocks();
+          return;
+        }
         if (data.conflicts && data.conflicts.length > 0) {
           setConflicts(data.conflicts);
         }
@@ -353,13 +403,25 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
   // Delete block
   const handleDeleteBlock = async () => {
     if (!deletingBlock) return;
+
+    const blockExists = blocks.some(item => String(item.id) === String(deletingBlock.id));
+    if (!blockExists) {
+      setFeedback({
+        type: 'error',
+        message: 'This time off block no longer exists. Please refresh.'
+      });
+      setDeletingBlock(null);
+      await fetchBlocks();
+      return;
+    }
+
     setIsDeleting(true);
     try {
       const res = await fetch(`/api/instructor/time-off/${deletingBlock.id}`, {
         method: 'DELETE',
         headers: getAuthHeaders()
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         setFeedback({
           type: 'success',
@@ -369,7 +431,21 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
         await fetchBlocks();
         if (onAvailabilityChanged) onAvailabilityChanged();
       } else {
-        setFeedback({ type: 'error', message: data.message || 'Failed to delete block.' });
+        if (
+          res.status === 404 || 
+          data.error === 'NOT_FOUND' || 
+          data.message?.includes('no longer exists') || 
+          data.message?.includes('not found')
+        ) {
+          setFeedback({
+            type: 'error',
+            message: 'This time off block no longer exists. Please refresh.'
+          });
+          setDeletingBlock(null);
+          await fetchBlocks();
+          return;
+        }
+        setFeedback({ type: 'error', message: data.message || data.error || 'Failed to delete block.' });
       }
     } catch (err: any) {
       setFeedback({ type: 'error', message: err?.message || 'Server communication error.' });
@@ -968,7 +1044,7 @@ export const TimeOffManagement: React.FC<TimeOffManagementProps> = ({ onAvailabi
                         </button>
                         <button
                           type="button"
-                          onClick={() => setDeletingBlock(block)}
+                          onClick={() => confirmDelete(block)}
                           className="px-3 py-1.5 rounded-xl border border-red-200 hover:bg-red-50 text-red-600 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                           title="Remove block and restore availability"
                         >
