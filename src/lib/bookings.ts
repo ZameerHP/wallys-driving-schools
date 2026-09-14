@@ -271,10 +271,8 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
   const addItems = (items: BookingItem[]) => {
     for (const item of items) {
       if (item && item.ref && !resultsMap.has(item.ref)) {
-        // Only return paid, completed bookings to the customer Manage Booking screen
-        if (item.paymentStatus === 'paid') {
-          resultsMap.set(item.ref, item);
-        }
+        // Return active and confirmed bookings to the customer Manage Booking screen
+        resultsMap.set(item.ref, item);
       }
     }
   };
@@ -282,6 +280,17 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
   // 1. Direct query to Backend API by reference
   try {
     const res = await fetch(`/api/bookings/${encodeURIComponent(withPrefix)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && (data.bookingRef || data.booking_ref)) {
+        addItems([mapDbToBookingItem(data)]);
+      }
+    }
+  } catch {}
+
+  // Also query without prefix if user entered reference number
+  try {
+    const res = await fetch(`/api/bookings/${encodeURIComponent(clean)}`);
     if (res.ok) {
       const data = await res.json();
       if (data && (data.bookingRef || data.booking_ref)) {
@@ -599,6 +608,13 @@ export async function updateBookingInDb(
         if (updates.date) sbUpdates.lesson_date = updates.date;
         if (updates.time) sbUpdates.start_time = updates.time;
         if (updates.packageTitle) sbUpdates.lesson_type = updates.packageTitle;
+        if (updates.studentName) sbUpdates.student_name = updates.studentName;
+        if (updates.phone) sbUpdates.phone = updates.phone;
+        if (updates.email) sbUpdates.email = updates.email;
+        if (updates.suburb) sbUpdates.suburb = updates.suburb;
+        if (updates.pickupAddress !== undefined) sbUpdates.pickup_address = updates.pickupAddress;
+        if (updates.packagePrice !== undefined) sbUpdates.package_price = updates.packagePrice;
+        if (updates.paymentStatus) sbUpdates.payment_status = updates.paymentStatus;
         if (updates.notes !== undefined) sbUpdates.notes = updates.notes;
         else if (serverUpdatedItem?.notes) sbUpdates.notes = serverUpdatedItem.notes;
         sbUpdates.updated_at = new Date().toISOString();

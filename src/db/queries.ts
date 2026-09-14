@@ -1,5 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { db, isSqlConfigured } from './index.ts';
-import { users, bookings, contactMessages, bookingAuditLogs, emailLogs, webhookEvents } from './schema.ts';
+import { users, bookings, contactMessages, bookingAuditLogs, emailLogs, webhookEvents, instructorTimeOff } from './schema.ts';
 import { eq, desc, or, and, ne } from 'drizzle-orm';
 import { getSupabaseServerClient } from '../lib/supabase-server.ts';
 
@@ -537,16 +539,549 @@ export class BookingLockManager {
 
 export const bookingLock = new BookingLockManager();
 
-// Check if a time slot on a specific date is already taken by an active booking (authoritative double-booking prevention)
+// ============================================================================
+// Instructor Time Off & Availability Management
+// ============================================================================
+
+export interface TimeOffBlock {
+  id: number;
+  instructorId: string;
+  instructorName: string;
+  date: string; // 'YYYY-MM-DD'
+  isFullDay: boolean; // true = full day off, false = partial time window
+  startTime?: string | null; // e.g. "01:00 PM"
+  endTime?: string | null;   // e.g. "03:00 PM"
+  startMinutes?: number | null; // e.g. 780
+  endMinutes?: number | null;   // e.g. 900
+  reason?: string | null;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+const TIME_OFF_FILE = path.join(process.cwd(), 'data', 'instructor-time-off.json');
+
+function readTimeOffFile(): TimeOffBlock[] {
+  try {
+    if (fs.existsSync(TIME_OFF_FILE)) {
+      const data = fs.readFileSync(TIME_OFF_FILE, 'utf-8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.warn('[TimeOff] Error reading time-off file:', err);
+  }
+  return [];
+}
+
+function writeTimeOffFile(blocks: TimeOffBlock[]) {
+  try {
+    const dir = path.dirname(TIME_OFF_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(TIME_OFF_FILE, JSON.stringify(blocks, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[TimeOff] Error writing time-off file:', err);
+  }
+}
+
+// In-memory cache synced with disk and database
+let inMemoryTimeOff: TimeOffBlock[] = readTimeOffFile();
+
+export function timeStringToMinutes(timeStr: string): number | null {
+  if (!timeStr) return null;
+  const trimmed = timeStr.trim().replace(/\s+/g, ' ');
+  
+  // 12-hour format e.g. "1:00 PM", "01:30 PM", "9:00 AM"
+  const match12 = trimmed.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i);
+  if (match12) {
+    let h = parseInt(match12[1], 10);
+    const m = match12[2] ? parseInt(match12[2], 10) : 0;
+    const ampm = match12[3].toUpperCase();
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return h * 60 + m;
+  }
+  
+  // 24-hour format HH:MM e.g. "13:00", "09:30"
+  const match24 = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+  if (match24) {
+    const h = parseInt(match24[1], 10);
+    const m = parseInt(match24[2], 10);
+    return h * 60 + m;
+  }
+
+  return null;
+}
+
+export function minutesToTimeString(minutes: number): string {
+  const h24 = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const ampm = h24 >= 12 ? 'PM' : 'AM';
+  let h12 = h24 % 12;
+  if (h12 === 0) h12 = 12;
+  const mStr = m < 10 ? `0${m}` : `${m}`;
+  return `${h12}:${mStr} ${ampm}`;
+}
+
+let timeOffTableInitialized = false;
+async function ensureTimeOffTable() {
+  if (!db || !isSqlConfigured || timeOffTableInitialized) return;
+  try {
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS instructor_time_off (
+        id SERIAL PRIMARY KEY,
+        instructor_id TEXT NOT NULL DEFAULT 'wally',
+        instructor_name TEXT NOT NULL DEFAULT 'Wally',
+        date TEXT NOT NULL,
+        is_full_day INTEGER NOT NULL DEFAULT 0,
+        start_time TEXT,
+        end_time TEXT,
+        start_minutes INTEGER,
+        end_minutes INTEGER,
+        reason TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS time_off_date_idx ON instructor_time_off(date);
+      CREATE INDEX IF NOT EXISTS time_off_instructor_idx ON instructor_time_off(instructor_id);
+    `);
+    timeOffTableInitialized = true;
+  } catch (err) {
+    console.warn('[TimeOff] ensureTimeOffTable notice:', err);
+  }
+}
+
+// Retrieve time-off blocks, filtered by instructorId if provided
+export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBlock[]> {
+  await ensureTimeOffTable();
+
+  // Try fetching from SQL DB if configured
+  if (db && isSqlConfigured) {
+    try {
+      const rows = await db.select().from(instructorTimeOff);
+      if (rows && rows.length >= 0) {
+        const mapped: TimeOffBlock[] = rows.map(r => ({
+          id: r.id,
+          instructorId: r.instructorId || 'wally',
+          instructorName: r.instructorName || 'Wally',
+          date: r.date,
+          isFullDay: Boolean(r.isFullDay),
+          startTime: r.startTime,
+          endTime: r.endTime,
+          startMinutes: r.startMinutes,
+          endMinutes: r.endMinutes,
+          reason: r.reason,
+          createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+          updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
+        }));
+
+        // Keep in-memory store and file synced with latest DB state
+        inMemoryTimeOff = mapped;
+        writeTimeOffFile(mapped);
+
+        if (instructorId) {
+          return mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
+        }
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[TimeOff] SQL fetch error, falling back to cached file/memory store:', err);
+    }
+  }
+
+  // Fallback to in-memory store (initialized from file)
+  if (inMemoryTimeOff.length === 0) {
+    inMemoryTimeOff = readTimeOffFile();
+  }
+
+  if (instructorId) {
+    return inMemoryTimeOff.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
+  }
+  return inMemoryTimeOff;
+}
+
+// Check for conflicting active bookings before saving a time-off block
+export async function checkTimeOffBookingConflicts(
+  date: string,
+  isFullDay: boolean,
+  startMinutes?: number,
+  endMinutes?: number,
+  instructorId?: string,
+  excludeBlockId?: number
+): Promise<{ hasConflict: boolean; conflicts: any[] }> {
+  const normTargetDate = normalizeDate(date);
+  if (!normTargetDate) return { hasConflict: false, conflicts: [] };
+
+  const allBookings = await getBookings({ includeUnpaid: true });
+  const activeBookings = allBookings.filter(b => {
+    if (b.status === 'Cancelled') return false;
+    const bDate = normalizeDate(b.date);
+    return bDate === normTargetDate;
+  });
+
+  const conflicts: any[] = [];
+
+  for (const b of activeBookings) {
+    if (isFullDay) {
+      conflicts.push({
+        id: b.id,
+        bookingRef: b.bookingRef,
+        studentName: b.studentName,
+        date: b.date,
+        time: b.time,
+        phone: b.phone,
+        email: b.email,
+        packageTitle: b.packageTitle,
+        suburb: b.suburb,
+        pickupAddress: b.pickupAddress,
+        status: b.status,
+        conflictReason: 'Full day off overlaps this confirmed lesson'
+      });
+      continue;
+    }
+
+    if (startMinutes !== undefined && endMinutes !== undefined) {
+      const bInterval = parseTimeInterval(b.time);
+      if (bInterval) {
+        // A lesson overlaps the block if:
+        // lesson starts before block ends AND lesson ends after block starts
+        const overlaps = (bInterval.start < endMinutes) && (bInterval.end > startMinutes);
+        if (overlaps) {
+          conflicts.push({
+            id: b.id,
+            bookingRef: b.bookingRef,
+            studentName: b.studentName,
+            date: b.date,
+            time: b.time,
+            phone: b.phone,
+            email: b.email,
+            packageTitle: b.packageTitle,
+            suburb: b.suburb,
+            pickupAddress: b.pickupAddress,
+            status: b.status,
+            conflictReason: `Lesson (${b.time}) overlaps requested time-off period`
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    hasConflict: conflicts.length > 0,
+    conflicts
+  };
+}
+
+// Create a new time off block
+export async function createTimeOffBlock(data: {
+  instructorId?: string;
+  instructorName?: string;
+  date: string;
+  isFullDay: boolean;
+  startTime?: string;
+  endTime?: string;
+  reason?: string;
+}): Promise<TimeOffBlock> {
+  await ensureTimeOffTable();
+
+  const normDate = normalizeDate(data.date) || data.date;
+  const isFull = Boolean(data.isFullDay);
+  let startMin: number | null = null;
+  let endMin: number | null = null;
+
+  if (!isFull && data.startTime && data.endTime) {
+    startMin = timeStringToMinutes(data.startTime);
+    endMin = timeStringToMinutes(data.endTime);
+    if (startMin === null || endMin === null || endMin <= startMin) {
+      throw new Error("Invalid time window: End time must be after start time.");
+    }
+  }
+
+  // Pre-check for booking conflicts
+  const conflictCheck = await checkTimeOffBookingConflicts(
+    normDate,
+    isFull,
+    startMin ?? undefined,
+    endMin ?? undefined,
+    data.instructorId
+  );
+
+  if (conflictCheck.hasConflict) {
+    const error: any = new Error(`Cannot block time: this period overlaps ${conflictCheck.conflicts.length} existing booking(s). Please resolve them first.`);
+    error.code = 'BOOKING_CONFLICT';
+    error.conflicts = conflictCheck.conflicts;
+    throw error;
+  }
+
+  const now = new Date();
+  let createdBlock: TimeOffBlock;
+
+  if (db && isSqlConfigured) {
+    try {
+      const [inserted] = await db.insert(instructorTimeOff).values({
+        instructorId: data.instructorId || 'wally',
+        instructorName: data.instructorName || 'Wally',
+        date: normDate,
+        isFullDay: isFull ? 1 : 0,
+        startTime: isFull ? null : data.startTime,
+        endTime: isFull ? null : data.endTime,
+        startMinutes: startMin,
+        endMinutes: endMin,
+        reason: data.reason?.trim() || null,
+        createdAt: now,
+        updatedAt: now,
+      }).returning();
+
+      createdBlock = {
+        id: inserted.id,
+        instructorId: inserted.instructorId,
+        instructorName: inserted.instructorName,
+        date: inserted.date,
+        isFullDay: Boolean(inserted.isFullDay),
+        startTime: inserted.startTime,
+        endTime: inserted.endTime,
+        startMinutes: inserted.startMinutes,
+        endMinutes: inserted.endMinutes,
+        reason: inserted.reason,
+        createdAt: inserted.createdAt ? new Date(inserted.createdAt) : now,
+        updatedAt: inserted.updatedAt ? new Date(inserted.updatedAt) : now,
+      };
+    } catch (err) {
+      console.warn('[TimeOff] Failed inserting to SQL, generating local ID:', err);
+      createdBlock = {
+        id: Date.now(),
+        instructorId: data.instructorId || 'wally',
+        instructorName: data.instructorName || 'Wally',
+        date: normDate,
+        isFullDay: isFull,
+        startTime: isFull ? null : data.startTime,
+        endTime: isFull ? null : data.endTime,
+        startMinutes: startMin,
+        endMinutes: endMin,
+        reason: data.reason?.trim() || null,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+  } else {
+    createdBlock = {
+      id: Date.now(),
+      instructorId: data.instructorId || 'wally',
+      instructorName: data.instructorName || 'Wally',
+      date: normDate,
+      isFullDay: isFull,
+      startTime: isFull ? null : data.startTime,
+      endTime: isFull ? null : data.endTime,
+      startMinutes: startMin,
+      endMinutes: endMin,
+      reason: data.reason?.trim() || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  // Update in-memory and disk file
+  inMemoryTimeOff.push(createdBlock);
+  writeTimeOffFile(inMemoryTimeOff);
+
+  return createdBlock;
+}
+
+// Update an existing time off block
+export async function updateTimeOffBlock(
+  id: number,
+  data: {
+    date: string;
+    isFullDay: boolean;
+    startTime?: string;
+    endTime?: string;
+    reason?: string;
+  }
+): Promise<TimeOffBlock> {
+  await ensureTimeOffTable();
+
+  const normDate = normalizeDate(data.date) || data.date;
+  const isFull = Boolean(data.isFullDay);
+  let startMin: number | null = null;
+  let endMin: number | null = null;
+
+  if (!isFull && data.startTime && data.endTime) {
+    startMin = timeStringToMinutes(data.startTime);
+    endMin = timeStringToMinutes(data.endTime);
+    if (startMin === null || endMin === null || endMin <= startMin) {
+      throw new Error("Invalid time window: End time must be after start time.");
+    }
+  }
+
+  // Pre-check for booking conflicts
+  const conflictCheck = await checkTimeOffBookingConflicts(
+    normDate,
+    isFull,
+    startMin ?? undefined,
+    endMin ?? undefined,
+    undefined,
+    id
+  );
+
+  if (conflictCheck.hasConflict) {
+    const error: any = new Error(`Cannot update block: this period overlaps ${conflictCheck.conflicts.length} existing booking(s). Please resolve them first.`);
+    error.code = 'BOOKING_CONFLICT';
+    error.conflicts = conflictCheck.conflicts;
+    throw error;
+  }
+
+  const now = new Date();
+  let updatedBlock: TimeOffBlock | null = null;
+
+  if (db && isSqlConfigured) {
+    try {
+      const [updated] = await db.update(instructorTimeOff)
+        .set({
+          date: normDate,
+          isFullDay: isFull ? 1 : 0,
+          startTime: isFull ? null : data.startTime,
+          endTime: isFull ? null : data.endTime,
+          startMinutes: startMin,
+          endMinutes: endMin,
+          reason: data.reason?.trim() || null,
+          updatedAt: now,
+        })
+        .where(eq(instructorTimeOff.id, id))
+        .returning();
+
+      if (updated) {
+        updatedBlock = {
+          id: updated.id,
+          instructorId: updated.instructorId,
+          instructorName: updated.instructorName,
+          date: updated.date,
+          isFullDay: Boolean(updated.isFullDay),
+          startTime: updated.startTime,
+          endTime: updated.endTime,
+          startMinutes: updated.startMinutes,
+          endMinutes: updated.endMinutes,
+          reason: updated.reason,
+          createdAt: updated.createdAt ? new Date(updated.createdAt) : now,
+          updatedAt: updated.updatedAt ? new Date(updated.updatedAt) : now,
+        };
+      }
+    } catch (err) {
+      console.warn('[TimeOff] Failed updating in SQL:', err);
+    }
+  }
+
+  const idx = inMemoryTimeOff.findIndex(b => b.id === id);
+  if (idx !== -1) {
+    updatedBlock = {
+      ...inMemoryTimeOff[idx],
+      date: normDate,
+      isFullDay: isFull,
+      startTime: isFull ? null : data.startTime,
+      endTime: isFull ? null : data.endTime,
+      startMinutes: startMin,
+      endMinutes: endMin,
+      reason: data.reason?.trim() || null,
+      updatedAt: now,
+    };
+    inMemoryTimeOff[idx] = updatedBlock;
+    writeTimeOffFile(inMemoryTimeOff);
+  }
+
+  if (!updatedBlock) {
+    throw new Error(`Time off block with id ${id} not found.`);
+  }
+
+  return updatedBlock;
+}
+
+// Delete a time off block to restore availability
+export async function deleteTimeOffBlock(id: number, instructorId?: string): Promise<boolean> {
+  await ensureTimeOffTable();
+
+  if (db && isSqlConfigured) {
+    try {
+      await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, id));
+    } catch (err) {
+      console.warn('[TimeOff] Failed deleting from SQL:', err);
+    }
+  }
+
+  const initialLen = inMemoryTimeOff.length;
+  inMemoryTimeOff = inMemoryTimeOff.filter(b => b.id !== id);
+  writeTimeOffFile(inMemoryTimeOff);
+
+  return inMemoryTimeOff.length < initialLen || Boolean(db && isSqlConfigured);
+}
+
+// Authoritatively test if a date or time slot is blocked by instructor availability
+export async function checkDateOrSlotBlockedByTimeOff(
+  date: string,
+  time: string,
+  instructorId?: string
+): Promise<boolean> {
+  const normDate = normalizeDate(date);
+  if (!normDate) return false;
+
+  const allBlocks = await getTimeOffBlocks(instructorId);
+  const dateBlocks = allBlocks.filter(b => {
+    if (normalizeDate(b.date) !== normDate) return false;
+    if (instructorId && b.instructorId && b.instructorId.toLowerCase() !== instructorId.toLowerCase()) {
+      return false;
+    }
+    return true;
+  });
+
+  if (dateBlocks.length === 0) return false;
+
+  // 1. Any full day off block makes the whole day unavailable
+  if (dateBlocks.some(b => b.isFullDay)) {
+    return true;
+  }
+
+  // 2. Partial blocks check
+  const slotInterval = parseTimeInterval(time);
+  if (!slotInterval) {
+    const min = timeStringToMinutes(time);
+    if (min === null) return false;
+    const testInterval = { start: min, end: min + 60 };
+    return dateBlocks.some(b => {
+      if (b.isFullDay) return true;
+      if (b.startMinutes !== undefined && b.startMinutes !== null && b.endMinutes !== undefined && b.endMinutes !== null) {
+        return (testInterval.start < b.endMinutes) && (testInterval.end > b.startMinutes);
+      }
+      return false;
+    });
+  }
+
+  // Lesson is blocked if it overlaps any partial block:
+  // slot starts before block ends AND slot ends after block starts
+  return dateBlocks.some(b => {
+    if (b.isFullDay) return true;
+    if (b.startMinutes !== undefined && b.startMinutes !== null && b.endMinutes !== undefined && b.endMinutes !== null) {
+      return (slotInterval.start < b.endMinutes) && (slotInterval.end > b.startMinutes);
+    }
+    return false;
+  });
+}
+
+// Check if a time slot on a specific date is already taken by an active booking or blocked by instructor time off
 export async function checkSlotBooked(
   date: string, 
   time: string, 
   excludeRef?: string,
   customerEmail?: string,
-  customerPhone?: string
+  customerPhone?: string,
+  instructorId?: string
 ): Promise<boolean> {
   const normTargetDate = normalizeDate(date);
   if (!normTargetDate) return false;
+
+  // 0. Authoritatively enforce Instructor Availability / Time Off blocks first
+  const isTimeOffBlocked = await checkDateOrSlotBlockedByTimeOff(normTargetDate, time, instructorId);
+  if (isTimeOffBlocked) {
+    return true;
+  }
 
   const targetInterval = parseTimeInterval(time);
   const cleanEmail = customerEmail?.trim().toLowerCase();
@@ -1012,9 +1547,18 @@ export async function updateBooking(
       const numId = typeof id === 'number' ? id : parseInt(String(id).replace(/\D/g, ''), 10);
       const sbUpdates: Record<string, any> = {};
       if (updates.status) sbUpdates.status = updates.status;
-      if (updates.notes) sbUpdates.notes = updates.notes;
+      if (updates.notes !== undefined) sbUpdates.notes = updates.notes;
       if (updates.date) sbUpdates.lesson_date = updates.date;
       if (updates.time) sbUpdates.start_time = updates.time;
+      if (updates.packageTitle) sbUpdates.lesson_type = updates.packageTitle;
+      if (updates.studentName) sbUpdates.student_name = updates.studentName;
+      if (updates.phone) sbUpdates.phone = updates.phone;
+      if (updates.email) sbUpdates.email = updates.email;
+      if (updates.suburb) sbUpdates.suburb = updates.suburb;
+      if (updates.pickupAddress !== undefined) sbUpdates.pickup_address = updates.pickupAddress;
+      if (updates.packagePrice !== undefined) sbUpdates.package_price = updates.packagePrice;
+      if (updates.paymentStatus) sbUpdates.payment_status = updates.paymentStatus;
+      sbUpdates.updated_at = new Date().toISOString();
 
       if (!isNaN(numId)) {
         await supabase.from('bookings').update(sbUpdates).eq('id', numId);
@@ -1061,9 +1605,18 @@ export async function updateBookingByRef(
     try {
       const sbUpdates: Record<string, any> = {};
       if (updates.status) sbUpdates.status = updates.status;
-      if (updates.notes) sbUpdates.notes = updates.notes;
+      if (updates.notes !== undefined) sbUpdates.notes = updates.notes;
       if (updates.date) sbUpdates.lesson_date = updates.date;
       if (updates.time) sbUpdates.start_time = updates.time;
+      if (updates.packageTitle) sbUpdates.lesson_type = updates.packageTitle;
+      if (updates.studentName) sbUpdates.student_name = updates.studentName;
+      if (updates.phone) sbUpdates.phone = updates.phone;
+      if (updates.email) sbUpdates.email = updates.email;
+      if (updates.suburb) sbUpdates.suburb = updates.suburb;
+      if (updates.pickupAddress !== undefined) sbUpdates.pickup_address = updates.pickupAddress;
+      if (updates.packagePrice !== undefined) sbUpdates.package_price = updates.packagePrice;
+      if (updates.paymentStatus) sbUpdates.payment_status = updates.paymentStatus;
+      sbUpdates.updated_at = new Date().toISOString();
 
       await supabase.from('bookings').update(sbUpdates).ilike('notes', `%${cleanRef}%`);
     } catch {}
@@ -1089,6 +1642,14 @@ export async function updateBookingByRef(
       updatedAt: new Date(),
     };
     return inMemoryBookings[idx];
+  } else {
+    // If not currently in inMemoryBookings, add to merge cache
+    const existing = await getBookingByRef(cleanRef, { allowUnpaid: true });
+    if (existing) {
+      const merged = { ...existing, ...updates, updatedAt: new Date() };
+      inMemoryBookings.push(merged);
+      return merged;
+    }
   }
   return null;
 }

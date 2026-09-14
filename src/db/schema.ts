@@ -98,6 +98,25 @@ export const webhookEvents = pgTable('webhook_events', {
   processedAt: timestamp('processed_at').defaultNow(),
 });
 
+// Instructor availability and time off blocks (Full day off or partial time window)
+export const instructorTimeOff = pgTable('instructor_time_off', {
+  id: serial('id').primaryKey(),
+  instructorId: text('instructor_id').default('wally').notNull(),
+  instructorName: text('instructor_name').default('Wally').notNull(),
+  date: text('date').notNull(), // 'YYYY-MM-DD'
+  isFullDay: integer('is_full_day').default(0).notNull(), // 1 for full day, 0 for partial
+  startTime: text('start_time'), // e.g. "01:00 PM"
+  endTime: text('end_time'),     // e.g. "03:00 PM"
+  startMinutes: integer('start_minutes'), // e.g. 780
+  endMinutes: integer('end_minutes'),     // e.g. 900
+  reason: text('reason'),        // optional note
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  timeOffDateIdx: index('time_off_date_idx').on(table.date),
+  timeOffInstructorIdx: index('time_off_instructor_idx').on(table.instructorId),
+}));
+
 // Table relations
 export const usersRelations = relations(users, ({ many }) => ({
   bookings: many(bookings),

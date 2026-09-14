@@ -21,8 +21,16 @@ import {
   getBookingAuditLogs,
   isWebhookEventProcessed,
   recordWebhookEvent,
-  syncAllBookingsToSupabase
+  syncAllBookingsToSupabase,
+  getTimeOffBlocks,
+  createTimeOffBlock,
+  updateTimeOffBlock,
+  deleteTimeOffBlock,
+  checkTimeOffBookingConflicts,
+  timeStringToMinutes,
+  minutesToTimeString
 } from "./src/db/queries.ts";
+import { STANDARD_START_TIMES } from "./src/lib/bookingSlots.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
 import { validateAustralianPhone, validateWorkingEmail, validateInternationalPhone } from "./src/lib/validation.ts";
@@ -41,15 +49,6 @@ import {
   getResend,
   getFormattedSender
 } from "./src/server/email-reminder-service.ts";
-import {
-  getTimeOffBlocks,
-  addTimeOffBlock,
-  updateTimeOffBlock,
-  deleteTimeOffBlock,
-  findConflictingBookings,
-  isSlotBlockedByTimeOff,
-  getAvailabilityBlockedSlots
-} from "./src/server/instructorTimeOffService.ts";
 
 dotenv.config();
 
@@ -220,14 +219,6 @@ interface InstructorSession {
 }
 const activeInstructorSessions = new Map<string, InstructorSession>();
 
-export function isInstructorAuthToken(token: string | null | undefined): boolean {
-  if (!token) return false;
-  if (token === "wally_owner_session") return true;
-  if (typeof token === "string" && (token.startsWith("inst_") || token.startsWith("wally") || token.startsWith("owner_"))) return true;
-  const session = activeInstructorSessions.get(token);
-  return !!(session && Date.now() <= session.expiresAt);
-}
-
 export function attachInstructorOrAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
   let token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
@@ -235,23 +226,19 @@ export function attachInstructorOrAuth(req: express.Request, res: express.Respon
     token = req.headers["x-instructor-token"];
   }
 
-  if (token && isInstructorAuthToken(token)) {
+  if (token) {
     const instructorSession = activeInstructorSessions.get(token);
-    (req as any).instructor = instructorSession || {
-      token,
-      email: "wally@wallysdrivingschool.com.au",
-      name: "Wally (Owner & Lead Instructor)",
-      role: "instructor",
-      expiresAt: Date.now() + 8 * 60 * 60 * 1000
-    };
-    (req as any).user = {
-      uid: "instructor-wally",
-      id: "instructor-wally",
-      email: "wally@wallysdrivingschool.com.au",
-      name: "Wally (Owner & Lead Instructor)",
-      role: "instructor"
-    };
-    return next();
+    if (instructorSession && Date.now() <= instructorSession.expiresAt) {
+      (req as any).instructor = instructorSession;
+      (req as any).user = {
+        uid: "instructor-wally",
+        id: "instructor-wally",
+        email: instructorSession.email,
+        name: instructorSession.name,
+        role: "instructor"
+      };
+      return next();
+    }
   }
 
   return optionalAuth(req as AuthRequest, res, next);
@@ -268,20 +255,14 @@ export function requireInstructorOrAuth(req: express.Request, res: express.Respo
     return res.status(401).json({ error: "UNAUTHORIZED", message: "Instructor or authorized authentication required." });
   }
 
-  if (isInstructorAuthToken(token)) {
-    const instructorSession = activeInstructorSessions.get(token);
-    (req as any).instructor = instructorSession || {
-      token,
-      email: "wally@wallysdrivingschool.com.au",
-      name: "Wally (Owner & Lead Instructor)",
-      role: "instructor",
-      expiresAt: Date.now() + 8 * 60 * 60 * 1000
-    };
+  const instructorSession = activeInstructorSessions.get(token);
+  if (instructorSession && Date.now() <= instructorSession.expiresAt) {
+    (req as any).instructor = instructorSession;
     (req as any).user = {
       uid: "instructor-wally",
       id: "instructor-wally",
-      email: "wally@wallysdrivingschool.com.au",
-      name: "Wally (Owner & Lead Instructor)",
+      email: instructorSession.email,
+      name: instructorSession.name,
       role: "instructor"
     };
     return next();
@@ -454,17 +435,8 @@ app.post("/api/create-checkout-session", async (req, res) => {
     const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : `http://localhost:${PORT}`);
     const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    // Authoritative slot check & Time-Off check before creating checkout session
+    // Authoritative slot check before creating checkout session
     if (Array.isArray(lessons) && lessons.length > 0) {
-      for (const l of lessons) {
-        const timeOffCheck = isSlotBlockedByTimeOff(l.date, l.time);
-        if (timeOffCheck.isBlocked) {
-          return res.status(409).json({
-            error: "SLOT_BLOCKED_BY_INSTRUCTOR",
-            message: `Lesson on ${l.date} is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
-          });
-        }
-      }
       const batchCheck = await checkMultipleSlotsBooked(lessons, targetRef, studentEmail, studentPhone);
       if (!batchCheck.available) {
         return res.status(409).json({
@@ -473,13 +445,6 @@ app.post("/api/create-checkout-session", async (req, res) => {
         });
       }
     } else if (bookingDate && bookingTime) {
-      const timeOffCheck = isSlotBlockedByTimeOff(bookingDate, bookingTime);
-      if (timeOffCheck.isBlocked) {
-        return res.status(409).json({
-          error: "SLOT_BLOCKED_BY_INSTRUCTOR",
-          message: `The date ${bookingDate} is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
-        });
-      }
       const isTaken = await checkSlotBooked(bookingDate, bookingTime, targetRef, studentEmail, studentPhone);
       if (isTaken) {
         return res.status(409).json({
@@ -1731,7 +1696,7 @@ app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
 
 // Fetch bookings (all, or filtered by email/user) - only paid bookings for customer facing views
 
-// Fetch availability (booked slots only, no PII, real-time with zero caching)
+// Fetch availability (booked slots and instructor blocked periods, real-time with zero caching)
 app.get("/api/availability", async (req, res) => {
   try {
     res.set({
@@ -1741,11 +1706,19 @@ app.get("/api/availability", async (req, res) => {
     });
 
     const targetDate = req.query.date ? normalizeDate(String(req.query.date)) : undefined;
+    const instructorId = req.query.instructorId ? String(req.query.instructorId) : undefined;
     const list = await getBookings({ includeUnpaid: true });
     const now = Date.now();
     const PENDING_TIMEOUT_MS = 20 * 60 * 1000;
 
-    const bookedSlots = list
+    const bookedSlots: Array<{
+      date: string;
+      time: string;
+      status: string;
+      isFullDay?: boolean;
+      isPartialBlock?: boolean;
+      reason?: string | null;
+    }> = list
       .filter(b => {
         if (b.status === 'Cancelled') return false;
         // If pending and unpaid, check if timed out
@@ -1766,38 +1739,89 @@ app.get("/api/availability", async (req, res) => {
         status: b.status
       }));
 
-    // Merge in instructor availability blocks (Full Day Off & partial blocked slots)
-    const timeOffBlockedSlots = getAvailabilityBlockedSlots(targetDate);
-    const combinedSlots = [...bookedSlots, ...timeOffBlockedSlots];
+    // Incorporate instructor time-off blocks
+    const timeOffBlocks = await getTimeOffBlocks(instructorId);
+    for (const block of timeOffBlocks) {
+      const normBlockDate = normalizeDate(block.date);
+      if (!normBlockDate) continue;
+      if (targetDate && normBlockDate !== targetDate) continue;
 
-    res.json(combinedSlots);
+      if (block.isFullDay) {
+        // Mark full day off
+        bookedSlots.push({
+          date: normBlockDate,
+          time: 'FULL_DAY',
+          status: 'Blocked',
+          isFullDay: true,
+          reason: block.reason || 'Instructor Day Off'
+        });
+        // Also add each standard candidate slot as blocked so slot buttons are disabled
+        for (const slot of STANDARD_START_TIMES) {
+          bookedSlots.push({
+            date: normBlockDate,
+            time: slot.label,
+            status: 'Blocked',
+            isFullDay: true,
+            reason: block.reason || 'Instructor Day Off'
+          });
+        }
+      } else if (
+        block.startMinutes !== null && 
+        block.startMinutes !== undefined && 
+        block.endMinutes !== null && 
+        block.endMinutes !== undefined
+      ) {
+        // Partial block (e.g. 1:00 PM to 3:00 PM)
+        // Mark standard slots whose 60-min window overlaps with the block
+        for (const slot of STANDARD_START_TIMES) {
+          const slotStart = slot.startMinutes;
+          const slotEnd = slotStart + 60; // 1-hour default lesson
+          if (slotStart < block.endMinutes && slotEnd > block.startMinutes) {
+            bookedSlots.push({
+              date: normBlockDate,
+              time: slot.label,
+              status: 'Blocked',
+              isPartialBlock: true,
+              reason: block.reason || 'Instructor Time Off'
+            });
+          }
+        }
+
+        // Also push the formatted window label
+        if (block.startTime && block.endTime) {
+          bookedSlots.push({
+            date: normBlockDate,
+            time: `${block.startTime} – ${block.endTime}`,
+            status: 'Blocked',
+            isPartialBlock: true,
+            reason: block.reason || 'Instructor Time Off'
+          });
+        }
+      }
+    }
+
+    res.json(bookedSlots);
   } catch (error: any) {
     console.error("Error fetching availability:", error);
     res.status(500).json({ error: "Failed to fetch availability" });
   }
 });
 
-// Fetch all instructor blocked days (public, real-time zero-cache for calendar disabled day rendering)
-app.get("/api/availability/blocked-days", async (req, res) => {
+// Lightweight public endpoint returning upcoming time off blocks (no PII) for calendar indicators
+app.get("/api/availability/time-off", async (req, res) => {
   try {
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
       'Pragma': 'no-cache',
       'Expires': '0',
     });
-    const blocks = await getTimeOffBlocks();
-    const fullDayOffDates = blocks
-      .filter(b => b.isFullDay)
-      .map(b => ({
-        date: b.date,
-        reason: b.reason || "Instructor Day Off"
-      }));
-
+    const instructorId = req.query.instructorId ? String(req.query.instructorId) : undefined;
+    const blocks = await getTimeOffBlocks(instructorId);
     res.json({
       success: true,
-      fullDayOffDates,
       blocks: blocks.map(b => ({
         id: b.id,
+        instructorId: b.instructorId,
         date: b.date,
         isFullDay: b.isFullDay,
         startTime: b.startTime,
@@ -1806,8 +1830,8 @@ app.get("/api/availability/blocked-days", async (req, res) => {
       }))
     });
   } catch (error: any) {
-    console.error("Error fetching blocked days:", error);
-    res.status(500).json({ error: "Failed to fetch blocked days" });
+    console.error("Error fetching time-off availability:", error);
+    res.status(500).json({ error: "Failed to fetch time-off availability" });
   }
 });
 
@@ -1828,17 +1852,6 @@ app.get("/api/check-slot", async (req, res) => {
 
     if (!date || !time) {
       return res.status(400).json({ error: "Missing date or time parameter" });
-    }
-
-    // Check against Instructor Time-Off Blocks
-    const timeOffCheck = isSlotBlockedByTimeOff(date, time);
-    if (timeOffCheck.isBlocked) {
-      return res.json({
-        available: false,
-        date,
-        time,
-        message: timeOffCheck.reason || "This time slot is blocked by instructor availability."
-      });
     }
 
     const isBooked = await checkSlotBooked(date, time, excludeRef, email, phone);
@@ -1868,18 +1881,6 @@ app.post("/api/check-slots", async (req, res) => {
       return res.status(400).json({ error: "Missing or invalid lessons array" });
     }
 
-    // Check each lesson against Instructor Time-Off Blocks
-    for (const l of lessons) {
-      const timeOffCheck = isSlotBlockedByTimeOff(l.date, l.time);
-      if (timeOffCheck.isBlocked) {
-        return res.status(409).json({
-          available: false,
-          conflicts: [`Lesson on ${l.date} at ${l.time} is unavailable: ${timeOffCheck.reason || 'Instructor Time Off'}`],
-          message: `Lesson on ${l.date} at ${l.time} is unavailable due to instructor schedule.`
-        });
-      }
-    }
-
     const check = await checkMultipleSlotsBooked(lessons, excludeRef, email, phone);
     if (!check.available) {
       return res.status(409).json({
@@ -1904,8 +1905,7 @@ app.get("/api/bookings", attachInstructorOrAuth, async (req: AuthRequest, res) =
   try {
     const email = (req.query.email as string) || undefined;
     const userId = req.user?.uid;
-    const isInstructor = Boolean((req as any).instructor);
-    const list = await getBookings({ email, userId, includeUnpaid: isInstructor });
+    const list = await getBookings({ email, userId, includeUnpaid: true });
     res.json(list);
   } catch (error: any) {
     console.error("Error fetching bookings:", error);
@@ -1913,14 +1913,13 @@ app.get("/api/bookings", attachInstructorOrAuth, async (req: AuthRequest, res) =
   }
 });
 
-// Lookup booking by reference code (WD-XXXX) - only returns paid bookings to customers
-app.get("/api/bookings/:ref", attachInstructorOrAuth, async (req: AuthRequest, res) => {
+// Lookup booking by reference code (WD-XXXX) - supports both student and instructor queries
+app.get(["/api/bookings/:ref", "/api/bookings/ref/:ref"], attachInstructorOrAuth, async (req: AuthRequest, res) => {
   try {
     const ref = req.params.ref;
-    const isInstructor = Boolean((req as any).instructor);
-    const booking = await getBookingByRef(ref, { allowUnpaid: isInstructor });
+    const booking = await getBookingByRef(ref, { allowUnpaid: true });
     if (!booking) {
-      return res.status(404).json({ error: "Booking not found or payment not completed" });
+      return res.status(404).json({ error: "Booking not found" });
     }
     res.json(booking);
   } catch (error: any) {
@@ -1974,28 +1973,6 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
 
     // Double booking verification: multi-lesson batch or single slot
     const canOverrideSlot = Boolean(allowOverride && isInstructor);
-    if (!canOverrideSlot) {
-      if (hasMultipleLessons) {
-        for (const l of lessons) {
-          const timeOffCheck = isSlotBlockedByTimeOff(l.date, l.time);
-          if (timeOffCheck.isBlocked) {
-            return res.status(409).json({
-              error: "SLOT_BLOCKED_BY_INSTRUCTOR",
-              message: `Lesson on ${l.date} at ${l.time} is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
-            });
-          }
-        }
-      } else {
-        const timeOffCheck = isSlotBlockedByTimeOff(primaryDate, primaryTime);
-        if (timeOffCheck.isBlocked) {
-          return res.status(409).json({
-            error: "SLOT_BLOCKED_BY_INSTRUCTOR",
-            message: `This date/time is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
-          });
-        }
-      }
-    }
-
     if (hasMultipleLessons) {
       const batchCheck = await checkMultipleSlotsBooked(lessons, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
       if (!batchCheck.available && !canOverrideSlot) {
@@ -2221,13 +2198,6 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
     }
 
     if (req.body.date && req.body.time) {
-      const timeOffCheck = isSlotBlockedByTimeOff(req.body.date, req.body.time);
-      if (timeOffCheck.isBlocked) {
-        return res.status(409).json({
-          error: "SLOT_BLOCKED_BY_INSTRUCTOR",
-          message: `The selected reschedule date/time is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
-        });
-      }
       const isTaken = await checkSlotBooked(req.body.date, req.body.time, String(id));
       if (isTaken) {
         return res.status(409).json({
@@ -2324,13 +2294,6 @@ app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => 
     }
     
     if (req.body.date && req.body.time) {
-      const timeOffCheck = isSlotBlockedByTimeOff(req.body.date, req.body.time);
-      if (timeOffCheck.isBlocked) {
-        return res.status(409).json({
-          error: "SLOT_BLOCKED_BY_INSTRUCTOR",
-          message: `The selected reschedule date/time is unavailable: ${timeOffCheck.reason || 'Instructor has scheduled time off'}`
-        });
-      }
       const isTaken = await checkSlotBooked(req.body.date, req.body.time, ref);
       if (isTaken) {
         return res.status(409).json({
@@ -2424,143 +2387,172 @@ app.delete("/api/bookings/ref/:ref", requireInstructorOrAuth, async (req, res) =
 });
 
 // ----------------------------------------------------------------------------
-// Instructor Availability / Time Off API
+// Instructor Availability / Time Off API (Guarded for Instructor/Admin)
 // ----------------------------------------------------------------------------
 
-// 1. Get all blocks for instructor
+// List all time off blocks
 app.get("/api/instructor/time-off", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const instructorId = (req.query.instructorId as string) || "wally";
+    const instructorId = (req.query.instructorId as string) || (req as any).instructor?.id || undefined;
     const blocks = await getTimeOffBlocks(instructorId);
     res.json({ success: true, blocks });
-  } catch (err: any) {
-    console.error("Error fetching time-off blocks:", err);
-    res.status(500).json({ error: err.message || "Failed to fetch time-off blocks" });
+  } catch (error: any) {
+    console.error("Error listing instructor time off:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch time off settings" });
   }
 });
 
-// 2. Check for conflicting student bookings before adding/updating a block
+// Real-time conflict checker before saving time off
 app.post("/api/instructor/time-off/check-conflicts", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const { date, isFullDay, startTime, endTime, instructorId } = req.body;
+    const { date, isFullDay, startTime, endTime, instructorId, excludeBlockId } = req.body || {};
     if (!date) {
-      return res.status(400).json({ error: "Missing required date parameter" });
+      return res.status(400).json({ error: "Date is required" });
     }
-    const conflicts = await findConflictingBookings(
+
+    let startMin: number | undefined;
+    let endMin: number | undefined;
+    if (!isFullDay && startTime && endTime) {
+      const s = timeStringToMinutes(startTime);
+      const e = timeStringToMinutes(endTime);
+      if (s !== null && e !== null) {
+        startMin = s;
+        endMin = e;
+      }
+    }
+
+    const check = await checkTimeOffBookingConflicts(
       date,
       Boolean(isFullDay),
-      startTime,
-      endTime,
-      instructorId || "wally"
+      startMin,
+      endMin,
+      instructorId,
+      excludeBlockId ? parseInt(String(excludeBlockId), 10) : undefined
     );
-    res.json({ success: true, hasConflicts: conflicts.length > 0, conflicts });
-  } catch (err: any) {
-    console.error("Error checking conflicts:", err);
-    res.status(500).json({ error: err.message || "Failed to check conflicts" });
+
+    res.json({
+      hasConflict: check.hasConflict,
+      conflicts: check.conflicts
+    });
+  } catch (error: any) {
+    console.error("Error checking time-off conflicts:", error);
+    res.status(500).json({ error: error.message || "Failed to check conflicts" });
   }
 });
 
-// 3. Create a new time-off block (with double-booking protection & audit logging)
+// Create time off block
 app.post("/api/instructor/time-off", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const { date, isFullDay, startTime, endTime, reason, instructorId, overrideConflicts } = req.body;
+    const { date, isFullDay, startTime, endTime, reason, instructorId, instructorName } = req.body || {};
     if (!date) {
-      return res.status(400).json({ error: "Missing required date parameter" });
+      return res.status(400).json({ error: "Date is required" });
     }
 
-    const result = await addTimeOffBlock({
+    const isFull = Boolean(isFullDay);
+    if (!isFull && (!startTime || !endTime)) {
+      return res.status(400).json({ error: "Start time and end time are required for partial time off." });
+    }
+
+    const created = await createTimeOffBlock({
       date,
-      isFullDay: Boolean(isFullDay),
-      startTime,
-      endTime,
+      isFullDay: isFull,
+      startTime: isFull ? undefined : startTime,
+      endTime: isFull ? undefined : endTime,
       reason,
-      instructorId: instructorId || "wally",
-      overrideConflicts: Boolean(overrideConflicts)
+      instructorId: instructorId || 'wally',
+      instructorName: instructorName || 'Wally'
     });
 
-    if (!result.success) {
+    logBookingAudit({
+      bookingRef: 'TIME-OFF',
+      action: 'instructor_time_off_created',
+      performedBy: 'instructor',
+      newState: JSON.stringify(created),
+      notes: isFull ? `Full day off set for ${date}` : `Time off block set for ${date} (${startTime} - ${endTime})`
+    }).catch(e => console.error("[Audit] Error logging time off creation:", e));
+
+    res.status(201).json({ success: true, block: created });
+  } catch (error: any) {
+    if (error.code === 'BOOKING_CONFLICT') {
       return res.status(409).json({
-        success: false,
-        error: result.message || "Conflict with existing bookings",
-        conflicts: result.conflicts
+        error: "BOOKING_CONFLICT",
+        message: error.message,
+        conflicts: error.conflicts || []
       });
     }
-
-    logBookingAudit({
-      bookingRef: "AVAILABILITY-BLOCK",
-      action: "create",
-      newState: "active",
-      notes: `Instructor blocked ${isFullDay ? "Full Day" : `${startTime} - ${endTime}`} on ${date}. Reason: ${reason || "None"}${overrideConflicts ? " (Conflicts Overridden)" : ""}`
-    }).catch(e => console.error("[Audit] Error:", e));
-
-    res.json({ success: true, block: result.block });
-  } catch (err: any) {
-    console.error("Error creating time-off block:", err);
-    res.status(500).json({ error: err.message || "Failed to create time-off block" });
+    console.error("Error creating time off block:", error);
+    res.status(400).json({ error: error.message || "Failed to create time off block" });
   }
 });
 
-// 4. Update an existing time-off block
+// Update time off block
 app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const id = req.params.id;
-    const { date, isFullDay, startTime, endTime, reason, instructorId, overrideConflicts } = req.body;
-    if (!date) {
-      return res.status(400).json({ error: "Missing required date parameter" });
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid block ID" });
     }
 
-    const result = await updateTimeOffBlock(id, {
+    const { date, isFullDay, startTime, endTime, reason } = req.body || {};
+    if (!date) {
+      return res.status(400).json({ error: "Date is required" });
+    }
+
+    const isFull = Boolean(isFullDay);
+    if (!isFull && (!startTime || !endTime)) {
+      return res.status(400).json({ error: "Start time and end time are required for partial time off." });
+    }
+
+    const updated = await updateTimeOffBlock(id, {
       date,
-      isFullDay: Boolean(isFullDay),
-      startTime,
-      endTime,
-      reason,
-      instructorId: instructorId || "wally",
-      overrideConflicts: Boolean(overrideConflicts)
+      isFullDay: isFull,
+      startTime: isFull ? undefined : startTime,
+      endTime: isFull ? undefined : endTime,
+      reason
     });
 
-    if (!result.success) {
+    logBookingAudit({
+      bookingRef: 'TIME-OFF',
+      action: 'instructor_time_off_updated',
+      performedBy: 'instructor',
+      newState: JSON.stringify(updated),
+      notes: `Updated time off block #${id}`
+    }).catch(e => console.error("[Audit] Error logging time off update:", e));
+
+    res.json({ success: true, block: updated });
+  } catch (error: any) {
+    if (error.code === 'BOOKING_CONFLICT') {
       return res.status(409).json({
-        success: false,
-        error: result.message || "Cannot update time-off block due to conflicts",
-        conflicts: result.conflicts
+        error: "BOOKING_CONFLICT",
+        message: error.message,
+        conflicts: error.conflicts || []
       });
     }
-
-    logBookingAudit({
-      bookingRef: "AVAILABILITY-BLOCK",
-      action: "reschedule",
-      newState: "updated",
-      notes: `Instructor updated block #${id} on ${date}: ${isFullDay ? "Full Day" : `${startTime} - ${endTime}`}`
-    }).catch(e => console.error("[Audit] Error:", e));
-
-    res.json({ success: true, block: result.block });
-  } catch (err: any) {
-    console.error("Error updating time-off block:", err);
-    res.status(500).json({ error: err.message || "Failed to update time-off block" });
+    console.error("Error updating time off block:", error);
+    res.status(400).json({ error: error.message || "Failed to update time off block" });
   }
 });
 
-// 5. Delete time-off block
+// Delete time off block to restore availability
 app.delete("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const id = req.params.id;
-    const deleted = await deleteTimeOffBlock(id);
-    if (!deleted) {
-      return res.status(404).json({ error: "Time-off block not found or already deleted" });
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid block ID" });
     }
 
+    await deleteTimeOffBlock(id);
     logBookingAudit({
-      bookingRef: "AVAILABILITY-BLOCK",
-      action: "cancel",
-      newState: "deleted",
-      notes: `Instructor deleted time-off block #${id}`
-    }).catch(e => console.error("[Audit] Error:", e));
+      bookingRef: 'TIME-OFF',
+      action: 'instructor_time_off_deleted',
+      performedBy: 'instructor',
+      notes: `Deleted time off block #${id}. Availability restored.`
+    }).catch(e => console.error("[Audit] Error logging time off delete:", e));
 
-    res.json({ success: true, message: "Time-off block removed successfully" });
-  } catch (err: any) {
-    console.error("Error deleting time-off block:", err);
-    res.status(500).json({ error: err.message || "Failed to delete time-off block" });
+    res.json({ success: true, message: "Time off block removed. Availability restored." });
+  } catch (error: any) {
+    console.error("Error deleting time off block:", error);
+    res.status(500).json({ error: error.message || "Failed to delete time off block" });
   }
 });
 

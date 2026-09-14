@@ -266,7 +266,7 @@ export const FAQS = [
     answer: 'Lessons are typically held in your local area or the area where you plan to take your driving test. We offer pick-up and drop-off services for your convenience.'
   },
   {
-    question: 'When does Wally\'s Driving School offer lessons?',
+    question: 'When does Wallys Driving School offer lessons?',
     answer: 'We offer flexible lesson times, everyday from 8am to 8pm, to accommodate your busy schedule.'
   },
   {
