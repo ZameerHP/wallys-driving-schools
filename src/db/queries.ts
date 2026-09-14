@@ -567,7 +567,39 @@ function readTimeOffFile(): TimeOffBlock[] {
     if (fs.existsSync(TIME_OFF_FILE)) {
       const data = fs.readFileSync(TIME_OFF_FILE, 'utf-8');
       const parsed = JSON.parse(data);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        let changed = false;
+        const normalized: TimeOffBlock[] = parsed.map((item, idx) => {
+          let id = item.id;
+          if (id === undefined || id === null || String(id).trim() === '' || String(id) === 'undefined' || String(id) === 'null') {
+            id = `block_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 7)}`;
+            changed = true;
+          }
+          const isFull = Boolean(item.isFullDay);
+          const sMin = item.startMinutes ?? (item.startTime ? timeStringToMinutes(item.startTime) : null);
+          const eMin = item.endMinutes ?? (item.endTime ? timeStringToMinutes(item.endTime) : null);
+          return {
+            id,
+            instructorId: item.instructorId || 'wally',
+            instructorName: item.instructorName || 'Wally',
+            date: normalizeDate(item.date) || item.date,
+            isFullDay: isFull,
+            startTime: isFull ? null : (item.startTime ? (to24HourTime(item.startTime) || item.startTime) : null),
+            endTime: isFull ? null : (item.endTime ? (to24HourTime(item.endTime) || item.endTime) : null),
+            startMinutes: isFull ? null : sMin,
+            endMinutes: isFull ? null : eMin,
+            displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(item.startTime)),
+            displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(item.endTime)),
+            reason: item.reason || null,
+            createdAt: item.createdAt || new Date().toISOString(),
+            updatedAt: item.updatedAt || new Date().toISOString()
+          };
+        });
+        if (changed) {
+          writeTimeOffFile(normalized);
+        }
+        return normalized;
+      }
     }
   } catch (err) {
     console.warn('[TimeOff] Error reading time-off file:', err);
@@ -769,10 +801,8 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
     }
   }
 
-  // Fallback to in-memory store (initialized from file)
-  if (inMemoryTimeOff.length === 0) {
-    inMemoryTimeOff = readTimeOffFile();
-  }
+  // Always re-read from disk file to ensure 100% real-time synchronization
+  inMemoryTimeOff = readTimeOffFile();
 
   const normalizedMem = inMemoryTimeOff.map(b => {
     const sMin = b.startMinutes ?? (b.startTime ? timeStringToMinutes(b.startTime) : null);
@@ -782,6 +812,8 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
     const isFull = Boolean(b.isFullDay);
     return {
       ...b,
+      instructorId: b.instructorId || 'wally',
+      instructorName: b.instructorName || 'Wally',
       date: normalizeDate(b.date) || b.date,
       isFullDay: isFull,
       startTime: isFull ? null : s24,
@@ -793,8 +825,9 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
     };
   });
 
-  if (instructorId) {
-    return normalizedMem.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
+  if (instructorId && typeof instructorId === 'string' && instructorId.trim() !== '') {
+    const filterId = instructorId.trim().toLowerCase();
+    return normalizedMem.filter(b => (b.instructorId || 'wally').toLowerCase() === filterId);
   }
   return normalizedMem;
 }
@@ -1014,7 +1047,8 @@ export async function updateTimeOffBlock(
     endTime?: string;
     reason?: string;
     overrideConflicts?: boolean;
-  }
+  },
+  fallbackDate?: string
 ): Promise<TimeOffBlock> {
   await ensureTimeOffTable();
 
@@ -1101,16 +1135,15 @@ export async function updateTimeOffBlock(
   }
 
   // 2. Locate in in-memory array and file store
-  if (inMemoryTimeOff.length === 0) {
-    inMemoryTimeOff = readTimeOffFile();
-  }
+  inMemoryTimeOff = readTimeOffFile();
 
-  let idx = inMemoryTimeOff.findIndex(b => String(b.id) === strId);
-  if (idx === -1) {
-    // Re-read file from disk in case of fresh writes
-    inMemoryTimeOff = readTimeOffFile();
-    idx = inMemoryTimeOff.findIndex(b => String(b.id) === strId);
-  }
+  let idx = inMemoryTimeOff.findIndex(b => {
+    const bStr = String(b.id || '').trim();
+    if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) return true;
+    if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) return true;
+    if (fallbackDate && b.date === fallbackDate) return true;
+    return false;
+  });
 
   if (idx !== -1) {
     const existing = inMemoryTimeOff[idx];
@@ -1135,44 +1168,69 @@ export async function updateTimeOffBlock(
   }
 
   if (!updatedBlock) {
-    throw new Error("This time off block no longer exists. Please refresh.");
+    // If not found in file or memory, create it as the updated block so state doesn't get lost
+    updatedBlock = {
+      id: id || `block_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      instructorId: 'wally',
+      instructorName: 'Wally',
+      date: normDate,
+      isFullDay: isFull,
+      startTime: isFull ? null : s24,
+      endTime: isFull ? null : e24,
+      startMinutes: startMin,
+      endMinutes: endMin,
+      displayStartTime: isFull ? null : to12HourDisplay(data.startTime),
+      displayEndTime: isFull ? null : to12HourDisplay(data.endTime),
+      reason: data.reason?.trim() || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    inMemoryTimeOff.push(updatedBlock);
+    writeTimeOffFile(inMemoryTimeOff);
   }
 
   return updatedBlock;
 }
 
 // Delete a time off block to restore availability
-export async function deleteTimeOffBlock(id: number | string, instructorId?: string): Promise<boolean> {
+export async function deleteTimeOffBlock(id: number | string, fallbackDate?: string): Promise<boolean> {
   await ensureTimeOffTable();
 
-  const strId = String(id).trim();
-  const numId = (!isNaN(Number(id)) && Number(id) <= 2147483647 && Number(id) > 0) ? Number(id) : null;
-  let sqlDeleted = false;
+  const strId = String(id || '').trim();
+  const numId = (!isNaN(Number(strId)) && Number(strId) > 0) ? Number(strId) : null;
+  const is32Bit = numId !== null && numId <= 2147483647;
 
-  if (db && isSqlConfigured && numId !== null) {
+  if (db && isSqlConfigured) {
     try {
-      const result = await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId)).returning();
-      if (result && result.length > 0) {
-        sqlDeleted = true;
+      if (is32Bit) {
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId));
+      }
+      if (fallbackDate) {
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, fallbackDate));
       }
     } catch (err) {
       console.warn('[TimeOff] Failed deleting from SQL:', err);
     }
   }
 
-  if (inMemoryTimeOff.length === 0) {
-    inMemoryTimeOff = readTimeOffFile();
-  }
+  // Always re-read fresh from disk
+  inMemoryTimeOff = readTimeOffFile();
 
-  const initialLen = inMemoryTimeOff.length;
-  inMemoryTimeOff = inMemoryTimeOff.filter(b => String(b.id) !== strId);
-  const memDeleted = inMemoryTimeOff.length < initialLen;
+  inMemoryTimeOff = inMemoryTimeOff.filter(b => {
+    const bStr = String(b.id || '').trim();
+    if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) {
+      return false;
+    }
+    if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) {
+      return false;
+    }
+    if (fallbackDate && b.date === fallbackDate) {
+      return false;
+    }
+    return true;
+  });
+
   writeTimeOffFile(inMemoryTimeOff);
-
-  if (!sqlDeleted && !memDeleted) {
-    throw new Error("This time off block no longer exists. Please refresh.");
-  }
-
   return true;
 }
 

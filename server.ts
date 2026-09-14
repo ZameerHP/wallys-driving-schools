@@ -2601,13 +2601,18 @@ app.post("/api/instructor/time-off", requireInstructorOrAuth, async (req: expres
 });
 
 // Update time off block
-app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+app.put(["/api/instructor/time-off", "/api/instructor/time-off/:id"], requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
-    const rawId = req.params.id;
-    if (!rawId || String(rawId).trim() === "") {
-      return res.status(400).json({ error: "Invalid block ID" });
+    const rawId = req.params.id || req.body?.id || req.query?.id;
+    const fallbackDate = req.body?.date || req.query?.date;
+    const isIdInvalid = !rawId || String(rawId).trim() === "" || String(rawId) === "undefined" || String(rawId) === "null";
+    if (isIdInvalid && !fallbackDate) {
+      return res.status(400).json({ error: "Invalid block ID: Missing block ID or date parameter." });
     }
-    const id = (!isNaN(Number(rawId)) && Number(rawId) <= 2147483647 && Number(rawId) > 0) ? Number(rawId) : rawId;
+
+    const cleanId = !isIdInvalid ? String(rawId).trim() : (fallbackDate ? `date_${fallbackDate}` : '');
+    const numId = (!isNaN(Number(cleanId)) && Number(cleanId) > 0) ? Number(cleanId) : null;
+    const targetId = numId !== null ? numId : cleanId;
 
     const { date, isFullDay, startTime, endTime, reason, overrideConflicts } = req.body || {};
     if (!date) {
@@ -2619,21 +2624,21 @@ app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: exp
       return res.status(400).json({ error: "Start time and end time are required for partial time off." });
     }
 
-    const updated = await updateTimeOffBlock(id, {
+    const updated = await updateTimeOffBlock(targetId, {
       date,
       isFullDay: isFull,
       startTime: isFull ? undefined : startTime,
       endTime: isFull ? undefined : endTime,
       reason,
       overrideConflicts: Boolean(overrideConflicts)
-    });
+    }, fallbackDate ? String(fallbackDate).trim() : undefined);
 
     logBookingAudit({
       bookingRef: 'TIME-OFF',
       action: 'instructor_time_off_updated',
       performedBy: 'instructor',
       newState: JSON.stringify(updated),
-      notes: `Updated time off block #${id}`
+      notes: `Updated time off block #${targetId}`
     }).catch(e => console.error("[Audit] Error logging time off update:", e));
 
     res.json({ success: true, block: updated });
@@ -2645,46 +2650,43 @@ app.put("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: exp
         conflicts: error.conflicts || []
       });
     }
-    if (error.message?.includes("no longer exists") || error.message?.includes("not found")) {
-      return res.status(404).json({
-        error: "NOT_FOUND",
-        message: "This time off block no longer exists. Please refresh."
-      });
-    }
     console.error("Error updating time off block:", error);
     res.status(400).json({ error: error.message || "Failed to update time off block" });
   }
 });
 
-// Delete time off block to restore availability
-app.delete("/api/instructor/time-off/:id", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+// Delete time off block to restore availability (supports DELETE and POST delete fallback)
+const handleDeleteTimeOff = async (req: express.Request, res: express.Response) => {
   try {
-    const rawId = req.params.id;
-    if (!rawId || String(rawId).trim() === "") {
-      return res.status(400).json({ error: "Invalid block ID" });
+    const rawId = req.params.id || req.body?.id || req.query?.id;
+    const fallbackDate = req.body?.date || req.query?.date;
+    const isIdInvalid = !rawId || String(rawId).trim() === "" || String(rawId) === "undefined" || String(rawId) === "null";
+    
+    if (isIdInvalid && !fallbackDate) {
+      return res.status(400).json({ error: "Invalid block ID: Missing block ID or date parameter." });
     }
-    const id = (!isNaN(Number(rawId)) && Number(rawId) <= 2147483647 && Number(rawId) > 0) ? Number(rawId) : rawId;
 
-    await deleteTimeOffBlock(id);
+    const cleanId = !isIdInvalid ? String(rawId).trim() : (fallbackDate ? `date_${fallbackDate}` : '');
+    const numId = (!isNaN(Number(cleanId)) && Number(cleanId) > 0) ? Number(cleanId) : null;
+    const targetId = numId !== null ? numId : cleanId;
+
+    await deleteTimeOffBlock(targetId, fallbackDate ? String(fallbackDate).trim() : undefined);
     logBookingAudit({
       bookingRef: 'TIME-OFF',
       action: 'instructor_time_off_deleted',
       performedBy: 'instructor',
-      notes: `Deleted time off block #${id}. Availability restored.`
+      notes: `Deleted time off block #${targetId} (${fallbackDate || ''}). Availability restored.`
     }).catch(e => console.error("[Audit] Error logging time off delete:", e));
 
     res.json({ success: true, message: "Time off block removed. Availability restored." });
   } catch (error: any) {
-    if (error.message?.includes("no longer exists") || error.message?.includes("not found")) {
-      return res.status(404).json({
-        error: "NOT_FOUND",
-        message: "This time off block no longer exists. Please refresh."
-      });
-    }
     console.error("Error deleting time off block:", error);
     res.status(500).json({ error: error.message || "Failed to delete time off block" });
   }
-});
+};
+
+app.delete(["/api/instructor/time-off", "/api/instructor/time-off/:id"], requireInstructorOrAuth, handleDeleteTimeOff);
+app.post("/api/instructor/time-off/delete", requireInstructorOrAuth, handleDeleteTimeOff);
 
 // Submit contact form inquiry to Cloud SQL with rate limiting & sanitization
 app.post("/api/contact", contactLimiter, async (req, res) => {

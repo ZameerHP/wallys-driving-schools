@@ -1,13 +1,18 @@
 [
   {
-    "id": "block_1789239085734_ua1sak6",
+    "id": 1789396704839,
     "instructorId": "wally",
-    "date": "2026-09-25",
+    "instructorName": "Wally",
+    "date": "2026-09-28",
     "isFullDay": true,
     "startTime": null,
     "endTime": null,
-    "reason": "Holiday",
-    "createdAt": "2026-09-12T18:51:25.734Z",
-    "updatedAt": "2026-09-12T18:51:25.734Z"
+    "startMinutes": null,
+    "endMinutes": null,
+    "displayStartTime": null,
+    "displayEndTime": null,
+    "reason": "Personal Day Off",
+    "createdAt": "2026-09-14T14:38:24.839Z",
+    "updatedAt": "2026-09-14T14:38:24.839Z"
   }
 ]

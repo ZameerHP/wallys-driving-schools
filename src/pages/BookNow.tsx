@@ -525,12 +525,14 @@ export function BookNow() {
       const nextDate = findNextAvailableDate(selectedDate, blockedOffDays);
       if (nextDate && nextDate !== selectedDate) {
         setSelectedDate(nextDate);
+        setSelectedTimeSlot('');
         setScheduledLessons(prev => {
           const next = [...prev];
           if (next[activeLessonIndex]) {
             next[activeLessonIndex] = {
               ...next[activeLessonIndex],
-              date: nextDate
+              date: nextDate,
+              time: ''
             };
           }
           return next;
@@ -1809,14 +1811,14 @@ export function BookNow() {
                                 if (b.status === 'Cancelled') return false;
                                 if (normalizeDateStr(b.date) !== item.dateStr) return false;
                                 const cleanTime = (b.time || '').trim().toLowerCase();
-                                return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+                                return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
                               });
 
                               const dayOffReason = blockedOffDays.get(item.dateStr)?.reason || bookedSlots.find(b => {
                                 if (b.status === 'Cancelled') return false;
                                 if (normalizeDateStr(b.date) !== item.dateStr) return false;
                                 const cleanTime = (b.time || '').trim().toLowerCase();
-                                return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
+                                return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
                               })?.reason || 'Owner Day Off';
 
                               // Check if any other lesson is booked on this date
