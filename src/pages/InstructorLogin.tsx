@@ -266,8 +266,16 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   // Section navigation state
   const [activeTab, setActiveTab] = useState<'schedule' | 'availability'>('schedule');
 
-  // Blocked Days & Time Off state
-  const [blockedDaysList, setBlockedDaysList] = useState<any[]>([]);
+  // Blocked Days & Time Off state with resilient localStorage persistence
+  const [blockedDaysList, setBlockedDaysList] = useState<any[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const cached = localStorage.getItem('wallys_time_off_blocks_v1');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isDeletingBlockId, setIsDeletingBlockId] = useState<string | number | null>(null);
 
   // Block Modal State for direct blocking on dashboard
@@ -363,7 +371,11 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
 
     setBlockedDaysList(prev => {
       const filtered = prev.filter(b => b.date !== blockDate);
-      return [optimisticBlock, ...filtered].sort((a, b) => a.date.localeCompare(b.date));
+      const updated = [optimisticBlock, ...filtered].sort((a, b) => a.date.localeCompare(b.date));
+      try {
+        localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
+      } catch {}
+      return updated;
     });
 
     try {
@@ -419,7 +431,27 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       const res = await fetch(`/api/availability/blocked-days?_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        setBlockedDaysList(Array.isArray(data.blocks) ? data.blocks : []);
+        if (Array.isArray(data.blocks)) {
+          setBlockedDaysList(prev => {
+            const blockMap = new Map();
+            for (const b of data.blocks) {
+              const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
+              blockMap.set(k, b);
+            }
+            if (data.blocks.length === 0 && prev.length > 0) {
+              for (const b of prev) {
+                const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
+                blockMap.set(k, b);
+              }
+            }
+            const merged = Array.from(blockMap.values()).sort((a: any, b: any) => a.date.localeCompare(b.date));
+            try {
+              localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+          return;
+        }
       }
     } catch (err) {
       console.warn('Failed to load blocked days list:', err);
@@ -458,8 +490,14 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     const blockDate = block.date;
     setIsDeletingBlockId(blockId);
 
-    // Optimistic UI update: instantly remove from state
-    setBlockedDaysList(prev => prev.filter(b => String(b.id) !== String(blockId) && b.date !== blockDate));
+    // Optimistic UI update: instantly remove from state and local storage
+    setBlockedDaysList(prev => {
+      const updated = prev.filter(b => String(b.id) !== String(blockId) && b.date !== blockDate);
+      try {
+        localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     setActionFeedback(`Removing block for ${blockDate}...`);
 
     try {

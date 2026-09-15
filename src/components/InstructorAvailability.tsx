@@ -105,8 +105,16 @@ function formatHumanDate(dateStr: string): string {
 }
 
 export function InstructorAvailability() {
-  const [blocks, setBlocks] = useState<TimeOffItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [blocks, setBlocks] = useState<TimeOffItem[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const cached = localStorage.getItem('wallys_time_off_blocks_v1');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isLoading, setIsLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Search & Filter
@@ -168,9 +176,24 @@ export function InstructorAvailability() {
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.blocks)) {
-          // Sort chronologically by date
-          const sorted = [...data.blocks].sort((a, b) => a.date.localeCompare(b.date));
-          setBlocks(sorted);
+          setBlocks(prev => {
+            const blockMap = new Map();
+            for (const b of data.blocks) {
+              const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
+              blockMap.set(k, b);
+            }
+            if (data.blocks.length === 0 && prev.length > 0) {
+              for (const b of prev) {
+                const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
+                blockMap.set(k, b);
+              }
+            }
+            const sorted = Array.from(blockMap.values()).sort((a: any, b: any) => a.date.localeCompare(b.date));
+            try {
+              localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(sorted));
+            } catch {}
+            return sorted;
+          });
         }
       }
     } catch (err) {
@@ -309,7 +332,11 @@ export function InstructorAvailability() {
       if (data.block) {
         setBlocks(prev => {
           const filtered = prev.filter(b => String(b.id) !== String(data.block.id) && b.date !== data.block.date);
-          return [...filtered, data.block].sort((a, b) => a.date.localeCompare(b.date));
+          const updated = [...filtered, data.block].sort((a, b) => a.date.localeCompare(b.date));
+          try {
+            localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
+          } catch {}
+          return updated;
         });
       }
 
@@ -343,8 +370,14 @@ export function InstructorAvailability() {
     const block = deletingBlock;
     setIsDeleting(true);
 
-    // Optimistic UI update: remove block immediately from view
-    setBlocks(prev => prev.filter(b => String(b.id) !== String(block.id) && b.date !== block.date));
+    // Optimistic UI update: remove block immediately from view and local storage
+    setBlocks(prev => {
+      const updated = prev.filter(b => String(b.id) !== String(block.id) && b.date !== block.date);
+      try {
+        localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
 
     try {
       const headers = getInstructorHeaders(true);
