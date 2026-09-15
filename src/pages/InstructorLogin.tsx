@@ -31,7 +31,7 @@ import {
   AlertTriangle,
   Check
 } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { cn } from '../lib/utils';
 import { ManualBookingModal } from '../components/ManualBookingModal';
 import { EditBookingModal } from '../components/EditBookingModal';
@@ -426,37 +426,74 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   // Manual booking modal state
   const [isAddBookingModalOpen, setIsAddBookingModalOpen] = useState(false);
 
+  // Track recently deleted blocks to prevent ghost resurrection from cold cached responses
+  const recentlyDeletedRef = useRef<Map<string, number>>(new Map());
+
+  const normalizeDateKey = (d: string): string => {
+    if (!d) return '';
+    const clean = d.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+    if (/^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(clean)) {
+      const parts = clean.split(/[/-]/);
+      const day = parts[0].padStart(2, '0');
+      const month = parts[1].padStart(2, '0');
+      const year = parts[2];
+      return `${year}-${month}-${day}`;
+    }
+    const parsed = new Date(clean);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().split('T')[0];
+    }
+    return clean;
+  };
+
+  const markDeletedKey = useCallback((id: string | number | undefined, dateStr: string) => {
+    const now = Date.now();
+    if (id) recentlyDeletedRef.current.set(String(id), now);
+    if (dateStr) {
+      recentlyDeletedRef.current.set(dateStr, now);
+      const norm = normalizeDateKey(dateStr);
+      if (norm) recentlyDeletedRef.current.set(norm, now);
+    }
+    for (const [k, t] of recentlyDeletedRef.current.entries()) {
+      if (now - t > 60000) recentlyDeletedRef.current.delete(k);
+    }
+  }, []);
+
+  const isRecentlyDeleted = useCallback((id: string | number | undefined, dateStr: string): boolean => {
+    const now = Date.now();
+    const checkKey = (k: string) => {
+      const t = recentlyDeletedRef.current.get(k);
+      return Boolean(t && (now - t < 60000));
+    };
+    if (id && checkKey(String(id))) return true;
+    if (dateStr) {
+      if (checkKey(dateStr)) return true;
+      const norm = normalizeDateKey(dateStr);
+      if (norm && checkKey(norm)) return true;
+    }
+    return false;
+  }, []);
+
   const loadBlockedDays = useCallback(async () => {
     try {
       const res = await fetch(`/api/availability/blocked-days?_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.blocks)) {
-          setBlockedDaysList(prev => {
-            const blockMap = new Map();
-            for (const b of data.blocks) {
-              const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
-              blockMap.set(k, b);
-            }
-            if (data.blocks.length === 0 && prev.length > 0) {
-              for (const b of prev) {
-                const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
-                blockMap.set(k, b);
-              }
-            }
-            const merged = Array.from(blockMap.values()).sort((a: any, b: any) => a.date.localeCompare(b.date));
-            try {
-              localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(merged));
-            } catch {}
-            return merged;
-          });
+          const liveBlocks = data.blocks.filter((b: any) => !isRecentlyDeleted(b.id, b.date));
+          const sorted = liveBlocks.sort((a: any, b: any) => a.date.localeCompare(b.date));
+          setBlockedDaysList(sorted);
+          try {
+            localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(sorted));
+          } catch {}
           return;
         }
       }
     } catch (err) {
       console.warn('Failed to load blocked days list:', err);
     }
-  }, []);
+  }, [isRecentlyDeleted]);
 
   const loadData = async () => {
     setIsRefreshing(true);
@@ -482,19 +519,31 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       loadBlockedDays();
     };
     window.addEventListener('wallys-availability-updated', handleAvailabilitySync);
-    return () => window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
+    window.addEventListener('storage', handleAvailabilitySync);
+    return () => {
+      window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
+      window.removeEventListener('storage', handleAvailabilitySync);
+    };
   }, [loadBlockedDays]);
 
   const handleRemoveBlock = async (block: any) => {
     const blockId = block.id;
     const blockDate = block.date;
+    const blockDateNorm = normalizeDateKey(blockDate);
     setIsDeletingBlockId(blockId);
+    markDeletedKey(blockId, blockDate);
 
     // Optimistic UI update: instantly remove from state and local storage
     setBlockedDaysList(prev => {
-      const updated = prev.filter(b => String(b.id) !== String(blockId) && b.date !== blockDate);
+      const updated = prev.filter(b => {
+        if (String(b.id) === String(blockId)) return false;
+        const bNorm = normalizeDateKey(b.date);
+        if (b.date === blockDate || bNorm === blockDateNorm) return false;
+        return true;
+      });
       try {
         localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
+        localStorage.setItem('wallys_time_off_sync_event', Date.now().toString());
       } catch {}
       return updated;
     });
@@ -512,7 +561,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       }).catch(() => null);
 
       if (!res || !res.ok) {
-        await fetch('/api/instructor/time-off/delete', {
+        await fetch(`/api/instructor/time-off/delete?date=${encodeURIComponent(blockDate)}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -522,11 +571,13 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
         }).catch(() => null);
       }
 
-      setActionFeedback(`Time off on ${blockDate} removed successfully! Date is now unblocked and students can book.`);
+      setActionFeedback(`Time off on ${blockDate} removed completely! Date is unblocked and students can now book.`);
       await loadBlockedDays();
 
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
+        window.dispatchEvent(new CustomEvent('wallys-availability-updated', {
+          detail: { date: blockDate, normDate: blockDateNorm, id: blockId, action: 'removed' }
+        }));
       }
     } catch (err: any) {
       console.error('Failed to remove block:', err);

@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { db, isSqlConfigured } from './index.ts';
 import { users, bookings, contactMessages, bookingAuditLogs, emailLogs, webhookEvents, instructorTimeOff } from './schema.ts';
-import { eq, desc, or, and, ne } from 'drizzle-orm';
+import { eq, desc, or, and, ne, like } from 'drizzle-orm';
 import { getSupabaseServerClient } from '../lib/supabase-server.ts';
 
 // In-memory fallback stores for offline/sandbox environments
@@ -1338,29 +1338,66 @@ export async function deleteTimeOffBlock(id: number | string, fallbackDate?: str
   const numId = (!isNaN(Number(strId)) && Number(strId) > 0) ? Number(strId) : null;
   const is32Bit = numId !== null && numId <= 2147483647;
 
-  // Find target item to get its exact date
-  const targetItem = currentBlocks.find(b => {
-    const bStr = String(b.id || '').trim();
-    if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) return true;
-    if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) return true;
-    if (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate))) return true;
-    return false;
-  });
+  // Gather all possible date strings associated with this block
+  const candidateDates = new Set<string>();
+  if (fallbackDate && fallbackDate.trim() !== '') {
+    const fb = fallbackDate.trim();
+    candidateDates.add(fb);
+    const fbNorm = normalizeDate(fb);
+    if (fbNorm) candidateDates.add(fbNorm);
+  }
 
-  const targetDate = targetItem?.date || fallbackDate;
-  const targetNormDate = targetDate ? normalizeDate(targetDate) : undefined;
+  // Check if the id itself is or contains a date string
+  if (strId) {
+    if (strId.startsWith('date_')) {
+      const d = strId.replace('date_', '').trim();
+      candidateDates.add(d);
+      const dNorm = normalizeDate(d);
+      if (dNorm) candidateDates.add(dNorm);
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(strId) || /^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(strId)) {
+      candidateDates.add(strId);
+      const dNorm = normalizeDate(strId);
+      if (dNorm) candidateDates.add(dNorm);
+    }
+  }
+
+  // Find target item from current blocks to get its exact date
+  for (const b of currentBlocks) {
+    const bStr = String(b.id || '').trim();
+    const matchId = (strId && (bStr === strId || bStr === decodeURIComponent(strId))) ||
+                    (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId);
+    const matchDate = (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate)));
+    if (matchId || matchDate) {
+      if (b.date) {
+        candidateDates.add(b.date);
+        const normD = normalizeDate(b.date);
+        if (normD) candidateDates.add(normD);
+      }
+    }
+  }
+
+  const dateList = Array.from(candidateDates);
 
   // 1. Delete from SQL DB
   if (db && isSqlConfigured) {
     try {
       if (is32Bit && numId !== null) {
-        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId));
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId)).catch(() => {});
       }
-      if (targetNormDate) {
-        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, targetNormDate));
-      }
-      if (targetDate && targetDate !== targetNormDate) {
-        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, targetDate));
+      for (const d of dateList) {
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, d)).catch(() => {});
+        // Also remove any DayOff bookings from SQL bookings table
+        await db.delete(bookings).where(
+          and(
+            eq(bookings.date, d),
+            or(
+              eq(bookings.status, 'DayOff'),
+              eq(bookings.status, 'TimeOff'),
+              eq(bookings.studentName, '[INSTRUCTOR_TIME_OFF]'),
+              like(bookings.bookingRef, 'TIMEOFF-%')
+            )
+          )
+        ).catch(() => {});
       }
     } catch (err) {
       console.warn('[TimeOff] Failed deleting from SQL:', err);
@@ -1374,13 +1411,12 @@ export async function deleteTimeOffBlock(id: number | string, fallbackDate?: str
       if (is32Bit && numId !== null) {
         await supabase.from('instructor_time_off').delete().eq('id', numId);
       }
-      if (targetNormDate) {
-        await supabase.from('instructor_time_off').delete().eq('date', targetNormDate);
-        await supabase.from('bookings').delete().eq('status', 'DayOff').eq('date', targetNormDate);
-      }
-      if (targetDate && targetDate !== targetNormDate) {
-        await supabase.from('instructor_time_off').delete().eq('date', targetDate);
-        await supabase.from('bookings').delete().eq('status', 'DayOff').eq('date', targetDate);
+      for (const d of dateList) {
+        await supabase.from('instructor_time_off').delete().eq('date', d);
+        await supabase.from('bookings').delete().eq('date', d).eq('status', 'DayOff');
+        await supabase.from('bookings').delete().eq('date', d).eq('status', 'TimeOff');
+        await supabase.from('bookings').delete().eq('date', d).eq('student_name', '[INSTRUCTOR_TIME_OFF]');
+        await supabase.from('bookings').delete().eq('date', d).ilike('booking_ref', 'TIMEOFF-%');
       }
     } catch (sbErr) {
       console.warn('[TimeOff] Failed deleting from Supabase:', sbErr);
@@ -1396,10 +1432,8 @@ export async function deleteTimeOffBlock(id: number | string, fallbackDate?: str
     if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) {
       return false;
     }
-    if (targetNormDate && normalizeDate(b.date) === targetNormDate) {
-      return false;
-    }
-    if (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate))) {
+    const bNorm = normalizeDate(b.date) || b.date;
+    if (candidateDates.has(b.date) || candidateDates.has(bNorm)) {
       return false;
     }
     return true;

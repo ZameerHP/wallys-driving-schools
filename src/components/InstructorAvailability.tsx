@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Calendar, 
@@ -145,6 +145,56 @@ export function InstructorAvailability() {
   const [deletingBlock, setDeletingBlock] = useState<TimeOffItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Track recently deleted block IDs and dates to prevent ghost resurrection from cached responses
+  const recentlyDeletedRef = useRef<Map<string, number>>(new Map());
+
+  const normalizeDateKey = (d: string): string => {
+    if (!d) return '';
+    const clean = d.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+    if (/^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(clean)) {
+      const parts = clean.split(/[/-]/);
+      const day = parts[0].padStart(2, '0');
+      const month = parts[1].padStart(2, '0');
+      const year = parts[2];
+      return `${year}-${month}-${day}`;
+    }
+    const parsed = new Date(clean);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().split('T')[0];
+    }
+    return clean;
+  };
+
+  const markDeletedKey = useCallback((id: string | number | undefined, dateStr: string) => {
+    const now = Date.now();
+    if (id) recentlyDeletedRef.current.set(String(id), now);
+    if (dateStr) {
+      recentlyDeletedRef.current.set(dateStr, now);
+      const norm = normalizeDateKey(dateStr);
+      if (norm) recentlyDeletedRef.current.set(norm, now);
+    }
+    // Prune entries older than 60 seconds
+    for (const [k, t] of recentlyDeletedRef.current.entries()) {
+      if (now - t > 60000) recentlyDeletedRef.current.delete(k);
+    }
+  }, []);
+
+  const isRecentlyDeleted = useCallback((id: string | number | undefined, dateStr: string): boolean => {
+    const now = Date.now();
+    const checkKey = (k: string) => {
+      const t = recentlyDeletedRef.current.get(k);
+      return Boolean(t && (now - t < 60000));
+    };
+    if (id && checkKey(String(id))) return true;
+    if (dateStr) {
+      if (checkKey(dateStr)) return true;
+      const norm = normalizeDateKey(dateStr);
+      if (norm && checkKey(norm)) return true;
+    }
+    return false;
+  }, []);
+
   // Resilient authentication headers
   const getInstructorHeaders = useCallback((isJson = false): Record<string, string> => {
     let token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
@@ -176,24 +226,13 @@ export function InstructorAvailability() {
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.blocks)) {
-          setBlocks(prev => {
-            const blockMap = new Map();
-            for (const b of data.blocks) {
-              const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
-              blockMap.set(k, b);
-            }
-            if (data.blocks.length === 0 && prev.length > 0) {
-              for (const b of prev) {
-                const k = `${b.date}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
-                blockMap.set(k, b);
-              }
-            }
-            const sorted = Array.from(blockMap.values()).sort((a: any, b: any) => a.date.localeCompare(b.date));
-            try {
-              localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(sorted));
-            } catch {}
-            return sorted;
-          });
+          // Filter out any blocks that were recently deleted
+          const liveBlocks = data.blocks.filter((b: any) => !isRecentlyDeleted(b.id, b.date));
+          const sorted = liveBlocks.sort((a: any, b: any) => a.date.localeCompare(b.date));
+          setBlocks(sorted);
+          try {
+            localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(sorted));
+          } catch {}
         }
       }
     } catch (err) {
@@ -201,7 +240,7 @@ export function InstructorAvailability() {
     } finally {
       setIsLoading(false);
     }
-  }, [getInstructorHeaders]);
+  }, [getInstructorHeaders, isRecentlyDeleted]);
 
   useEffect(() => {
     loadTimeOff();
@@ -370,21 +409,30 @@ export function InstructorAvailability() {
     const block = deletingBlock;
     setIsDeleting(true);
 
+    const blockDateNorm = normalizeDateKey(block.date);
+    markDeletedKey(block.id, block.date);
+
     // Optimistic UI update: remove block immediately from view and local storage
     setBlocks(prev => {
-      const updated = prev.filter(b => String(b.id) !== String(block.id) && b.date !== block.date);
+      const updated = prev.filter(b => {
+        if (String(b.id) === String(block.id)) return false;
+        const bNorm = normalizeDateKey(b.date);
+        if (b.date === block.date || bNorm === blockDateNorm) return false;
+        return true;
+      });
       try {
         localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
+        localStorage.setItem('wallys_time_off_sync_event', Date.now().toString());
       } catch {}
       return updated;
     });
 
     try {
       const headers = getInstructorHeaders(true);
-      const safeId = block.id ? String(block.id).trim() : '';
+      const safeId = block.id ? String(block.id).trim() : '0';
 
-      // Tier 1: DELETE /api/instructor/time-off/:id with body payload fallback
-      let res = await fetch(`/api/instructor/time-off/${encodeURIComponent(safeId || '0')}`, {
+      // Tier 1: DELETE /api/instructor/time-off/:id?date=... with body payload fallback
+      let res = await fetch(`/api/instructor/time-off/${encodeURIComponent(safeId)}?date=${encodeURIComponent(block.date)}`, {
         method: 'DELETE',
         headers,
         body: JSON.stringify({ id: block.id, date: block.date })
@@ -392,7 +440,7 @@ export function InstructorAvailability() {
 
       // Tier 2: If Tier 1 failed or returned non-ok, fallback to POST /api/instructor/time-off/delete
       if (!res || !res.ok) {
-        res = await fetch('/api/instructor/time-off/delete', {
+        res = await fetch(`/api/instructor/time-off/delete?date=${encodeURIComponent(block.date)}`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ id: block.id, date: block.date })
@@ -401,16 +449,20 @@ export function InstructorAvailability() {
 
       setFeedback({
         type: 'success',
-        message: `Time off on ${formatHumanDate(block.date)} removed. Customer booking availability restored immediately!`
+        message: `Time off on ${formatHumanDate(block.date)} removed completely! Customer calendar availability restored.`
       });
 
-      // Close modal and refresh authoritative data
+      // Close modal and broadcast event
       setDeletingBlock(null);
-      await loadTimeOff();
+
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
+        window.dispatchEvent(new CustomEvent('wallys-availability-updated', {
+          detail: { date: block.date, normDate: blockDateNorm, id: block.id, action: 'removed' }
+        }));
       }
-      setTimeout(() => setFeedback(null), 6000);
+
+      await loadTimeOff();
+      setTimeout(() => setFeedback(null), 5000);
     } catch (err: any) {
       console.error('Error removing time off block:', err);
       setFeedback({

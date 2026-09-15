@@ -523,15 +523,47 @@ export function BookNow() {
       refreshBlockedDays();
     }, 8000);
 
-    const handleSync = () => {
+    const handleSync = (e?: any) => {
+      const detail = e?.detail;
+      const removedDate = detail?.date;
+      const removedNorm = detail?.normDate || (removedDate ? normalizeDateStr(removedDate) : null);
+
+      if (removedDate || removedNorm) {
+        // Instantly unblock the day from the calendar
+        setBlockedOffDays(prev => {
+          const next = new Map(prev);
+          if (removedDate) next.delete(removedDate);
+          if (removedNorm) next.delete(removedNorm);
+          return next;
+        });
+
+        // Clear any day off / full day blocked slots from bookedSlots
+        setBookedSlots(prev => prev.filter(b => {
+          const bNorm = normalizeDateStr(b.date);
+          if (bNorm === removedNorm || b.date === removedDate) {
+            const cleanTime = (b.time || '').trim().toLowerCase();
+            return !Boolean((b as any).isFullDay) && cleanTime !== 'full_day' && !cleanTime.includes('day off');
+          }
+          return true;
+        }));
+
+        // Clear any conflict banner if selected date was the removed date
+        if (selectedDate && (normalizeDateStr(selectedDate) === removedNorm || selectedDate === removedDate)) {
+          setSlotConflictError(null);
+        }
+      }
+
       refreshBlockedDays();
       refreshAvailability();
     };
+
     window.addEventListener('wallys-availability-updated', handleSync);
+    window.addEventListener('storage', handleSync);
 
     return () => {
       clearInterval(timer);
       window.removeEventListener('wallys-availability-updated', handleSync);
+      window.removeEventListener('storage', handleSync);
     };
   }, [refreshAvailability, refreshBlockedDays]);
 

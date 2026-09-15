@@ -2672,9 +2672,18 @@ app.put(["/api/instructor/time-off", "/api/instructor/time-off/:id"], requireIns
 // Delete time off block to restore availability (supports DELETE and POST delete fallback)
 const handleDeleteTimeOff = async (req: express.Request, res: express.Response) => {
   try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
     const rawId = req.params.id || req.body?.id || req.query?.id;
-    const fallbackDate = req.body?.date || req.query?.date;
-    const isIdInvalid = !rawId || String(rawId).trim() === "" || String(rawId) === "undefined" || String(rawId) === "null";
+    let fallbackDate = req.body?.date || req.query?.date || (req.params as any)?.date;
+    if (!fallbackDate && rawId && (String(rawId).includes('-') || String(rawId).includes('/'))) {
+      fallbackDate = String(rawId);
+    }
+    const isIdInvalid = !rawId || String(rawId).trim() === "" || String(rawId) === "undefined" || String(rawId) === "null" || String(rawId) === "0";
     
     if (isIdInvalid && !fallbackDate) {
       return res.status(400).json({ error: "Invalid block ID: Missing block ID or date parameter." });
