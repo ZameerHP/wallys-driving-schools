@@ -182,6 +182,14 @@ export function InstructorAvailability() {
 
   useEffect(() => {
     loadTimeOff();
+
+    const handleSync = () => {
+      loadTimeOff();
+    };
+    window.addEventListener('wallys-availability-updated', handleSync);
+    return () => {
+      window.removeEventListener('wallys-availability-updated', handleSync);
+    };
   }, [loadTimeOff]);
 
   // Real-time conflict checker
@@ -295,6 +303,14 @@ export function InstructorAvailability() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.message || data.error || 'Failed to save time off block');
+      }
+
+      // Optimistic update of local blocks state
+      if (data.block) {
+        setBlocks(prev => {
+          const filtered = prev.filter(b => String(b.id) !== String(data.block.id) && b.date !== data.block.date);
+          return [...filtered, data.block].sort((a, b) => a.date.localeCompare(b.date));
+        });
       }
 
       setFeedback({

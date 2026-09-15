@@ -27,12 +27,47 @@ import {
   CalendarCheck,
   CalendarOff,
   CalendarX,
-  Edit3
+  Edit3,
+  AlertTriangle,
+  Check
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
 import { ManualBookingModal } from '../components/ManualBookingModal';
 import { EditBookingModal } from '../components/EditBookingModal';
+
+const TIME_SLOT_OPTIONS = [
+  '07:00 AM', '07:30 AM', '08:00 AM', '08:30 AM', '09:00 AM', '09:30 AM',
+  '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM', '12:00 PM', '12:30 PM',
+  '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM', '03:00 PM', '03:30 PM',
+  '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM', '06:00 PM'
+];
+
+const BLOCK_REASON_PRESETS = [
+  'Personal Day Off',
+  'Vehicle Maintenance & Service',
+  'RMS / Service NSW Driving Test Duty',
+  'Medical / Doctor Appointment',
+  'Annual Leave / Holiday',
+  'Severe Weather / Unsafe Driving Conditions'
+];
+
+function formatBlockDate(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    if (!y || !m || !d) return dateStr;
+    const dateObj = new Date(y, m - 1, d);
+    return dateObj.toLocaleDateString('en-AU', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch {
+    return dateStr;
+  }
+}
 import { InstructorAvailability } from '../components/InstructorAvailability';
 import { 
   isOwnerLoggedIn, 
@@ -234,6 +269,144 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   // Blocked Days & Time Off state
   const [blockedDaysList, setBlockedDaysList] = useState<any[]>([]);
   const [isDeletingBlockId, setIsDeletingBlockId] = useState<string | number | null>(null);
+
+  // Block Modal State for direct blocking on dashboard
+  const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
+  const [blockDate, setBlockDate] = useState(() => {
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    return t.toISOString().split('T')[0];
+  });
+  const [blockIsFullDay, setBlockIsFullDay] = useState(true);
+  const [blockStartTime, setBlockStartTime] = useState('09:00 AM');
+  const [blockEndTime, setBlockEndTime] = useState('01:00 PM');
+  const [blockReason, setBlockReason] = useState('');
+  const [isSavingBlock, setIsSavingBlock] = useState(false);
+  const [blockConflicts, setBlockConflicts] = useState<any[]>([]);
+  const [isCheckingBlockConflicts, setIsCheckingBlockConflicts] = useState(false);
+
+  // Check conflicts in real time when block modal is open
+  useEffect(() => {
+    if (!isBlockModalOpen || !blockDate) return;
+    let active = true;
+    setIsCheckingBlockConflicts(true);
+
+    fetch('/api/instructor/time-off/check-conflicts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-instructor-token': 'wally_owner_session'
+      },
+      body: JSON.stringify({
+        date: blockDate,
+        isFullDay: blockIsFullDay,
+        startTime: blockIsFullDay ? undefined : blockStartTime,
+        endTime: blockIsFullDay ? undefined : blockEndTime,
+        instructorId: 'wally'
+      })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (active) {
+          setBlockConflicts(Array.isArray(data.conflicts) ? data.conflicts : []);
+        }
+      })
+      .catch(() => {
+        if (active) setBlockConflicts([]);
+      })
+      .finally(() => {
+        if (active) setIsCheckingBlockConflicts(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isBlockModalOpen, blockDate, blockIsFullDay, blockStartTime, blockEndTime]);
+
+  const handleOpenBlockModal = () => {
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    setBlockDate(t.toISOString().split('T')[0]);
+    setBlockIsFullDay(true);
+    setBlockStartTime('09:00 AM');
+    setBlockEndTime('01:00 PM');
+    setBlockReason('');
+    setBlockConflicts([]);
+    setIsBlockModalOpen(true);
+  };
+
+  const handleSaveNewBlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!blockDate) return;
+
+    if (blockConflicts.length > 0) {
+      setActionFeedback(`⚠️ Cannot block ${blockDate}: overlaps with ${blockConflicts.length} confirmed student booking(s). Please reschedule or resolve first.`);
+      return;
+    }
+
+    setIsSavingBlock(true);
+
+    // Optimistic UI update: instantly show new block in list and update count!
+    const tempId = Date.now();
+    const optimisticBlock = {
+      id: tempId,
+      instructorId: 'wally',
+      instructorName: 'Wally',
+      date: blockDate,
+      isFullDay: blockIsFullDay,
+      startTime: blockIsFullDay ? null : blockStartTime,
+      endTime: blockIsFullDay ? null : blockEndTime,
+      displayStartTime: blockIsFullDay ? null : blockStartTime,
+      displayEndTime: blockIsFullDay ? null : blockEndTime,
+      reason: blockReason.trim() || 'Instructor Time Off'
+    };
+
+    setBlockedDaysList(prev => {
+      const filtered = prev.filter(b => b.date !== blockDate);
+      return [optimisticBlock, ...filtered].sort((a, b) => a.date.localeCompare(b.date));
+    });
+
+    try {
+      const res = await fetch('/api/instructor/time-off', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-instructor-token': 'wally_owner_session'
+        },
+        body: JSON.stringify({
+          date: blockDate,
+          isFullDay: blockIsFullDay,
+          startTime: blockIsFullDay ? null : blockStartTime,
+          endTime: blockIsFullDay ? null : blockEndTime,
+          reason: blockReason.trim() || 'Instructor Time Off',
+          instructorId: 'wally',
+          instructorName: 'Wally'
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to save block');
+      }
+
+      setIsBlockModalOpen(false);
+      setActionFeedback(`Availability blocked for ${formatBlockDate(blockDate)} (${blockIsFullDay ? 'All Day' : `${blockStartTime} – ${blockEndTime}`})! Customers cannot book this slot.`);
+
+      // Sync from backend
+      await loadBlockedDays();
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
+      }
+    } catch (err: any) {
+      console.error('Failed to create block:', err);
+      setActionFeedback(`Error: ${err.message || 'Failed to block availability'}`);
+      await loadBlockedDays();
+    } finally {
+      setIsSavingBlock(false);
+      setTimeout(() => setActionFeedback(null), 6000);
+    }
+  };
 
   // Edit & Reschedule modal state
   const [editingBooking, setEditingBooking] = useState<BookingItem | null>(null);
@@ -676,94 +849,202 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
           </div>
 
           {/* Active Blocked Days & Instructor Time Off Section */}
-          <div className="bg-white rounded-3xl p-5 mb-6 shadow-sm border border-black/5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-black/5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 text-amber-600">
-                  <CalendarOff className="w-5 h-5" />
+          <div id="blocked-days-section" className="bg-white rounded-3xl p-5 md:p-6 mb-6 shadow-sm border border-black/10 transition-all">
+            {/* Header */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-5 pb-4 border-b border-black/5">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0 text-amber-600 shadow-sm">
+                  <CalendarOff className="w-6 h-6" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-brand-black">
-                      Blocked Days & Time Off (No Student Bookings)
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <h3 className="text-base sm:text-lg font-bold text-brand-black tracking-tight">
+                      Blocked Days & Off-Time Management
                     </h3>
                     <span className={cn(
-                      "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                      "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-sm",
                       blockedDaysList.length > 0
-                        ? "bg-amber-100 text-amber-800 border border-amber-200"
-                        : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                        ? "bg-amber-500 text-white shadow-amber-500/20"
+                        : "bg-emerald-600 text-white shadow-emerald-600/20"
                     )}>
-                      {blockedDaysList.length > 0 ? `${blockedDaysList.length} Active Block${blockedDaysList.length === 1 ? '' : 's'}` : 'Fully Open'}
+                      {blockedDaysList.length > 0 ? (
+                        <>
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span>{blockedDaysList.length} Active Block{blockedDaysList.length === 1 ? '' : 's'} Made</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>0 Blocks • 100% Fully Open</span>
+                        </>
+                      )}
                     </span>
                   </div>
-                  <p className="text-xs text-black/60 mt-0.5">
-                    Dates or hours marked off will block customers from booking on the website. Remove any block to immediately reopen booking availability.
+                  <p className="text-xs sm:text-sm text-black/60 mt-1">
+                    Dates or hours marked off will block customers from booking on the website. Remove any block below to immediately restore booking availability.
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                 <button
-                  onClick={() => setActiveTab('availability')}
-                  className="bg-brand-black hover:bg-neutral-800 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  type="button"
+                  onClick={handleOpenBlockModal}
+                  className="bg-brand-red hover:bg-[#c41a21] text-white text-xs sm:text-sm font-bold px-4 py-2.5 rounded-2xl transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-brand-red/20"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Block New Date / Time</span>
+                  <Plus className="w-4 h-4" />
+                  <span>+ Block Date or Specific Time</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('availability')}
+                  className="bg-white hover:bg-neutral-100 text-brand-black border border-black/15 text-xs sm:text-sm font-bold px-4 py-2.5 rounded-2xl transition-all flex items-center gap-2 cursor-pointer shadow-sm"
+                  title="Open monthly calendar view"
+                >
+                  <Calendar className="w-4 h-4 text-amber-600" />
+                  <span>Full Calendar View</span>
                 </button>
               </div>
             </div>
 
+            {/* Prominent Counter / Summary Bar */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+              <div className="bg-neutral-50 border border-neutral-200/80 rounded-2xl p-3 text-center flex flex-col items-center justify-center">
+                <span className="text-xs font-semibold text-black/60">Total Blocks Made</span>
+                <span className="text-2xl font-extrabold text-brand-black mt-0.5">{blockedDaysList.length}</span>
+                <span className="text-[10px] text-black/50 font-medium">Off-duty records</span>
+              </div>
+              <div className="bg-amber-50/60 border border-amber-200/80 rounded-2xl p-3 text-center flex flex-col items-center justify-center">
+                <span className="text-xs font-semibold text-amber-900">Full Days Off</span>
+                <span className="text-2xl font-extrabold text-amber-700 mt-0.5">
+                  {blockedDaysList.filter(b => Boolean(b.isFullDay)).length}
+                </span>
+                <span className="text-[10px] text-amber-700/80 font-medium">All day closed</span>
+              </div>
+              <div className="bg-blue-50/60 border border-blue-200/80 rounded-2xl p-3 text-center flex flex-col items-center justify-center">
+                <span className="text-xs font-semibold text-blue-900">Partial Windows</span>
+                <span className="text-2xl font-extrabold text-blue-700 mt-0.5">
+                  {blockedDaysList.filter(b => !b.isFullDay).length}
+                </span>
+                <span className="text-[10px] text-blue-700/80 font-medium">Specific hours off</span>
+              </div>
+              <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-3 text-center flex flex-col items-center justify-center">
+                <span className="text-xs font-semibold text-emerald-900">Upcoming Blocks</span>
+                <span className="text-2xl font-extrabold text-emerald-700 mt-0.5">
+                  {blockedDaysList.filter(b => b.date >= (new Date().toISOString().split('T')[0])).length}
+                </span>
+                <span className="text-[10px] text-emerald-700/80 font-medium">Future lockouts</span>
+              </div>
+            </div>
+
+            {/* List of Active Blocks */}
             {blockedDaysList.length === 0 ? (
-              <div className="p-4 bg-emerald-50/70 border border-emerald-200/60 rounded-2xl flex items-center justify-between text-xs text-emerald-900">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>All dates and standard lesson hours are currently open for student bookings across Western Sydney.</span>
+              <div className="p-6 bg-emerald-50/70 border border-emerald-200/70 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-emerald-950">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-emerald-900">No Blocked Days or Times</h4>
+                    <p className="text-xs text-emerald-800/80 mt-0.5">
+                      All standard lesson slots (08:00 AM – 06:00 PM) are currently open for student bookings across Western Sydney.
+                    </p>
+                  </div>
                 </div>
                 <button
-                  onClick={() => setActiveTab('availability')}
-                  className="text-xs font-bold text-emerald-800 hover:text-emerald-950 underline cursor-pointer ml-3 shrink-0"
+                  type="button"
+                  onClick={handleOpenBlockModal}
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer shrink-0 shadow-sm flex items-center gap-2"
                 >
-                  Manage Availability &rarr;
+                  <Plus className="w-4 h-4" />
+                  <span>Block a Day or Time Now</span>
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {blockedDaysList.map((block) => (
-                  <div
-                    key={block.id || block.date}
-                    className="p-3.5 bg-amber-50/50 border border-amber-200/80 rounded-2xl flex flex-col justify-between gap-2.5 transition-all hover:shadow-sm"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="font-bold text-xs text-brand-black flex items-center gap-1.5">
-                          <Calendar className="w-3.5 h-3.5 text-brand-red" />
-                          {block.date}
-                        </span>
-                        <span className={cn(
-                          "px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider",
-                          block.isFullDay
-                            ? "bg-rose-100 text-rose-800 border border-rose-200"
-                            : "bg-amber-100 text-amber-800 border border-amber-200"
-                        )}>
-                          {block.isFullDay ? "Full Day Off" : `${block.startTime || ''} – ${block.endTime || ''}`}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-black/70 italic line-clamp-1">
-                        {block.reason ? `Reason: ${block.reason}` : "Instructor Time Off"}
-                      </p>
-                    </div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-black/60 font-semibold px-1">
+                  <span>Showing all {blockedDaysList.length} active block{blockedDaysList.length === 1 ? '' : 's'} — click "Remove Block" to restore student bookings:</span>
+                </div>
 
-                    <button
-                      onClick={() => handleRemoveBlock(block)}
-                      disabled={isDeletingBlockId === block.id}
-                      className="w-full py-1.5 px-3 bg-white hover:bg-rose-50 text-rose-600 hover:text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      title="Remove this block and restore student booking availability"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>{isDeletingBlockId === block.id ? "Removing..." : "Remove Block (Restore Booking)"}</span>
-                    </button>
-                  </div>
-                ))}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {blockedDaysList.map((block) => {
+                    const isFull = Boolean(block.isFullDay);
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const isPast = block.date < todayStr;
+                    return (
+                      <div
+                        key={block.id || block.date}
+                        className={cn(
+                          "p-4 rounded-2xl flex flex-col justify-between gap-3 transition-all border shadow-sm",
+                          isFull
+                            ? "bg-amber-50/70 border-amber-300 hover:border-amber-400"
+                            : "bg-blue-50/70 border-blue-300 hover:border-blue-400"
+                        )}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <span className="font-bold text-sm text-brand-black flex items-center gap-2">
+                              <Calendar className="w-4 h-4 text-brand-red" />
+                              {formatBlockDate(block.date)}
+                            </span>
+                            <span className={cn(
+                              "px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                              isFull
+                                ? "bg-amber-100 text-amber-900 border-amber-300"
+                                : "bg-blue-100 text-blue-900 border-blue-300"
+                            )}>
+                              {isFull ? "Full Day Off" : "Partial Window"}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-xs font-semibold text-black/80 bg-white/90 px-3 py-2 rounded-xl border border-black/5 mb-2">
+                            <Clock className="w-3.5 h-3.5 text-brand-red shrink-0" />
+                            <span>
+                              {isFull
+                                ? "All Day (08:00 AM – 06:00 PM)"
+                                : `${block.displayStartTime || block.startTime} – ${block.displayEndTime || block.endTime}`}
+                            </span>
+                            {isPast && (
+                              <span className="ml-auto text-[10px] text-black/40 bg-black/5 px-2 py-0.5 rounded-md font-normal">
+                                Past
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-start gap-2 text-xs text-black/70 bg-white/70 px-3 py-2 rounded-xl border border-black/5 mb-2">
+                            <FileText className="w-3.5 h-3.5 text-black/40 shrink-0 mt-0.5" />
+                            <span className="italic font-medium">
+                              {block.reason ? block.reason : "Instructor scheduled off-duty"}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-[11px] text-red-600 font-semibold px-1">
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                            <span>Website booking blocked for this period</span>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-black/5 flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-black/50">
+                            Instructor: <strong className="text-black/80">{block.instructorName || 'Wally'}</strong>
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveBlock(block)}
+                            disabled={isDeletingBlockId === block.id}
+                            className="py-1.5 px-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                            title="Delete this block and re-enable student bookings on this date"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>{isDeletingBlockId === block.id ? "Removing..." : "Remove Block"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -1090,6 +1371,381 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
           loadData();
         }}
       />
+
+      {/* Direct Dashboard Block Date/Time Modal */}
+      <BlockDaysModal
+        isOpen={isBlockModalOpen}
+        onClose={() => setIsBlockModalOpen(false)}
+        date={blockDate}
+        setDate={setBlockDate}
+        isFullDay={blockIsFullDay}
+        setIsFullDay={setBlockIsFullDay}
+        startTime={blockStartTime}
+        setStartTime={setBlockStartTime}
+        endTime={blockEndTime}
+        setEndTime={setBlockEndTime}
+        reason={blockReason}
+        setReason={setBlockReason}
+        isSaving={isSavingBlock}
+        conflicts={blockConflicts}
+        isCheckingConflicts={isCheckingBlockConflicts}
+        onSubmit={handleSaveNewBlock}
+      />
+    </div>
+  );
+}
+
+interface BlockDaysModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  date: string;
+  setDate: (d: string) => void;
+  isFullDay: boolean;
+  setIsFullDay: (f: boolean) => void;
+  startTime: string;
+  setStartTime: (t: string) => void;
+  endTime: string;
+  setEndTime: (t: string) => void;
+  reason: string;
+  setReason: (r: string) => void;
+  isSaving: boolean;
+  conflicts: any[];
+  isCheckingConflicts: boolean;
+  onSubmit: (e: React.FormEvent) => void;
+}
+
+function BlockDaysModal({
+  isOpen,
+  onClose,
+  date,
+  setDate,
+  isFullDay,
+  setIsFullDay,
+  startTime,
+  setStartTime,
+  endTime,
+  setEndTime,
+  reason,
+  setReason,
+  isSaving,
+  conflicts,
+  isCheckingConflicts,
+  onSubmit
+}: BlockDaysModalProps) {
+  if (!isOpen) return null;
+
+  const setQuickDate = (daysAhead: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    setDate(d.toISOString().split('T')[0]);
+  };
+
+  const setNextWeekday = (targetDay: number) => {
+    const d = new Date();
+    const currentDay = d.getDay();
+    let diff = targetDay - currentDay;
+    if (diff <= 0) diff += 7;
+    d.setDate(d.getDate() + diff);
+    setDate(d.toISOString().split('T')[0]);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto">
+      <div 
+        className="fixed inset-0"
+        onClick={onClose}
+      />
+      <div 
+        className="bg-white rounded-3xl w-full max-w-xl p-6 sm:p-8 shadow-2xl relative z-10 border border-black/10 my-8"
+      >
+        <div className="flex items-start justify-between pb-4 border-b border-black/10">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-600 shadow-sm shrink-0">
+              <CalendarOff className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-lg sm:text-xl font-bold text-brand-black tracking-tight">
+                Block Availability / Time Off
+              </h3>
+              <p className="text-xs text-black/60 mt-0.5">
+                Lock out single days or specific hours. Students visiting the booking page will see this period as unavailable.
+              </p>
+            </div>
+          </div>
+          <button 
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-full bg-black/5 hover:bg-black/10 flex items-center justify-center text-black/60 hover:text-black transition-colors cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <form onSubmit={onSubmit} className="mt-5 space-y-4">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-black/60 mb-2">
+              Select Date to Block *
+            </label>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              <button
+                type="button"
+                onClick={() => setQuickDate(0)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-black/5 hover:bg-black/10 text-black/80 transition-colors cursor-pointer"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuickDate(1)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-black/5 hover:bg-black/10 text-black/80 transition-colors cursor-pointer"
+              >
+                Tomorrow
+              </button>
+              <button
+                type="button"
+                onClick={() => setNextWeekday(6)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-black/5 hover:bg-black/10 text-black/80 transition-colors cursor-pointer"
+              >
+                This Saturday
+              </button>
+              <button
+                type="button"
+                onClick={() => setNextWeekday(0)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-black/5 hover:bg-black/10 text-black/80 transition-colors cursor-pointer"
+              >
+                This Sunday
+              </button>
+              <button
+                type="button"
+                onClick={() => setNextWeekday(1)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-black/5 hover:bg-black/10 text-black/80 transition-colors cursor-pointer"
+              >
+                Next Monday
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuickDate(7)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-black/5 hover:bg-black/10 text-black/80 transition-colors cursor-pointer"
+              >
+                +7 Days
+              </button>
+            </div>
+
+            <div className="relative">
+              <input
+                type="date"
+                required
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="w-full px-4 py-2.5 bg-black/[0.03] border border-black/15 rounded-2xl text-sm font-semibold text-brand-black focus:outline-none focus:ring-2 focus:ring-brand-red/30 focus:border-brand-red transition-all"
+              />
+              {date && (
+                <span className="text-xs font-medium text-black/60 mt-1 block px-1">
+                  Selected: <strong>{formatBlockDate(date)}</strong>
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-black/60 mb-2">
+              Block Type *
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setIsFullDay(true)}
+                className={cn(
+                  "p-3 rounded-2xl border text-left flex items-start gap-2.5 transition-all cursor-pointer",
+                  isFullDay
+                    ? "bg-amber-500/10 border-amber-500/50 text-amber-900 shadow-sm ring-1 ring-amber-500/30"
+                    : "bg-black/[0.02] border-black/10 text-black/70 hover:bg-black/[0.05]"
+                )}
+              >
+                <CalendarOff className={cn("w-5 h-5 shrink-0 mt-0.5", isFullDay ? "text-amber-600" : "text-black/40")} />
+                <div>
+                  <div className="font-bold text-xs sm:text-sm">Full Day Off</div>
+                  <div className="text-[11px] opacity-75 mt-0.5">All day closed (8am–6pm)</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsFullDay(false)}
+                className={cn(
+                  "p-3 rounded-2xl border text-left flex items-start gap-2.5 transition-all cursor-pointer",
+                  !isFullDay
+                    ? "bg-blue-500/10 border-blue-500/50 text-blue-900 shadow-sm ring-1 ring-blue-500/30"
+                    : "bg-black/[0.02] border-black/10 text-black/70 hover:bg-black/[0.05]"
+                )}
+              >
+                <Clock className={cn("w-5 h-5 shrink-0 mt-0.5", !isFullDay ? "text-blue-600" : "text-black/40")} />
+                <div>
+                  <div className="font-bold text-xs sm:text-sm">Partial Window</div>
+                  <div className="text-[11px] opacity-75 mt-0.5">Specific hours off</div>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {!isFullDay && (
+            <div className="p-3.5 bg-blue-50/60 border border-blue-200/80 rounded-2xl space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">
+                  Select Time Window
+                </span>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => { setStartTime('08:00 AM'); setEndTime('12:00 PM'); }}
+                    className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-blue-100 text-blue-800 hover:bg-blue-200 cursor-pointer"
+                  >
+                    Morning (8-12)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setStartTime('12:00 PM'); setEndTime('04:00 PM'); }}
+                    className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-blue-100 text-blue-800 hover:bg-blue-200 cursor-pointer"
+                  >
+                    Afternoon (12-4)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setStartTime('02:00 PM'); setEndTime('06:00 PM'); }}
+                    className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-blue-100 text-blue-800 hover:bg-blue-200 cursor-pointer"
+                  >
+                    Late (2-6)
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-blue-950 mb-1">Start Time</label>
+                  <select
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-blue-200 rounded-xl text-xs font-semibold text-brand-black focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  >
+                    {TIME_SLOT_OPTIONS.slice(0, -1).map(slot => (
+                      <option key={`start-${slot}`} value={slot}>{slot}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-blue-950 mb-1">End Time</label>
+                  <select
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-blue-200 rounded-xl text-xs font-semibold text-brand-black focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  >
+                    {TIME_SLOT_OPTIONS.slice(1).map(slot => (
+                      <option key={`end-${slot}`} value={slot}>{slot}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-black/60 mb-1.5">
+              Reason / Internal Note
+            </label>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {BLOCK_REASON_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setReason(preset)}
+                  className={cn(
+                    "px-2.5 py-1 text-xs font-medium rounded-lg border transition-all cursor-pointer",
+                    reason === preset
+                      ? "bg-brand-red text-white border-brand-red shadow-xs font-bold"
+                      : "bg-black/[0.02] hover:bg-black/[0.06] text-black/70 border-black/10"
+                  )}
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+
+            <input
+              type="text"
+              placeholder="e.g. Personal Leave, Vehicle Servicing, RMS Test Supervision"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="w-full px-4 py-2.5 bg-black/[0.03] border border-black/15 rounded-2xl text-sm font-medium text-brand-black focus:outline-none focus:ring-2 focus:ring-brand-red/30 focus:border-brand-red transition-all"
+            />
+          </div>
+
+          <div>
+            {isCheckingConflicts ? (
+              <div className="p-3 bg-neutral-100 rounded-xl text-xs text-black/60 flex items-center gap-2">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-black/50" />
+                <span>Checking student booking schedule for overlaps...</span>
+              </div>
+            ) : conflicts.length > 0 ? (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-900 space-y-1">
+                <div className="flex items-center gap-2 font-bold text-rose-800">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>Conflict Warning: {conflicts.length} student booking(s) exist in this period!</span>
+                </div>
+                <div className="space-y-0.5 pl-6">
+                  {conflicts.map((c: any) => (
+                    <div key={c.id || c.bookingRef} className="text-rose-700">
+                      • <strong>{c.studentName}</strong>: {c.time} ({c.bookingRef || 'Booking'})
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-rose-600 italic pl-6">
+                  Please reschedule these bookings first before setting this block.
+                </p>
+              </div>
+            ) : (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200/80 rounded-2xl text-xs text-emerald-900 flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>No student bookings conflict with this window. Safe to block!</span>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-black/10 flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSaving}
+              className="px-4 py-2.5 rounded-xl border border-black/15 text-xs font-bold text-black/70 hover:bg-black/5 transition-all cursor-pointer disabled:opacity-50"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="submit"
+              disabled={isSaving || conflicts.length > 0 || isCheckingConflicts}
+              className={cn(
+                "px-5 py-2.5 rounded-xl text-xs font-bold text-white transition-all flex items-center gap-2 shadow-md cursor-pointer",
+                conflicts.length > 0 || isCheckingConflicts
+                  ? "bg-neutral-300 text-neutral-500 cursor-not-allowed"
+                  : "bg-brand-red hover:bg-[#c41a21] shadow-brand-red/25 disabled:opacity-50"
+              )}
+            >
+              {isSaving ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Saving & Blocking...</span>
+                </>
+              ) : (
+                <>
+                  <CalendarOff className="w-3.5 h-3.5" />
+                  <span>Save & Block Availability</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
