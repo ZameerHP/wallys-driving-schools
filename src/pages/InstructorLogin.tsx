@@ -25,9 +25,11 @@ import {
   Plus,
   PlusCircle,
   CalendarCheck,
+  CalendarOff,
+  CalendarX,
   Edit3
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
 import { ManualBookingModal } from '../components/ManualBookingModal';
 import { EditBookingModal } from '../components/EditBookingModal';
@@ -229,18 +231,35 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   // Section navigation state
   const [activeTab, setActiveTab] = useState<'schedule' | 'availability'>('schedule');
 
+  // Blocked Days & Time Off state
+  const [blockedDaysList, setBlockedDaysList] = useState<any[]>([]);
+  const [isDeletingBlockId, setIsDeletingBlockId] = useState<string | number | null>(null);
+
   // Edit & Reschedule modal state
   const [editingBooking, setEditingBooking] = useState<BookingItem | null>(null);
 
   // Manual booking modal state
   const [isAddBookingModalOpen, setIsAddBookingModalOpen] = useState(false);
 
+  const loadBlockedDays = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/availability/blocked-days?_t=${Date.now()}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        setBlockedDaysList(Array.isArray(data.blocks) ? data.blocks : []);
+      }
+    } catch (err) {
+      console.warn('Failed to load blocked days list:', err);
+    }
+  }, []);
+
   const loadData = async () => {
     setIsRefreshing(true);
     try {
       const [data, reminderStats] = await Promise.all([
         fetchBookingsFromDb(),
-        fetchReminderSystemStatus()
+        fetchReminderSystemStatus(),
+        loadBlockedDays()
       ]);
       setBookingsList(data);
       if (reminderStats) setReminderStatusInfo(reminderStats);
@@ -253,7 +272,60 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     loadData();
-  }, []);
+
+    const handleAvailabilitySync = () => {
+      loadBlockedDays();
+    };
+    window.addEventListener('wallys-availability-updated', handleAvailabilitySync);
+    return () => window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
+  }, [loadBlockedDays]);
+
+  const handleRemoveBlock = async (block: any) => {
+    const blockId = block.id;
+    const blockDate = block.date;
+    setIsDeletingBlockId(blockId);
+
+    // Optimistic UI update: instantly remove from state
+    setBlockedDaysList(prev => prev.filter(b => String(b.id) !== String(blockId) && b.date !== blockDate));
+    setActionFeedback(`Removing block for ${blockDate}...`);
+
+    try {
+      const safeId = blockId ? String(blockId).trim() : '0';
+      let res = await fetch(`/api/instructor/time-off/${encodeURIComponent(safeId)}?date=${encodeURIComponent(blockDate)}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-instructor-token': 'wally_owner_session'
+        },
+        body: JSON.stringify({ id: blockId, date: blockDate })
+      }).catch(() => null);
+
+      if (!res || !res.ok) {
+        await fetch('/api/instructor/time-off/delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-instructor-token': 'wally_owner_session'
+          },
+          body: JSON.stringify({ id: blockId, date: blockDate })
+        }).catch(() => null);
+      }
+
+      setActionFeedback(`Time off on ${blockDate} removed successfully! Date is now unblocked and students can book.`);
+      await loadBlockedDays();
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
+      }
+    } catch (err: any) {
+      console.error('Failed to remove block:', err);
+      setActionFeedback(`Error removing block: ${err?.message || 'Server error'}`);
+      await loadBlockedDays();
+    } finally {
+      setIsDeletingBlockId(null);
+      setTimeout(() => setActionFeedback(null), 5000);
+    }
+  };
 
   const handleTriggerReminder = async (apt: BookingItem, force = true) => {
     const targetRef = apt.bookingRef || apt.ref || apt.id;
@@ -400,14 +472,21 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             <button
               onClick={() => setActiveTab('availability')}
               className={cn(
-                "flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all text-left cursor-pointer w-full",
+                "flex items-center justify-between px-4 py-3 rounded-xl font-bold text-sm transition-all text-left cursor-pointer w-full",
                 activeTab === 'availability'
                   ? "bg-brand-red text-white shadow-[0_0_15px_rgba(227,34,42,0.3)]"
                   : "text-white/80 hover:text-white hover:bg-white/10"
               )}
             >
-              <Clock className="w-4 h-4 text-amber-400" />
-              <span>Availability / Time Off</span>
+              <div className="flex items-center gap-3">
+                <Clock className="w-4 h-4 text-amber-400" />
+                <span>Blocked Days & Time Off</span>
+              </div>
+              {blockedDaysList.length > 0 && (
+                <span className="bg-amber-500/30 text-amber-200 text-[10px] px-2 py-0.5 rounded-full font-bold">
+                  {blockedDaysList.length}
+                </span>
+              )}
             </button>
 
             <button 
@@ -472,7 +551,12 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
               )}
             >
               <Clock className="w-4 h-4 text-amber-500" />
-              <span>Availability / Time Off</span>
+              <span>Blocked Days & Time Off</span>
+              {blockedDaysList.length > 0 && (
+                <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] px-2 py-0.5 rounded-full font-bold ml-1">
+                  {blockedDaysList.length}
+                </span>
+              )}
             </button>
           </div>
 
@@ -589,6 +673,99 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Active Blocked Days & Instructor Time Off Section */}
+          <div className="bg-white rounded-3xl p-5 mb-6 shadow-sm border border-black/5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-black/5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 text-amber-600">
+                  <CalendarOff className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-brand-black">
+                      Blocked Days & Time Off (No Student Bookings)
+                    </h3>
+                    <span className={cn(
+                      "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                      blockedDaysList.length > 0
+                        ? "bg-amber-100 text-amber-800 border border-amber-200"
+                        : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                    )}>
+                      {blockedDaysList.length > 0 ? `${blockedDaysList.length} Active Block${blockedDaysList.length === 1 ? '' : 's'}` : 'Fully Open'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-black/60 mt-0.5">
+                    Dates or hours marked off will block customers from booking on the website. Remove any block to immediately reopen booking availability.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setActiveTab('availability')}
+                  className="bg-brand-black hover:bg-neutral-800 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Block New Date / Time</span>
+                </button>
+              </div>
+            </div>
+
+            {blockedDaysList.length === 0 ? (
+              <div className="p-4 bg-emerald-50/70 border border-emerald-200/60 rounded-2xl flex items-center justify-between text-xs text-emerald-900">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>All dates and standard lesson hours are currently open for student bookings across Western Sydney.</span>
+                </div>
+                <button
+                  onClick={() => setActiveTab('availability')}
+                  className="text-xs font-bold text-emerald-800 hover:text-emerald-950 underline cursor-pointer ml-3 shrink-0"
+                >
+                  Manage Availability &rarr;
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {blockedDaysList.map((block) => (
+                  <div
+                    key={block.id || block.date}
+                    className="p-3.5 bg-amber-50/50 border border-amber-200/80 rounded-2xl flex flex-col justify-between gap-2.5 transition-all hover:shadow-sm"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="font-bold text-xs text-brand-black flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-brand-red" />
+                          {block.date}
+                        </span>
+                        <span className={cn(
+                          "px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider",
+                          block.isFullDay
+                            ? "bg-rose-100 text-rose-800 border border-rose-200"
+                            : "bg-amber-100 text-amber-800 border border-amber-200"
+                        )}>
+                          {block.isFullDay ? "Full Day Off" : `${block.startTime || ''} – ${block.endTime || ''}`}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-black/70 italic line-clamp-1">
+                        {block.reason ? `Reason: ${block.reason}` : "Instructor Time Off"}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => handleRemoveBlock(block)}
+                      disabled={isDeletingBlockId === block.id}
+                      className="w-full py-1.5 px-3 bg-white hover:bg-rose-50 text-rose-600 hover:text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      title="Remove this block and restore student booking availability"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>{isDeletingBlockId === block.id ? "Removing..." : "Remove Block (Restore Booking)"}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Search & Filter Bar */}

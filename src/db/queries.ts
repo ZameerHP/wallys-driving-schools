@@ -1196,27 +1196,42 @@ export async function updateTimeOffBlock(
 export async function deleteTimeOffBlock(id: number | string, fallbackDate?: string): Promise<boolean> {
   await ensureTimeOffTable();
 
+  // Read current file to identify the target item if possible
+  const currentBlocks = readTimeOffFile();
   const strId = String(id || '').trim();
   const numId = (!isNaN(Number(strId)) && Number(strId) > 0) ? Number(strId) : null;
   const is32Bit = numId !== null && numId <= 2147483647;
 
+  // Find target item to get its exact date
+  const targetItem = currentBlocks.find(b => {
+    const bStr = String(b.id || '').trim();
+    if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) return true;
+    if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) return true;
+    if (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate))) return true;
+    return false;
+  });
+
+  const targetDate = targetItem?.date || fallbackDate;
+  const targetNormDate = targetDate ? normalizeDate(targetDate) : undefined;
+
   if (db && isSqlConfigured) {
     try {
-      if (is32Bit) {
+      if (is32Bit && numId !== null) {
         await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId));
       }
-      if (fallbackDate) {
-        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, fallbackDate));
+      if (targetNormDate) {
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, targetNormDate));
+      }
+      if (targetDate && targetDate !== targetNormDate) {
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, targetDate));
       }
     } catch (err) {
       console.warn('[TimeOff] Failed deleting from SQL:', err);
     }
   }
 
-  // Always re-read fresh from disk
-  inMemoryTimeOff = readTimeOffFile();
-
-  inMemoryTimeOff = inMemoryTimeOff.filter(b => {
+  // Filter in-memory & file store
+  inMemoryTimeOff = currentBlocks.filter(b => {
     const bStr = String(b.id || '').trim();
     if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) {
       return false;
@@ -1224,7 +1239,10 @@ export async function deleteTimeOffBlock(id: number | string, fallbackDate?: str
     if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) {
       return false;
     }
-    if (fallbackDate && b.date === fallbackDate) {
+    if (targetNormDate && normalizeDate(b.date) === targetNormDate) {
+      return false;
+    }
+    if (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate))) {
       return false;
     }
     return true;

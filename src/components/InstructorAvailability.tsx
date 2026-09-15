@@ -306,6 +306,9 @@ export function InstructorAvailability() {
 
       setIsFormOpen(false);
       await loadTimeOff();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
+      }
       setTimeout(() => setFeedback(null), 6000);
     } catch (err: any) {
       console.error('Error saving time off block:', err);
@@ -355,6 +358,9 @@ export function InstructorAvailability() {
       // Close modal and refresh authoritative data
       setDeletingBlock(null);
       await loadTimeOff();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
+      }
       setTimeout(() => setFeedback(null), 6000);
     } catch (err: any) {
       console.error('Error removing time off block:', err);

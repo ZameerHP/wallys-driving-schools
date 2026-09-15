@@ -444,7 +444,8 @@ export function BookNow() {
         if (Array.isArray(data.blocks)) {
           for (const b of data.blocks) {
             const norm = normalizeDateStr(b.date);
-            if (norm && b.isFullDay) {
+            const isFullDay = Boolean(b.isFullDay) || b.isFullDay === 'true' || (!b.startTime && !b.endTime);
+            if (norm && isFullDay) {
               map.set(norm, { isFullDay: true, reason: b.reason || 'Instructor Day Off' });
             }
           }
@@ -467,7 +468,15 @@ export function BookNow() {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          setBookedSlots(data);
+          if (targetDate) {
+            const normTarget = normalizeDateStr(targetDate);
+            setBookedSlots(prev => {
+              const others = prev.filter(b => normalizeDateStr(b.date) !== normTarget);
+              return [...others, ...data];
+            });
+          } else {
+            setBookedSlots(data);
+          }
         }
       }
       refreshBlockedDays();
@@ -513,7 +522,17 @@ export function BookNow() {
       refreshAvailability();
       refreshBlockedDays();
     }, 8000);
-    return () => clearInterval(timer);
+
+    const handleSync = () => {
+      refreshBlockedDays();
+      refreshAvailability();
+    };
+    window.addEventListener('wallys-availability-updated', handleSync);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('wallys-availability-updated', handleSync);
+    };
   }, [refreshAvailability, refreshBlockedDays]);
 
   // Auto-advance away from blocked days if initial or selected date is blocked off by the owner

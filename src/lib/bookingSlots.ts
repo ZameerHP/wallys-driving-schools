@@ -330,12 +330,16 @@ export function checkSlotAvailability(
     if (normalizeDateStr(b.date) === normTargetDate) {
       // 1a. Check for Full Day Off block
       const cleanTime = (b.time || '').trim().toLowerCase();
-      if (
-        b.isFullDay ||
+      const isFullDayBlock = Boolean(b.isFullDay) ||
         cleanTime === 'full day off' ||
         cleanTime === 'all day' ||
-        cleanTime.includes('day off')
-      ) {
+        cleanTime === 'full_day' ||
+        cleanTime === 'full' ||
+        cleanTime.includes('day off') ||
+        cleanTime.includes('full day') ||
+        cleanTime.includes('day-off');
+
+      if (isFullDayBlock) {
         return {
           available: false,
           reason: 'time_off',
