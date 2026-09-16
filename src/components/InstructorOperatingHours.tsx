@@ -78,7 +78,7 @@ export function InstructorOperatingHours() {
     thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
     friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
     saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
-    sunday: { enabled: false, label: 'Sunday', periods: [] }
+    sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
   });
   const [bufferMinutes, setBufferMinutes] = useState<number>(15);
   const [timezone, setTimezone] = useState('Australia/Sydney');
@@ -204,7 +204,7 @@ export function InstructorOperatingHours() {
         ...current,
         enabled: willBeEnabled,
         periods: willBeEnabled && current.periods.length === 0
-          ? [{ start: '08:00 AM', end: '06:00 PM' }]
+          ? [{ start: '08:00 AM', end: (day === 'sunday' || day === 'saturday') ? '05:00 PM' : '06:00 PM' }]
           : current.periods
       }
     };

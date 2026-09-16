@@ -2016,11 +2016,19 @@ app.get("/api/availability/operating-hours", async (req, res) => {
     const instructorId = (req.query.instructorId as string) || 'wally';
     let settings = getInstructorSettings(instructorId);
 
-    // If database has saved settings, keep memory synchronized
+    // Synchronize between database and file store using timestamps
     try {
       const dbSettings = await getInstructorSettingsDb(instructorId);
       if (dbSettings && dbSettings.operatingHours) {
-        settings = saveInstructorSettings(dbSettings);
+        const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
+        const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
+        if (dbTime > localTime) {
+          settings = saveInstructorSettings(dbSettings);
+        } else if (localTime > dbTime) {
+          saveInstructorSettingsDb(instructorId, settings).catch(() => {});
+        }
+      } else if (settings && settings.operatingHours) {
+        saveInstructorSettingsDb(instructorId, settings).catch(() => {});
       }
     } catch {}
 
@@ -2058,9 +2066,13 @@ app.get("/api/instructor/operating-hours", async (req, res) => {
       if (dbSettings && dbSettings.operatingHours) {
         const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
         const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime >= localTime) {
+        if (dbTime > localTime) {
           settings = saveInstructorSettings(dbSettings);
+        } else if (localTime > dbTime) {
+          saveInstructorSettingsDb(instructorId, settings).catch(() => {});
         }
+      } else if (settings && settings.operatingHours) {
+        saveInstructorSettingsDb(instructorId, settings).catch(() => {});
       }
     } catch {}
 
@@ -2091,10 +2103,12 @@ app.put("/api/instructor/operating-hours", attachInstructorOrAuth, async (req, r
       maxAdvanceDays: typeof maxAdvanceDays === 'number' ? maxAdvanceDays : undefined
     });
 
-    // Asynchronously persist to Supabase / PostgreSQL database
-    saveInstructorSettingsDb(instructorId, updated).catch(err => {
+    // Ensure persisted to Supabase / PostgreSQL database
+    try {
+      await saveInstructorSettingsDb(instructorId, updated);
+    } catch (err) {
       console.warn('[OperatingHours] Warning saving settings to database:', err);
-    });
+    }
 
     res.json({
       success: true,

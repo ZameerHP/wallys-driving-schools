@@ -1165,7 +1165,7 @@ export async function createTimeOffBlock(data: {
         updatedAt: now,
       };
     }
-  } else {
+  } else if (!createdBlock) {
     createdBlock = {
       id: Date.now(),
       instructorId: data.instructorId || 'wally',

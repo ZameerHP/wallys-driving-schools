@@ -305,7 +305,29 @@ export function BookNow() {
     dateOverrides?: any[];
     bufferMinutes?: number;
     timezone?: string;
-  }>({});
+  }>(() => {
+    try {
+      const cached = localStorage.getItem('wallys_operating_settings');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed?.operatingHours) return parsed;
+        if (parsed?.settings?.operatingHours) return parsed.settings;
+      }
+    } catch {}
+    return {
+      operatingHours: {
+        monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+        tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+        wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+        thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+        friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+        saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
+        sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
+      },
+      bufferMinutes: 15,
+      timezone: 'Australia/Sydney'
+    };
+  });
   const [isRefreshingSlots, setIsRefreshingSlots] = useState(false);
   const [slotConflictError, setSlotConflictError] = useState<string | null>(null);
 
@@ -561,10 +583,10 @@ export function BookNow() {
     }
 
     const parts = dateStr.split('-').map(Number);
-    if (parts.length === 3) {
-      const d = new Date(parts[0], parts[1] - 1, parts[2]);
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+      const dayIdx = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
       const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const dayKey = dayNames[d.getDay()];
+      const dayKey = dayNames[dayIdx];
       const dayConfig = operatingSettings.operatingHours?.[dayKey];
 
       if (dayConfig) {
@@ -573,12 +595,9 @@ export function BookNow() {
         }
         return { isClosed: false, periods: dayConfig.periods };
       }
-      if (d.getDay() === 0) {
-        return { isClosed: true, periods: [], reason: 'Closed on Sundays' };
-      }
     }
 
-    return { isClosed: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
+    return { isClosed: false, periods: [{ start: '08:00 AM', end: '05:00 PM' }] };
   }, [operatingSettings]);
 
   // Helper to find next non-blocked, upcoming available date
@@ -676,12 +695,13 @@ export function BookNow() {
     };
   }, [refreshAvailability, refreshBlockedDays, refreshOperatingHours]);
 
-  // Auto-advance away from blocked days if initial or selected date is blocked off by the owner
+  // Auto-advance away from blocked days or closed days if initial or selected date is off
   useEffect(() => {
-    if (blockedOffDays.size === 0) return;
-
     const norm = normalizeDateStr(selectedDate);
-    if (norm && blockedOffDays.has(norm)) {
+    const dayInfo = getDayOperatingInfo(selectedDate);
+    const isSelectedClosed = dayInfo.isClosed || (norm ? blockedOffDays.has(norm) : false);
+
+    if (isSelectedClosed) {
       const nextDate = findNextAvailableDate(selectedDate, blockedOffDays);
       if (nextDate && nextDate !== selectedDate) {
         setSelectedDate(nextDate);
@@ -704,7 +724,8 @@ export function BookNow() {
       let changed = false;
       const updated = prev.map((l, idx) => {
         const lNorm = normalizeDateStr(l.date);
-        if (lNorm && blockedOffDays.has(lNorm)) {
+        const lDayInfo = getDayOperatingInfo(l.date);
+        if ((lNorm && blockedOffDays.has(lNorm)) || lDayInfo.isClosed) {
           changed = true;
           const nextDate = findNextAvailableDate(l.date, blockedOffDays, idx);
           return {
@@ -716,7 +737,7 @@ export function BookNow() {
       });
       return changed ? updated : prev;
     });
-  }, [blockedOffDays, findNextAvailableDate, selectedDate, activeLessonIndex]);
+  }, [blockedOffDays, findNextAvailableDate, selectedDate, activeLessonIndex, getDayOperatingInfo]);
   
   // Determine if a slot is available based on DB bookings + 30 min buffer
   const isSlotAvailable = useCallback((date: string, time: string) => {

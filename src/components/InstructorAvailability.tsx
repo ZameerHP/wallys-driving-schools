@@ -384,11 +384,16 @@ export function InstructorAvailability() {
           : `Availability blocked for ${formatHumanDate(date)} (${isFullDay ? 'Full Day Off' : `${startTime} – ${endTime}`})!`
       });
 
+      // Direct client Supabase synchronization if configured
+      if (data.block) {
+        createClientTimeOffBlock(data.block).catch(() => {});
+      } else {
+        createClientTimeOffBlock({ ...payload, id: `block_${Date.now()}` }).catch(() => {});
+      }
+
       setIsFormOpen(false);
       await loadTimeOff();
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
-      }
+      broadcastAvailabilityChange();
       setTimeout(() => setFeedback(null), 6000);
     } catch (err: any) {
       console.error('Error saving time off block:', err);
