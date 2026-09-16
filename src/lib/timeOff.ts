@@ -86,13 +86,13 @@ export async function fetchTimeOffBlocks(): Promise<TimeOffItem[]> {
     console.warn('[TimeOff] Backend API unavailable, falling back to cloud/local storage:', err);
   }
 
-  if (apiBlocks && apiBlocks.length > 0) {
-    // If API responded with blocks, sync to local cache
+  if (apiBlocks !== null && Array.isArray(apiBlocks)) {
+    // If API responded, sync to local cache and return immediately
     saveLocalTimeOffBlocks(apiBlocks);
     return apiBlocks;
   }
 
-  // 2. Direct Supabase Fallback (Crucial for Hostinger static hosting where /api returns 404, or if API was empty)
+  // 2. Direct Supabase Fallback (Crucial for static hosting where /api returns 404)
   const client = getSupabase();
   if (client) {
     try {
@@ -101,7 +101,7 @@ export async function fetchTimeOffBlocks(): Promise<TimeOffItem[]> {
         .select('*')
         .order('date', { ascending: true });
 
-      if (!error && Array.isArray(data) && data.length > 0) {
+      if (!error && Array.isArray(data)) {
         const mapped: TimeOffItem[] = data.map(r => ({
           id: r.id,
           instructorId: r.instructor_id || 'wally',
@@ -124,12 +124,6 @@ export async function fetchTimeOffBlocks(): Promise<TimeOffItem[]> {
     } catch (sbErr) {
       console.warn('[TimeOff] Direct Supabase query error:', sbErr);
     }
-  }
-
-  if (apiBlocks !== null && Array.isArray(apiBlocks)) {
-    // If API responded with empty array and Supabase had no rows either
-    saveLocalTimeOffBlocks(apiBlocks);
-    return apiBlocks;
   }
 
   // 3. Return local storage cache if network/backend is completely offline

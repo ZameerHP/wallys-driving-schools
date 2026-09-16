@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { broadcastAvailabilityChange } from '../lib/timeOff';
+import { getSupabase } from '../lib/supabase';
 
 export interface TimePeriod {
   start: string;
@@ -146,7 +147,28 @@ export function InstructorOperatingHours() {
 
     broadcastAvailabilityChange();
 
-    // 2. Persist to server API
+    // 2. Direct client Supabase update if configured
+    const client = getSupabase();
+    if (client) {
+      try {
+        await client.from('instructor_settings').upsert({
+          instructor_id: 'wally',
+          settings_json: JSON.stringify({
+            instructorId: 'wally',
+            instructorName: 'Wally',
+            timezone: tzToSave,
+            bufferMinutes: bufferToSave,
+            operatingHours: hoursToSave,
+            updatedAt: new Date().toISOString()
+          }),
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'instructor_id' });
+      } catch (sbErr) {
+        console.warn('[OperatingHours] Supabase direct client save warning:', sbErr);
+      }
+    }
+
+    // 3. Persist to server API
     try {
       const res = await fetch('/api/instructor/operating-hours', {
         method: 'PUT',

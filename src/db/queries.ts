@@ -820,7 +820,7 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
         .select('*')
         .order('date', { ascending: true });
 
-      if (!error && Array.isArray(data) && data.length > 0) {
+      if (!error && Array.isArray(data)) {
         const mapped: TimeOffBlock[] = data.map(r => {
           const sMin = r.start_minutes ?? (r.start_time ? timeStringToMinutes(r.start_time) : null);
           const eMin = r.end_minutes ?? (r.end_time ? timeStringToMinutes(r.end_time) : null);
@@ -864,7 +864,7 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
   if (db && isSqlConfigured) {
     try {
       const rows = await db.select().from(instructorTimeOff);
-      if (rows && rows.length > 0) {
+      if (rows) {
         const mapped: TimeOffBlock[] = rows.map(r => {
           const sMin = r.startMinutes ?? (r.startTime ? timeStringToMinutes(r.startTime) : null);
           const eMin = r.endMinutes ?? (r.endTime ? timeStringToMinutes(r.endTime) : null);
@@ -898,53 +898,6 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
           return mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
         }
         return mapped;
-      } else {
-        // If SQL returned 0 rows, check if we have disk file blocks to seed into SQL
-        const diskBlocks = readTimeOffFile();
-        if (diskBlocks.length > 0) {
-          try {
-            for (const b of diskBlocks) {
-              const sMin = b.startMinutes ?? (b.startTime ? timeStringToMinutes(b.startTime) : null);
-              const eMin = b.endMinutes ?? (b.endTime ? timeStringToMinutes(b.endTime) : null);
-              await db.insert(instructorTimeOff).values({
-                instructorId: b.instructorId || 'wally',
-                instructorName: b.instructorName || 'Wally',
-                date: normalizeDate(b.date) || b.date,
-                isFullDay: b.isFullDay ? 1 : 0,
-                startTime: b.isFullDay ? null : (to24HourTime(b.startTime) || b.startTime),
-                endTime: b.isFullDay ? null : (to24HourTime(b.endTime) || b.endTime),
-                startMinutes: b.isFullDay ? null : sMin,
-                endMinutes: b.isFullDay ? null : eMin,
-                reason: b.reason || null,
-              });
-            }
-            // Re-query newly seeded rows
-            const newRows = await db.select().from(instructorTimeOff);
-            if (newRows && newRows.length > 0) {
-              const mapped: TimeOffBlock[] = newRows.map(r => ({
-                id: r.id,
-                instructorId: r.instructorId || 'wally',
-                instructorName: r.instructorName || 'Wally',
-                date: normalizeDate(r.date) || r.date,
-                isFullDay: Boolean(r.isFullDay),
-                startTime: r.startTime,
-                endTime: r.endTime,
-                startMinutes: r.startMinutes,
-                endMinutes: r.endMinutes,
-                displayStartTime: to12HourDisplay(r.startTime),
-                displayEndTime: to12HourDisplay(r.endTime),
-                reason: r.reason,
-                createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
-                updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
-              }));
-              inMemoryTimeOff = mapped;
-              writeTimeOffFile(mapped);
-              return instructorId ? mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase()) : mapped;
-            }
-          } catch (seedErr) {
-            console.warn('[TimeOff] Failed seeding disk blocks into SQL:', seedErr);
-          }
-        }
       }
     } catch (err) {
       console.warn('[TimeOff] SQL fetch error, falling back to cached file/memory store:', err);

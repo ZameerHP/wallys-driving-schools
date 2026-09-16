@@ -429,14 +429,17 @@ export function InstructorAvailability() {
       const headers = getInstructorHeaders(true);
       const safeId = block.id ? String(block.id).trim() : '0';
 
-      // Tier 1: DELETE /api/instructor/time-off/:id?date=... with body payload fallback
+      // Tier 1: Dedicated multi-tier client helper (Supabase direct + API + local storage sync)
+      await deleteClientTimeOffBlock(block.id, block.date);
+
+      // Tier 2: DELETE /api/instructor/time-off/:id?date=... with body payload fallback
       let res = await fetch(`/api/instructor/time-off/${encodeURIComponent(safeId)}?date=${encodeURIComponent(block.date)}`, {
         method: 'DELETE',
         headers,
         body: JSON.stringify({ id: block.id, date: block.date })
       }).catch(() => null);
 
-      // Tier 2: If Tier 1 failed or returned non-ok, fallback to POST /api/instructor/time-off/delete
+      // Tier 3: If Tier 2 failed or returned non-ok, fallback to POST /api/instructor/time-off/delete
       if (!res || !res.ok) {
         res = await fetch(`/api/instructor/time-off/delete?date=${encodeURIComponent(block.date)}`, {
           method: 'POST',
