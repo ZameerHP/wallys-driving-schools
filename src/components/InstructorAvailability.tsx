@@ -20,26 +20,24 @@ import {
   Check,
   Database,
   CalendarDays,
-  ArrowRight
+  ArrowRight,
+  Settings2,
+  ExternalLink
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-
-export interface TimeOffItem {
-  id: number | string;
-  date: string;
-  isFullDay: boolean;
-  startTime?: string | null;
-  endTime?: string | null;
-  displayStartTime?: string | null;
-  displayEndTime?: string | null;
-  startMinutes?: number | null;
-  endMinutes?: number | null;
-  reason?: string | null;
-  instructorId?: string;
-  instructorName?: string;
-  createdAt?: string | Date;
-  updatedAt?: string | Date;
-}
+import { 
+  fetchTimeOffBlocks, 
+  createClientTimeOffBlock, 
+  deleteClientTimeOffBlock, 
+  getLocalTimeOffBlocks, 
+  broadcastAvailabilityChange,
+  TimeOffItem
+} from '../lib/timeOff';
+import { 
+  isSupabaseReady, 
+  getSupabase, 
+  setSupabaseConfig 
+} from '../lib/supabase';
 
 interface ConflictDetail {
   id: number | string;

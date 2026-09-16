@@ -243,23 +243,83 @@ export const STANDARD_START_TIMES = [
   { label: '5:00 PM', startMinutes: 1020 },
 ];
 
+export interface SlotPeriod {
+  start?: string;
+  end?: string;
+  startMinutes?: number;
+  endMinutes?: number;
+}
+
+export function parseTimeToMinutes(str: string): number | null {
+  if (!str) return null;
+  const clean = str.trim().toUpperCase();
+  const m24 = clean.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    return parseInt(m24[1], 10) * 60 + parseInt(m24[2], 10);
+  }
+  const m12 = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (m12) {
+    let h = parseInt(m12[1], 10);
+    const m = m12[2] ? parseInt(m12[2], 10) : 0;
+    const ampm = (m12[3] || '').toUpperCase();
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return h * 60 + m;
+  }
+  return null;
+}
+
 /**
  * Generate all valid time slots for a given duration (e.g. 60m, 120m, 150m, 210m)
- * Ensures slots finish strictly by 6:00 PM (1080 minutes)
+ * Respects dynamic instructor operating periods (including multiple periods / lunch breaks)
+ * Ensures candidate slots fit completely inside one continuous period!
  */
-export function generateSlotsForDuration(durationMinutes: number): {
+export function generateSlotsForDuration(
+  durationMinutes: number,
+  periods?: SlotPeriod[]
+): {
   slot: string;
   startMinutes: number;
   endMinutes: number;
   durationLabel: string;
 }[] {
-  const MAX_END_MINUTES = 1080; // 6:00 PM
-
   let durationLabel = `${durationMinutes}m`;
   if (durationMinutes === 60) durationLabel = '1 hr';
   else if (durationMinutes === 120) durationLabel = '2 hrs';
   else if (durationMinutes === 150) durationLabel = '2.5 hrs continuous';
   else if (durationMinutes === 210) durationLabel = '3.5 hrs continuous';
+
+  // If specific working periods are provided (e.g. 8am-12pm and 1pm-6pm)
+  if (periods && periods.length > 0) {
+    const slots: { slot: string; startMinutes: number; endMinutes: number; durationLabel: string }[] = [];
+    const stepMinutes = 30; // 30-minute booking interval grid
+
+    for (const period of periods) {
+      const pStart = period.startMinutes ?? (period.start ? parseTimeToMinutes(period.start) : null);
+      const pEnd = period.endMinutes ?? (period.end ? parseTimeToMinutes(period.end) : null);
+      if (pStart === null || pEnd === null || pEnd - pStart < durationMinutes) continue;
+
+      for (let sMin = pStart; sMin + durationMinutes <= pEnd; sMin += stepMinutes) {
+        slots.push({
+          slot: formatSlotRange(sMin, durationMinutes),
+          startMinutes: sMin,
+          endMinutes: sMin + durationMinutes,
+          durationLabel
+        });
+      }
+    }
+
+    // Deduplicate by slot string
+    const seen = new Set<string>();
+    return slots.filter(s => {
+      if (seen.has(s.slot)) return false;
+      seen.add(s.slot);
+      return true;
+    });
+  }
+
+  // Default fallback: 8:00 AM - 6:00 PM (1080 mins)
+  const MAX_END_MINUTES = 1080;
 
   return STANDARD_START_TIMES
     .filter(t => t.startMinutes + durationMinutes <= MAX_END_MINUTES)
@@ -307,6 +367,13 @@ export interface SlotAvailabilityResult {
   conflictingLesson?: number;
 }
 
+export interface CheckSlotOptions {
+  bufferMinutes?: number;
+  operatingPeriods?: SlotPeriod[];
+  isClosed?: boolean;
+  reason?: string;
+}
+
 /**
  * Check if a proposed slot is available:
  * 1. Checks against database booked slots and instructor time-off blocks (+30m buffer for bookings, 0 buffer for time off)
@@ -317,14 +384,49 @@ export function checkSlotAvailability(
   timeSlot: string,
   bookedSlots: { date: string; time: string; status?: string; isFullDay?: boolean; reason?: string }[],
   otherLessons?: { date: string; time: string; lessonNumber?: number }[],
-  currentLessonNumber?: number
+  currentLessonNumber?: number,
+  bufferMinutesOrOptions: number | CheckSlotOptions = 15,
+  operatingPeriodsArg?: SlotPeriod[]
 ): SlotAvailabilityResult {
   const normTargetDate = normalizeDateStr(date);
   if (!normTargetDate) return { available: true };
 
+  const options: CheckSlotOptions = typeof bufferMinutesOrOptions === 'object'
+    ? bufferMinutesOrOptions
+    : { bufferMinutes: bufferMinutesOrOptions, operatingPeriods: operatingPeriodsArg };
+
+  if (options.isClosed) {
+    return {
+      available: false,
+      reason: 'time_off',
+      conflictReason: options.reason || 'Instructor is closed or unavailable on this day'
+    };
+  }
+
+  const bufferMinutes = options.bufferMinutes ?? 15;
+  const operatingPeriods = options.operatingPeriods ?? operatingPeriodsArg;
+
   const targetInterval = parseTimeInterval(timeSlot);
 
-  // 1. Check against DB booked slots & time off blocks
+  // 0. Check operating periods if supplied
+  if (operatingPeriods && operatingPeriods.length > 0 && targetInterval) {
+    const fitsPeriod = operatingPeriods.some(p => {
+      const pStart = p.startMinutes ?? (p.start ? parseTimeToMinutes(p.start) : null);
+      const pEnd = p.endMinutes ?? (p.end ? parseTimeToMinutes(p.end) : null);
+      if (pStart === null || pEnd === null) return false;
+      return targetInterval.start >= pStart && targetInterval.end <= pEnd;
+    });
+
+    if (!fitsPeriod) {
+      return {
+        available: false,
+        reason: 'time_off',
+        conflictReason: 'Outside instructor operating hours or during a scheduled break'
+      };
+    }
+  }
+
+  // 1. Check against DB booked slots & time off blocks & external calendar events
   for (const b of bookedSlots) {
     if (b.status === 'Cancelled') continue;
     if (normalizeDateStr(b.date) === normTargetDate) {
@@ -352,22 +454,27 @@ export function checkSlotAvailability(
 
       const existingInterval = parseTimeInterval(b.time);
       if (existingInterval) {
-        const buffer = b.status === 'Blocked' ? 0 : 30;
-        if (isTimeSlotConflicting(targetInterval, existingInterval, buffer)) {
+        // Apply buffer for student bookings AND external calendar events
+        const isExternalCalendar = (b.reason || '').toLowerCase().includes('calendar') || (b.reason || '').toLowerCase().includes('external');
+        const effectiveBuffer = (b.status === 'Blocked' && !isExternalCalendar) ? 0 : bufferMinutes;
+        
+        if (isTimeSlotConflicting(targetInterval, existingInterval, effectiveBuffer)) {
+          const isTimeOff = b.status === 'Blocked';
           return {
             available: false,
-            reason: b.status === 'Blocked' ? 'time_off' : 'booked',
-            conflictReason: b.status === 'Blocked'
-              ? (b.reason || 'Blocked by instructor availability / time off')
+            reason: isTimeOff ? 'time_off' : 'booked',
+            conflictReason: isTimeOff
+              ? (b.reason || 'Blocked by instructor availability / external calendar')
               : 'Already booked with instructor Wally'
           };
         }
       } else if (cleanTime === timeSlot.trim().toLowerCase()) {
+        const isTimeOff = b.status === 'Blocked';
         return {
           available: false,
-          reason: b.status === 'Blocked' ? 'time_off' : 'booked',
-          conflictReason: b.status === 'Blocked'
-            ? (b.reason || 'Blocked by instructor availability / time off')
+          reason: isTimeOff ? 'time_off' : 'booked',
+          conflictReason: isTimeOff
+            ? (b.reason || 'Blocked by instructor availability / external calendar')
             : 'Already booked with instructor Wally'
         };
       }
@@ -381,10 +488,10 @@ export function checkSlotAvailability(
         continue; // Skip self
       }
       if (!other.date || !other.time) continue;
-      if (normalizeDateStr(other.date) === normTargetDate) {
+      if (normalizeDateStr(other.date) === normTargetDate && targetInterval) {
         const otherInterval = parseTimeInterval(other.time);
         if (otherInterval) {
-          if (isTimeSlotConflicting(targetInterval, otherInterval, 30)) {
+          if (isTimeSlotConflicting(targetInterval, otherInterval, bufferMinutes)) {
             const label = other.lessonNumber ? `Lesson ${other.lessonNumber}` : 'Another lesson';
             return {
               available: false,

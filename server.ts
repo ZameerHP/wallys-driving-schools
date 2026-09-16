@@ -30,9 +30,27 @@ import {
   deleteTimeOffBlock,
   checkTimeOffBookingConflicts,
   timeStringToMinutes,
-  minutesToTimeString
+  minutesToTimeString,
+  getInstructorSettingsDb,
+  saveInstructorSettingsDb
 } from "./src/db/queries.ts";
 import { STANDARD_START_TIMES } from "./src/lib/bookingSlots.ts";
+import {
+  getInstructorSettings,
+  saveInstructorSettings,
+  getDisabledDaysOfWeek,
+  getDateOverrides,
+  addDateOverride,
+  deleteDateOverride,
+  getCalendarConnection,
+  updateCalendarConnection,
+  getExternalEvents,
+  addExternalEvent,
+  deleteExternalEvent,
+  syncIcalFeed,
+  validateLessonSlot,
+  getWorkingPeriodsForDate
+} from "./src/server/instructorAvailabilityService.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
 import { validateAustralianPhone, validateWorkingEmail, validateInternationalPhone } from "./src/lib/validation.ts";
@@ -137,6 +155,10 @@ app.use((req, _res, next) => {
     req.url.startsWith('/health') ||
     req.url.startsWith('/auth') ||
     req.url.startsWith('/instructor') ||
+    req.url.startsWith('/availability') ||
+    req.url.startsWith('/reminders') ||
+    req.url.startsWith('/supabase') ||
+    req.url.startsWith('/time-off') ||
     req.url.startsWith('/create-checkout-session') ||
     req.url.startsWith('/verify-checkout-session')
   )) {
@@ -1814,7 +1836,7 @@ app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
 
 // Fetch bookings (all, or filtered by email/user) - only paid bookings for customer facing views
 
-// Fetch availability (booked slots and instructor blocked periods, real-time with zero caching)
+// Fetch availability (booked slots, instructor blocked periods, operating hours, external calendar events, real-time with zero caching)
 app.get("/api/availability", async (req, res) => {
   try {
     res.set({
@@ -1824,7 +1846,7 @@ app.get("/api/availability", async (req, res) => {
     });
 
     const targetDate = req.query.date ? normalizeDate(String(req.query.date)) : undefined;
-    const instructorId = req.query.instructorId ? String(req.query.instructorId) : undefined;
+    const instructorId = req.query.instructorId ? String(req.query.instructorId) : 'wally';
     const list = await getBookings({ includeUnpaid: true });
     const now = Date.now();
     const PENDING_TIMEOUT_MS = 20 * 60 * 1000;
@@ -1857,7 +1879,7 @@ app.get("/api/availability", async (req, res) => {
         status: b.status
       }));
 
-    // Incorporate instructor time-off blocks
+    // 1. Incorporate instructor time-off blocks
     const timeOffBlocks = await getTimeOffBlocks(instructorId);
     for (const block of timeOffBlocks) {
       const normBlockDate = normalizeDate(block.date);
@@ -1865,7 +1887,6 @@ app.get("/api/availability", async (req, res) => {
       if (targetDate && normBlockDate !== targetDate) continue;
 
       if (block.isFullDay) {
-        // Mark full day off
         bookedSlots.push({
           date: normBlockDate,
           time: 'FULL_DAY',
@@ -1873,7 +1894,6 @@ app.get("/api/availability", async (req, res) => {
           isFullDay: true,
           reason: block.reason || 'Instructor Day Off'
         });
-        // Also add each standard candidate slot as blocked so slot buttons are disabled
         for (const slot of STANDARD_START_TIMES) {
           bookedSlots.push({
             date: normBlockDate,
@@ -1889,11 +1909,9 @@ app.get("/api/availability", async (req, res) => {
         block.endMinutes !== null && 
         block.endMinutes !== undefined
       ) {
-        // Partial block (e.g. 1:00 PM to 3:00 PM)
-        // Mark standard slots whose 60-min window overlaps with the block
         for (const slot of STANDARD_START_TIMES) {
           const slotStart = slot.startMinutes;
-          const slotEnd = slotStart + 60; // 1-hour default lesson
+          const slotEnd = slotStart + 60;
           if (slotStart < block.endMinutes && slotEnd > block.startMinutes) {
             bookedSlots.push({
               date: normBlockDate,
@@ -1905,7 +1923,6 @@ app.get("/api/availability", async (req, res) => {
           }
         }
 
-        // Also push the formatted window label
         if (block.startTime && block.endTime) {
           bookedSlots.push({
             date: normBlockDate,
@@ -1918,10 +1935,357 @@ app.get("/api/availability", async (req, res) => {
       }
     }
 
+    // 2. Incorporate Date Overrides
+    const overrides = getDateOverrides(instructorId);
+    for (const ov of overrides) {
+      const normOvDate = normalizeDate(ov.date);
+      if (!normOvDate) continue;
+      if (targetDate && normOvDate !== targetDate) continue;
+
+      if (ov.type === 'unavailable' || ov.isFullDay) {
+        bookedSlots.push({
+          date: normOvDate,
+          time: 'FULL_DAY',
+          status: 'Blocked',
+          isFullDay: true,
+          reason: ov.reason || 'Instructor Unavailable (Date Override)'
+        });
+        for (const slot of STANDARD_START_TIMES) {
+          bookedSlots.push({
+            date: normOvDate,
+            time: slot.label,
+            status: 'Blocked',
+            isFullDay: true,
+            reason: ov.reason || 'Instructor Unavailable'
+          });
+        }
+      }
+    }
+
+    // 3. Incorporate External Calendar Events (+ buffer)
+    const settings = getInstructorSettings(instructorId);
+    const buffer = settings.bufferMinutes || 15;
+    const extEvents = getExternalEvents(targetDate, instructorId);
+    for (const ev of extEvents) {
+      const normEvDate = normalizeDate(ev.date);
+      if (!normEvDate) continue;
+      if (targetDate && normEvDate !== targetDate) continue;
+
+      // Mark the formatted window as blocked
+      bookedSlots.push({
+        date: normEvDate,
+        time: `${ev.startTime} – ${ev.endTime}`,
+        status: 'Blocked',
+        isPartialBlock: true,
+        reason: `External Calendar Event: ${ev.title}`
+      });
+
+      // Mark overlapping candidate standard slots as blocked
+      for (const slot of STANDARD_START_TIMES) {
+        const slotStart = slot.startMinutes;
+        const slotEnd = slotStart + 60;
+        const evStartWithBuffer = Math.max(0, ev.startMinutes - buffer);
+        const evEndWithBuffer = ev.endMinutes + buffer;
+        if (slotStart < evEndWithBuffer && slotEnd > evStartWithBuffer) {
+          bookedSlots.push({
+            date: normEvDate,
+            time: slot.label,
+            status: 'Blocked',
+            isPartialBlock: true,
+            reason: `External Calendar Event: ${ev.title}`
+          });
+        }
+      }
+    }
+
     res.json(bookedSlots);
   } catch (error: any) {
     console.error("Error fetching availability:", error);
     res.status(500).json({ error: "Failed to fetch availability" });
+  }
+});
+
+// Public endpoint for Book Now page to get full operating hours, buffer, and disabled days
+app.get("/api/availability/operating-hours", async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+    const instructorId = (req.query.instructorId as string) || 'wally';
+    let settings = getInstructorSettings(instructorId);
+
+    // If database has saved settings, keep memory synchronized
+    try {
+      const dbSettings = await getInstructorSettingsDb(instructorId);
+      if (dbSettings && dbSettings.operatingHours) {
+        settings = saveInstructorSettings(dbSettings);
+      }
+    } catch {}
+
+    const disabledDays = getDisabledDaysOfWeek(instructorId);
+    const overrides = getDateOverrides(instructorId);
+
+    res.json({
+      success: true,
+      settings,
+      operatingHours: settings.operatingHours,
+      disabledDays,
+      bufferMinutes: settings.bufferMinutes,
+      timezone: settings.timezone,
+      dateOverrides: overrides
+    });
+  } catch (err: any) {
+    console.error("Error fetching operating hours:", err);
+    res.status(500).json({ error: "Failed to fetch operating hours" });
+  }
+});
+
+// Authenticated Instructor Operating Hours endpoints (Settings -> Operating Hours)
+app.get("/api/instructor/operating-hours", async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    let settings = getInstructorSettings(instructorId);
+
+    try {
+      const dbSettings = await getInstructorSettingsDb(instructorId);
+      if (dbSettings && dbSettings.operatingHours) {
+        const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
+        const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
+        if (dbTime >= localTime) {
+          settings = saveInstructorSettings(dbSettings);
+        }
+      }
+    } catch {}
+
+    res.json({
+      success: true,
+      settings
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to load instructor settings" });
+  }
+});
+
+app.put("/api/instructor/operating-hours", attachInstructorOrAuth, async (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const { operatingHours, bufferMinutes, timezone, minNoticeHours, maxAdvanceDays } = req.body;
+
+    if (!operatingHours || typeof operatingHours !== 'object') {
+      return res.status(400).json({ error: "Invalid operating hours payload" });
+    }
+
+    const updated = saveInstructorSettings({
+      instructorId,
+      operatingHours,
+      bufferMinutes: typeof bufferMinutes === 'number' ? bufferMinutes : undefined,
+      timezone: typeof timezone === 'string' ? timezone : undefined,
+      minNoticeHours: typeof minNoticeHours === 'number' ? minNoticeHours : undefined,
+      maxAdvanceDays: typeof maxAdvanceDays === 'number' ? maxAdvanceDays : undefined
+    });
+
+    // Asynchronously persist to Supabase / PostgreSQL database
+    saveInstructorSettingsDb(instructorId, updated).catch(err => {
+      console.warn('[OperatingHours] Warning saving settings to database:', err);
+    });
+
+    res.json({
+      success: true,
+      message: "Operating hours updated successfully",
+      settings: updated
+    });
+  } catch (err: any) {
+    console.error("Error saving operating hours:", err);
+    res.status(500).json({ error: "Failed to save operating hours" });
+  }
+});
+
+// Calendar Connection endpoints
+app.get("/api/instructor/calendar-connections", attachInstructorOrAuth, (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const conn = getCalendarConnection(instructorId);
+    res.json({
+      success: true,
+      connection: conn
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to fetch calendar connection" });
+  }
+});
+
+app.post("/api/instructor/calendar-connections/connect", attachInstructorOrAuth, async (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const { provider = 'google', feedUrl } = req.body;
+
+    if (!feedUrl || !/^https?:\/\//i.test(feedUrl.trim())) {
+      return res.status(400).json({ error: "Please provide a valid https:// calendar feed URL" });
+    }
+
+    updateCalendarConnection({
+      instructorId,
+      provider,
+      feedUrl: feedUrl.trim(),
+      isConnected: true,
+      lastSyncStatus: 'pending',
+      lastSyncMessage: 'Connecting and testing feed...'
+    });
+
+    // Run initial sync
+    const syncResult = await syncIcalFeed(feedUrl.trim(), instructorId);
+    const conn = getCalendarConnection(instructorId);
+
+    res.json({
+      success: syncResult.success,
+      message: syncResult.message,
+      connection: conn
+    });
+  } catch (err: any) {
+    console.error("Calendar connect error:", err);
+    res.status(500).json({ error: err.message || "Failed to connect calendar" });
+  }
+});
+
+app.post("/api/instructor/calendar-connections/sync", attachInstructorOrAuth, async (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const conn = getCalendarConnection(instructorId);
+    const feedUrl = req.body.feedUrl || conn.feedUrl;
+
+    if (!feedUrl) {
+      return res.status(400).json({ error: "No calendar feed URL configured. Please connect a calendar first." });
+    }
+
+    const syncResult = await syncIcalFeed(feedUrl, instructorId);
+    res.json(syncResult);
+  } catch (err: any) {
+    console.error("Calendar sync error:", err);
+    res.status(500).json({ error: err.message || "Failed to sync calendar" });
+  }
+});
+
+app.delete("/api/instructor/calendar-connections", attachInstructorOrAuth, (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    updateCalendarConnection({
+      instructorId,
+      isConnected: false,
+      feedUrl: '',
+      lastSyncStatus: undefined,
+      lastSyncMessage: 'Calendar disconnected'
+    });
+    res.json({ success: true, message: "Calendar disconnected successfully" });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to disconnect calendar" });
+  }
+});
+
+// External Calendar Events endpoints
+app.get("/api/instructor/external-events", attachInstructorOrAuth, (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const date = req.query.date ? String(req.query.date) : undefined;
+    const events = getExternalEvents(date, instructorId);
+    res.json({ success: true, events });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to fetch external events" });
+  }
+});
+
+app.post("/api/instructor/external-events", attachInstructorOrAuth, (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const { title, date, startTime, endTime, startMinutes, endMinutes } = req.body;
+
+    if (!title || !date || !startTime || !endTime) {
+      return res.status(400).json({ error: "Missing required event fields: title, date, startTime, endTime" });
+    }
+
+    const created = addExternalEvent({
+      instructorId,
+      title: String(title).trim(),
+      date: String(date).trim(),
+      startTime: String(startTime).trim(),
+      endTime: String(endTime).trim(),
+      startMinutes,
+      endMinutes,
+      source: 'manual'
+    });
+
+    res.json({ success: true, message: "External calendar event created", event: created });
+  } catch (err: any) {
+    console.error("Error creating external event:", err);
+    res.status(500).json({ error: "Failed to create external event" });
+  }
+});
+
+app.delete("/api/instructor/external-events/:id", attachInstructorOrAuth, (req, res) => {
+  try {
+    const id = req.params.id;
+    const deleted = deleteExternalEvent(id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    res.json({ success: true, message: "External event removed" });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to delete external event" });
+  }
+});
+
+// Date Overrides endpoints
+app.get("/api/instructor/date-overrides", attachInstructorOrAuth, (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const overrides = getDateOverrides(instructorId);
+    res.json({ success: true, overrides });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to fetch date overrides" });
+  }
+});
+
+app.post("/api/instructor/date-overrides", attachInstructorOrAuth, (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+    const { date, type, isFullDay, periods, reason } = req.body;
+
+    if (!date) {
+      return res.status(400).json({ error: "Date is required" });
+    }
+
+    const override = addDateOverride({
+      instructorId,
+      date,
+      type: type || (isFullDay ? 'unavailable' : 'custom_hours'),
+      isFullDay: Boolean(isFullDay),
+      periods: Array.isArray(periods) ? periods : undefined,
+      reason: reason || (isFullDay ? 'Date marked unavailable' : 'Custom operating hours')
+    });
+
+    res.json({ success: true, message: "Date override saved", override });
+  } catch (err: any) {
+    console.error("Error saving date override:", err);
+    res.status(500).json({ error: "Failed to save date override" });
+  }
+});
+
+app.delete("/api/instructor/date-overrides/:id", attachInstructorOrAuth, (req, res) => {
+  try {
+    const id = req.params.id;
+    const deleted = deleteDateOverride(id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Override not found" });
+    }
+    res.json({ success: true, message: "Date override removed" });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to delete date override" });
   }
 });
 
@@ -2750,6 +3114,17 @@ app.post("/api/contact", contactLimiter, async (req, res) => {
 // Health check endpoint
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Supabase public configuration endpoint (safely provides public URL & Anon Key for client synchronization)
+app.get("/api/supabase/config", (_req, res) => {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || "";
+  res.json({
+    configured: Boolean(url && anonKey && url.startsWith("http")),
+    supabaseUrl: url || null,
+    supabaseAnonKey: anonKey || null
+  });
 });
 
 // Supabase live connection status endpoint

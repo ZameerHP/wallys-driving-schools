@@ -1,9 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { db, isSqlConfigured } from './index.ts';
 import { users, bookings, contactMessages, bookingAuditLogs, emailLogs, webhookEvents, instructorTimeOff } from './schema.ts';
-import { eq, desc, or, and, ne, like } from 'drizzle-orm';
+import { eq, desc, or, and, ne } from 'drizzle-orm';
 import { getSupabaseServerClient } from '../lib/supabase-server.ts';
 
 // In-memory fallback stores for offline/sandbox environments
@@ -268,14 +267,6 @@ export async function getBookings(filter?: { email?: string; userId?: string; in
   }
 
   let list = Array.from(mergedMap.values());
-
-  // Filter out internal instructor availability/time off markers so they never show as student lessons
-  list = list.filter(b => 
-    b.status !== 'DayOff' && 
-    b.status !== 'TimeOff' && 
-    !String(b.bookingRef || '').toUpperCase().startsWith('TIMEOFF-') && 
-    b.studentName !== '[INSTRUCTOR_TIME_OFF]'
-  );
   
   // Strict check: Only paid bookings are returned to students/manage booking
   if (!filter?.includeUnpaid) {
@@ -569,84 +560,77 @@ export interface TimeOffBlock {
   updatedAt?: string | Date;
 }
 
-const TIME_OFF_FILE_DEFAULT = path.join(process.cwd(), 'data', 'instructor-time-off.json');
-const TIME_OFF_FILE_TMP = path.join(os.tmpdir(), 'instructor-time-off.json');
-
-function normalizeRawBlocks(parsed: any[]): TimeOffBlock[] {
-  return parsed.map((item, idx) => {
-    let id = item.id;
-    if (id === undefined || id === null || String(id).trim() === '' || String(id) === 'undefined' || String(id) === 'null') {
-      id = `block_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 7)}`;
-    }
-    const isFull = Boolean(item.isFullDay);
-    const sMin = item.startMinutes ?? (item.startTime ? timeStringToMinutes(item.startTime) : null);
-    const eMin = item.endMinutes ?? (item.endTime ? timeStringToMinutes(item.endTime) : null);
-    return {
-      id,
-      instructorId: item.instructorId || 'wally',
-      instructorName: item.instructorName || 'Wally',
-      date: normalizeDate(item.date) || item.date,
-      isFullDay: isFull,
-      startTime: isFull ? null : (item.startTime ? (to24HourTime(item.startTime) || item.startTime) : null),
-      endTime: isFull ? null : (item.endTime ? (to24HourTime(item.endTime) || item.endTime) : null),
-      startMinutes: isFull ? null : sMin,
-      endMinutes: isFull ? null : eMin,
-      displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(item.startTime)),
-      displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(item.endTime)),
-      reason: item.reason || null,
-      createdAt: item.createdAt || new Date().toISOString(),
-      updatedAt: item.updatedAt || new Date().toISOString()
-    };
-  });
-}
+const TIME_OFF_FILE = path.join(process.cwd(), 'data', 'instructor-time-off.json');
+const TIME_OFF_TMP_FILE = path.join('/tmp', 'instructor-time-off.json');
 
 function readTimeOffFile(): TimeOffBlock[] {
-  // 1. Try reading from serverless-safe /tmp first
   try {
-    if (fs.existsSync(TIME_OFF_FILE_TMP)) {
-      const data = fs.readFileSync(TIME_OFF_FILE_TMP, 'utf-8');
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return normalizeRawBlocks(parsed);
-      }
+    let rawData: string | null = null;
+    if (fs.existsSync(TIME_OFF_FILE)) {
+      rawData = fs.readFileSync(TIME_OFF_FILE, 'utf-8');
+    } else if (fs.existsSync(TIME_OFF_TMP_FILE)) {
+      rawData = fs.readFileSync(TIME_OFF_TMP_FILE, 'utf-8');
     }
-  } catch (err) {
-    console.warn('[TimeOff] Error reading /tmp time-off file:', err);
-  }
 
-  // 2. Try reading from project data directory
-  try {
-    if (fs.existsSync(TIME_OFF_FILE_DEFAULT)) {
-      const data = fs.readFileSync(TIME_OFF_FILE_DEFAULT, 'utf-8');
-      const parsed = JSON.parse(data);
+    if (rawData) {
+      const parsed = JSON.parse(rawData);
       if (Array.isArray(parsed)) {
-        return normalizeRawBlocks(parsed);
+        let changed = false;
+        const normalized: TimeOffBlock[] = parsed.map((item, idx) => {
+          let id = item.id;
+          if (id === undefined || id === null || String(id).trim() === '' || String(id) === 'undefined' || String(id) === 'null') {
+            id = `block_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 7)}`;
+            changed = true;
+          }
+          const isFull = Boolean(item.isFullDay);
+          const sMin = item.startMinutes ?? (item.startTime ? timeStringToMinutes(item.startTime) : null);
+          const eMin = item.endMinutes ?? (item.endTime ? timeStringToMinutes(item.endTime) : null);
+          return {
+            id,
+            instructorId: item.instructorId || 'wally',
+            instructorName: item.instructorName || 'Wally',
+            date: normalizeDate(item.date) || item.date,
+            isFullDay: isFull,
+            startTime: isFull ? null : (item.startTime ? (to24HourTime(item.startTime) || item.startTime) : null),
+            endTime: isFull ? null : (item.endTime ? (to24HourTime(item.endTime) || item.endTime) : null),
+            startMinutes: isFull ? null : sMin,
+            endMinutes: isFull ? null : eMin,
+            displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(item.startTime)),
+            displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(item.endTime)),
+            reason: item.reason || null,
+            createdAt: item.createdAt || new Date().toISOString(),
+            updatedAt: item.updatedAt || new Date().toISOString()
+          };
+        });
+        if (changed) {
+          writeTimeOffFile(normalized);
+        }
+        return normalized;
       }
     }
   } catch (err) {
-    console.warn('[TimeOff] Error reading default time-off file:', err);
+    console.warn('[TimeOff] Error reading time-off file:', err);
   }
   return [];
 }
 
 function writeTimeOffFile(blocks: TimeOffBlock[]) {
-  const json = JSON.stringify(blocks, null, 2);
-  // Always write to /tmp (guaranteed writable on Vercel, AWS Lambda, Docker, Linux, macOS)
+  const content = JSON.stringify(blocks, null, 2);
   try {
-    fs.writeFileSync(TIME_OFF_FILE_TMP, json, 'utf-8');
-  } catch (err) {
-    console.warn('[TimeOff] Error writing /tmp time-off file:', err);
-  }
-
-  // Also attempt writing to project repo data path if writable
-  try {
-    const dir = path.dirname(TIME_OFF_FILE_DEFAULT);
+    const dir = path.dirname(TIME_OFF_FILE);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(TIME_OFF_FILE_DEFAULT, json, 'utf-8');
-  } catch {
-    // Expected on read-only serverless platforms like Vercel
+    fs.writeFileSync(TIME_OFF_FILE, content, 'utf-8');
+  } catch (err) {
+    // Expected on read-only environments like Vercel serverless
+  }
+
+  // Also write to /tmp as local fallback in serverless containers
+  try {
+    fs.writeFileSync(TIME_OFF_TMP_FILE, content, 'utf-8');
+  } catch (err) {
+    // Ignore /tmp write errors
   }
 }
 
@@ -711,8 +695,7 @@ export function to12HourDisplay(timeStr?: string | null): string | null {
 
 let timeOffTableInitialized = false;
 async function ensureTimeOffTable() {
-  if (timeOffTableInitialized) return;
-  if (!db || !isSqlConfigured) return;
+  if (!db || !isSqlConfigured || timeOffTableInitialized) return;
   try {
     await db.execute(`
       CREATE TABLE IF NOT EXISTS instructor_time_off (
@@ -738,71 +721,118 @@ async function ensureTimeOffTable() {
   }
 }
 
-// Retrieve time-off blocks, aggregating from SQL DB, Supabase, writable file, and in-memory cache
+let settingsTableInitialized = false;
+async function ensureInstructorSettingsTable() {
+  if (!db || !isSqlConfigured || settingsTableInitialized) return;
+  try {
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS instructor_settings (
+        id SERIAL PRIMARY KEY,
+        instructor_id TEXT NOT NULL UNIQUE DEFAULT 'wally',
+        settings_json TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    settingsTableInitialized = true;
+  } catch (err) {
+    console.warn('[InstructorSettings] ensureInstructorSettingsTable notice:', err);
+  }
+}
+
+export async function getInstructorSettingsDb(instructorId = 'wally'): Promise<any | null> {
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('instructor_settings')
+        .select('settings_json')
+        .eq('instructor_id', instructorId)
+        .maybeSingle();
+      if (!error && data?.settings_json) {
+        return typeof data.settings_json === 'string' ? JSON.parse(data.settings_json) : data.settings_json;
+      }
+    } catch {}
+  }
+
+  if (db && isSqlConfigured) {
+    try {
+      await ensureInstructorSettingsTable();
+      const res: any = await db.execute(`
+        SELECT settings_json FROM instructor_settings WHERE instructor_id = '${instructorId.replace(/'/g, "''")}' LIMIT 1;
+      `);
+      const row = res?.rows?.[0] || res?.[0];
+      if (row?.settings_json) {
+        return typeof row.settings_json === 'string' ? JSON.parse(row.settings_json) : row.settings_json;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+export async function saveInstructorSettingsDb(instructorId = 'wally', settings: any): Promise<boolean> {
+  const jsonStr = JSON.stringify(settings);
+  let saved = false;
+
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('instructor_settings')
+        .upsert({
+          instructor_id: instructorId,
+          settings_json: jsonStr,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'instructor_id' });
+      if (!error) saved = true;
+    } catch {}
+  }
+
+  if (db && isSqlConfigured) {
+    try {
+      await ensureInstructorSettingsTable();
+      const safeJson = jsonStr.replace(/'/g, "''");
+      const safeId = instructorId.replace(/'/g, "''");
+      await db.execute(`
+        INSERT INTO instructor_settings (instructor_id, settings_json, updated_at)
+        VALUES ('${safeId}', '${safeJson}', CURRENT_TIMESTAMP)
+        ON CONFLICT (instructor_id) DO UPDATE
+        SET settings_json = EXCLUDED.settings_json,
+            updated_at = CURRENT_TIMESTAMP;
+      `);
+      saved = true;
+    } catch {}
+  }
+
+  return saved;
+}
+
+// Retrieve time-off blocks, filtered by instructorId if provided
 export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBlock[]> {
   await ensureTimeOffTable();
 
-  const collectedMap = new Map<string, TimeOffBlock>();
-
-  // 1. Fetch from SQL DB (Postgres / Cloud SQL / Neon / Supabase Pooler) if configured
-  if (db && isSqlConfigured) {
-    try {
-      const rows = await db.select().from(instructorTimeOff);
-      if (Array.isArray(rows)) {
-        for (const r of rows) {
-          const sMin = r.startMinutes ?? (r.startTime ? timeStringToMinutes(r.startTime) : null);
-          const eMin = r.endMinutes ?? (r.endTime ? timeStringToMinutes(r.endTime) : null);
-          const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (r.startTime ? to24HourTime(r.startTime) : null);
-          const e24 = eMin !== null ? minutesTo24HourTime(eMin) : (r.endTime ? to24HourTime(r.endTime) : null);
-          const isFull = Boolean(r.isFullDay);
-          const normD = normalizeDate(r.date) || r.date;
-          const block: TimeOffBlock = {
-            id: r.id,
-            instructorId: r.instructorId || 'wally',
-            instructorName: r.instructorName || 'Wally',
-            date: normD,
-            isFullDay: isFull,
-            startTime: isFull ? null : s24,
-            endTime: isFull ? null : e24,
-            startMinutes: isFull ? null : sMin,
-            endMinutes: isFull ? null : eMin,
-            displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(r.startTime)),
-            displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(r.endTime)),
-            reason: r.reason || null,
-            createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
-            updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
-          };
-          const key = `${normD}_${block.isFullDay ? 'full' : `${block.startTime}-${block.endTime}`}`;
-          collectedMap.set(key, block);
-        }
-      }
-    } catch (err: any) {
-      console.warn('[TimeOff] SQL fetch error, will check alternative sources:', err?.message || err);
-    }
-  }
-
-  // 2. Fetch from Supabase REST client if available
+  // 1. Try fetching from Supabase if configured (essential for Vercel and cloud deployments)
   const supabase = getSupabaseServerClient();
   if (supabase) {
-    // 2a. Try reading from instructor_time_off table in Supabase
     try {
-      const { data: sbRows, error: sbErr } = await supabase
+      const { data, error } = await supabase
         .from('instructor_time_off')
-        .select('*');
+        .select('*')
+        .order('date', { ascending: true });
 
-      if (!sbErr && Array.isArray(sbRows)) {
-        for (const r of sbRows) {
+      if (!error && Array.isArray(data) && data.length > 0) {
+        const mapped: TimeOffBlock[] = data.map(r => {
           const sMin = r.start_minutes ?? (r.start_time ? timeStringToMinutes(r.start_time) : null);
           const eMin = r.end_minutes ?? (r.end_time ? timeStringToMinutes(r.end_time) : null);
           const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (r.start_time ? to24HourTime(r.start_time) : null);
           const e24 = eMin !== null ? minutesTo24HourTime(eMin) : (r.end_time ? to24HourTime(r.end_time) : null);
-          const isFull = Boolean(r.is_full_day ?? r.isFullDay);
-          const normD = normalizeDate(r.date) || r.date;
-          const block: TimeOffBlock = {
+          const isFull = Boolean(r.is_full_day);
+
+          return {
             id: r.id,
-            instructorId: r.instructor_id || r.instructorId || 'wally',
-            instructorName: r.instructor_name || r.instructorName || 'Wally',
-            date: normD,
+            instructorId: r.instructor_id || 'wally',
+            instructorName: r.instructor_name || 'Wally',
+            date: normalizeDate(r.date) || r.date,
             isFullDay: isFull,
             startTime: isFull ? null : s24,
             endTime: isFull ? null : e24,
@@ -814,113 +844,142 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
             createdAt: r.created_at ? new Date(r.created_at) : new Date(),
             updatedAt: r.updated_at ? new Date(r.updated_at) : new Date(),
           };
-          const key = `${normD}_${block.isFullDay ? 'full' : `${block.startTime}-${block.endTime}`}`;
-          if (!collectedMap.has(key)) {
-            collectedMap.set(key, block);
-          }
+        });
+
+        // Keep in-memory store and file synced with latest DB state
+        inMemoryTimeOff = mapped;
+        writeTimeOffFile(mapped);
+
+        if (instructorId) {
+          return mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
         }
+        return mapped;
       }
-    } catch {}
+    } catch (sbErr) {
+      console.warn('[TimeOff] Supabase fetch notice:', sbErr);
+    }
+  }
 
-    // 2b. Query bookings table for DayOff records stored as fallback
+  // Try fetching from SQL DB if configured
+  if (db && isSqlConfigured) {
     try {
-      const { data: dayOffBookings, error: bErr } = await supabase
-        .from('bookings')
-        .select('*')
-        .or('status.eq.DayOff,status.eq.TimeOff,student_name.eq.[INSTRUCTOR_TIME_OFF],booking_ref.ilike.TIMEOFF-%');
+      const rows = await db.select().from(instructorTimeOff);
+      if (rows && rows.length > 0) {
+        const mapped: TimeOffBlock[] = rows.map(r => {
+          const sMin = r.startMinutes ?? (r.startTime ? timeStringToMinutes(r.startTime) : null);
+          const eMin = r.endMinutes ?? (r.endTime ? timeStringToMinutes(r.endTime) : null);
+          const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (r.startTime ? to24HourTime(r.startTime) : null);
+          const e24 = eMin !== null ? minutesTo24HourTime(eMin) : (r.endTime ? to24HourTime(r.endTime) : null);
+          const isFull = Boolean(r.isFullDay);
 
-      if (!bErr && Array.isArray(dayOffBookings)) {
-        for (const row of dayOffBookings) {
-          let parsedNotes: any = null;
-          try {
-            if (row.notes && row.notes.startsWith('{')) {
-              parsedNotes = JSON.parse(row.notes);
-            }
-          } catch {}
-
-          const normD = normalizeDate(row.date || row.lesson_date) || row.date || row.lesson_date;
-          const isFull = Boolean(parsedNotes?.isFullDay ?? (row.time?.toLowerCase().includes('full') || row.time?.toLowerCase().includes('day off')));
-          const sMin = parsedNotes?.startMinutes ?? (parsedNotes?.startTime ? timeStringToMinutes(parsedNotes.startTime) : null);
-          const eMin = parsedNotes?.endMinutes ?? (parsedNotes?.endTime ? timeStringToMinutes(parsedNotes.endTime) : null);
-
-          const block: TimeOffBlock = {
-            id: parsedNotes?.id || row.id || `sb_${row.booking_ref || Date.now()}`,
-            instructorId: parsedNotes?.instructorId || 'wally',
-            instructorName: parsedNotes?.instructorName || 'Wally',
-            date: normD,
+          return {
+            id: r.id,
+            instructorId: r.instructorId || 'wally',
+            instructorName: r.instructorName || 'Wally',
+            date: normalizeDate(r.date) || r.date,
             isFullDay: isFull,
-            startTime: isFull ? null : (parsedNotes?.startTime || row.time || null),
-            endTime: isFull ? null : (parsedNotes?.endTime || null),
+            startTime: isFull ? null : s24,
+            endTime: isFull ? null : e24,
             startMinutes: isFull ? null : sMin,
             endMinutes: isFull ? null : eMin,
-            displayStartTime: isFull ? null : to12HourDisplay(parsedNotes?.startTime || row.time),
-            displayEndTime: isFull ? null : to12HourDisplay(parsedNotes?.endTime),
-            reason: parsedNotes?.reason || row.notes || 'Instructor Time Off',
-            createdAt: row.created_at ? new Date(row.created_at) : new Date(),
-            updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
+            displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(r.startTime)),
+            displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(r.endTime)),
+            reason: r.reason,
+            createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+            updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
           };
-          const key = `${normD}_${block.isFullDay ? 'full' : `${block.startTime}-${block.endTime}`}`;
-          if (!collectedMap.has(key)) {
-            collectedMap.set(key, block);
+        });
+
+        // Keep in-memory store and file synced with latest DB state
+        inMemoryTimeOff = mapped;
+        writeTimeOffFile(mapped);
+
+        if (instructorId) {
+          return mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());
+        }
+        return mapped;
+      } else {
+        // If SQL returned 0 rows, check if we have disk file blocks to seed into SQL
+        const diskBlocks = readTimeOffFile();
+        if (diskBlocks.length > 0) {
+          try {
+            for (const b of diskBlocks) {
+              const sMin = b.startMinutes ?? (b.startTime ? timeStringToMinutes(b.startTime) : null);
+              const eMin = b.endMinutes ?? (b.endTime ? timeStringToMinutes(b.endTime) : null);
+              await db.insert(instructorTimeOff).values({
+                instructorId: b.instructorId || 'wally',
+                instructorName: b.instructorName || 'Wally',
+                date: normalizeDate(b.date) || b.date,
+                isFullDay: b.isFullDay ? 1 : 0,
+                startTime: b.isFullDay ? null : (to24HourTime(b.startTime) || b.startTime),
+                endTime: b.isFullDay ? null : (to24HourTime(b.endTime) || b.endTime),
+                startMinutes: b.isFullDay ? null : sMin,
+                endMinutes: b.isFullDay ? null : eMin,
+                reason: b.reason || null,
+              });
+            }
+            // Re-query newly seeded rows
+            const newRows = await db.select().from(instructorTimeOff);
+            if (newRows && newRows.length > 0) {
+              const mapped: TimeOffBlock[] = newRows.map(r => ({
+                id: r.id,
+                instructorId: r.instructorId || 'wally',
+                instructorName: r.instructorName || 'Wally',
+                date: normalizeDate(r.date) || r.date,
+                isFullDay: Boolean(r.isFullDay),
+                startTime: r.startTime,
+                endTime: r.endTime,
+                startMinutes: r.startMinutes,
+                endMinutes: r.endMinutes,
+                displayStartTime: to12HourDisplay(r.startTime),
+                displayEndTime: to12HourDisplay(r.endTime),
+                reason: r.reason,
+                createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+                updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
+              }));
+              inMemoryTimeOff = mapped;
+              writeTimeOffFile(mapped);
+              return instructorId ? mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase()) : mapped;
+            }
+          } catch (seedErr) {
+            console.warn('[TimeOff] Failed seeding disk blocks into SQL:', seedErr);
           }
         }
       }
-    } catch {}
-  }
-
-  // 3. Fallback: Merge from in-memory cache and file store
-  const fileBlocks = readTimeOffFile();
-  for (const b of fileBlocks) {
-    const normD = normalizeDate(b.date) || b.date;
-    const key = `${normD}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
-    if (!collectedMap.has(key)) {
-      collectedMap.set(key, b);
+    } catch (err) {
+      console.warn('[TimeOff] SQL fetch error, falling back to cached file/memory store:', err);
     }
   }
 
-  for (const b of inMemoryTimeOff) {
-    const normD = normalizeDate(b.date) || b.date;
-    const key = `${normD}_${b.isFullDay ? 'full' : `${b.startTime}-${b.endTime}`}`;
-    if (!collectedMap.has(key)) {
-      collectedMap.set(key, b);
-    }
-  }
+  // Always re-read from disk file to ensure 100% real-time synchronization
+  inMemoryTimeOff = readTimeOffFile();
 
-  const finalBlocks = Array.from(collectedMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-
-  // Keep in-memory cache and file updated
-  inMemoryTimeOff = finalBlocks;
-  writeTimeOffFile(finalBlocks);
-
-  // If SQL DB was configured and empty, seed into SQL
-  if (db && isSqlConfigured && finalBlocks.length > 0) {
-    try {
-      const existingCount = await db.select().from(instructorTimeOff).limit(1);
-      if (existingCount.length === 0) {
-        for (const b of finalBlocks) {
-          const sMin = b.startMinutes ?? (b.startTime ? timeStringToMinutes(b.startTime) : null);
-          const eMin = b.endMinutes ?? (b.endTime ? timeStringToMinutes(b.endTime) : null);
-          await db.insert(instructorTimeOff).values({
-            instructorId: b.instructorId || 'wally',
-            instructorName: b.instructorName || 'Wally',
-            date: normalizeDate(b.date) || b.date,
-            isFullDay: b.isFullDay ? 1 : 0,
-            startTime: b.isFullDay ? null : (to24HourTime(b.startTime) || b.startTime),
-            endTime: b.isFullDay ? null : (to24HourTime(b.endTime) || b.endTime),
-            startMinutes: b.isFullDay ? null : sMin,
-            endMinutes: b.isFullDay ? null : eMin,
-            reason: b.reason || null,
-          });
-        }
-      }
-    } catch {}
-  }
+  const normalizedMem = inMemoryTimeOff.map(b => {
+    const sMin = b.startMinutes ?? (b.startTime ? timeStringToMinutes(b.startTime) : null);
+    const eMin = b.endMinutes ?? (b.endTime ? timeStringToMinutes(b.endTime) : null);
+    const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (b.startTime ? to24HourTime(b.startTime) : null);
+    const e24 = eMin !== null ? minutesTo24HourTime(eMin) : (b.endTime ? to24HourTime(b.endTime) : null);
+    const isFull = Boolean(b.isFullDay);
+    return {
+      ...b,
+      instructorId: b.instructorId || 'wally',
+      instructorName: b.instructorName || 'Wally',
+      date: normalizeDate(b.date) || b.date,
+      isFullDay: isFull,
+      startTime: isFull ? null : s24,
+      endTime: isFull ? null : e24,
+      startMinutes: isFull ? null : sMin,
+      endMinutes: isFull ? null : eMin,
+      displayStartTime: isFull ? null : (sMin !== null ? minutesToTimeString(sMin) : to12HourDisplay(b.startTime)),
+      displayEndTime: isFull ? null : (eMin !== null ? minutesToTimeString(eMin) : to12HourDisplay(b.endTime)),
+    };
+  });
 
   if (instructorId && typeof instructorId === 'string' && instructorId.trim() !== '') {
     const filterId = instructorId.trim().toLowerCase();
-    return finalBlocks.filter(b => (b.instructorId || 'wally').toLowerCase() === filterId);
+    return normalizedMem.filter(b => (b.instructorId || 'wally').toLowerCase() === filterId);
   }
-  return finalBlocks;
+  return normalizedMem;
 }
 
 // Check for conflicting active bookings before saving a time-off block
@@ -1049,24 +1108,59 @@ export async function createTimeOffBlock(data: {
   }
 
   const now = new Date();
-  let createdBlock: TimeOffBlock = {
-    id: Date.now(),
-    instructorId: data.instructorId || 'wally',
-    instructorName: data.instructorName || 'Wally',
-    date: normDate,
-    isFullDay: isFull,
-    startTime: isFull ? null : s24,
-    endTime: isFull ? null : e24,
-    startMinutes: startMin,
-    endMinutes: endMin,
-    displayStartTime: isFull ? null : to12HourDisplay(data.startTime),
-    displayEndTime: isFull ? null : to12HourDisplay(data.endTime),
-    reason: data.reason?.trim() || null,
-    createdAt: now,
-    updatedAt: now,
-  };
+  let createdBlock: TimeOffBlock;
 
-  // 1. Persist to SQL if configured
+  // If Supabase is configured, persist directly to Supabase cloud table (essential for Vercel/cloud serverless)
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      const sbPayload = {
+        instructor_id: data.instructorId || 'wally',
+        instructor_name: data.instructorName || 'Wally',
+        date: normDate,
+        is_full_day: isFull,
+        start_time: isFull ? null : s24,
+        end_time: isFull ? null : e24,
+        start_minutes: startMin,
+        end_minutes: endMin,
+        reason: data.reason?.trim() || null,
+        updated_at: now.toISOString(),
+      };
+
+      // Remove any prior block for the same date in Supabase
+      try {
+        await supabase.from('instructor_time_off').delete().eq('date', normDate);
+      } catch {
+        // Ignore
+      }
+      const { data: insertedRows, error: sbInsertErr } = await supabase
+        .from('instructor_time_off')
+        .insert([sbPayload])
+        .select('*');
+
+      if (!sbInsertErr && insertedRows && insertedRows[0]) {
+        createdBlock = {
+          id: insertedRows[0].id,
+          instructorId: insertedRows[0].instructor_id,
+          instructorName: insertedRows[0].instructor_name,
+          date: insertedRows[0].date,
+          isFullDay: Boolean(insertedRows[0].is_full_day),
+          startTime: insertedRows[0].start_time,
+          endTime: insertedRows[0].end_time,
+          startMinutes: insertedRows[0].start_minutes,
+          endMinutes: insertedRows[0].end_minutes,
+          displayStartTime: isFull ? null : to12HourDisplay(insertedRows[0].start_time),
+          displayEndTime: isFull ? null : to12HourDisplay(insertedRows[0].end_time),
+          reason: insertedRows[0].reason,
+          createdAt: new Date(insertedRows[0].created_at || now),
+          updatedAt: new Date(insertedRows[0].updated_at || now),
+        };
+      }
+    } catch (sbErr) {
+      console.warn('[TimeOff] Supabase insert notice:', sbErr);
+    }
+  }
+
   if (db && isSqlConfigured) {
     try {
       const [inserted] = await db.insert(instructorTimeOff).values({
@@ -1083,77 +1177,61 @@ export async function createTimeOffBlock(data: {
         updatedAt: now,
       }).returning();
 
-      if (inserted) {
-        createdBlock = {
-          id: inserted.id,
-          instructorId: inserted.instructorId,
-          instructorName: inserted.instructorName,
-          date: inserted.date,
-          isFullDay: Boolean(inserted.isFullDay),
-          startTime: inserted.startTime,
-          endTime: inserted.endTime,
-          startMinutes: inserted.startMinutes,
-          endMinutes: inserted.endMinutes,
-          displayStartTime: isFull ? null : to12HourDisplay(inserted.startTime),
-          displayEndTime: isFull ? null : to12HourDisplay(inserted.endTime),
-          reason: inserted.reason,
-          createdAt: inserted.createdAt ? new Date(inserted.createdAt) : now,
-          updatedAt: inserted.updatedAt ? new Date(inserted.updatedAt) : now,
-        };
-      }
+      createdBlock = {
+        id: inserted.id,
+        instructorId: inserted.instructorId,
+        instructorName: inserted.instructorName,
+        date: inserted.date,
+        isFullDay: Boolean(inserted.isFullDay),
+        startTime: inserted.startTime,
+        endTime: inserted.endTime,
+        startMinutes: inserted.startMinutes,
+        endMinutes: inserted.endMinutes,
+        displayStartTime: isFull ? null : to12HourDisplay(inserted.startTime),
+        displayEndTime: isFull ? null : to12HourDisplay(inserted.endTime),
+        reason: inserted.reason,
+        createdAt: inserted.createdAt ? new Date(inserted.createdAt) : now,
+        updatedAt: inserted.updatedAt ? new Date(inserted.updatedAt) : now,
+      };
     } catch (err) {
-      console.warn('[TimeOff] Failed inserting to SQL:', err);
-    }
-  }
-
-  // 2. Persist to Supabase if configured
-  const supabase = getSupabaseServerClient();
-  if (supabase) {
-    let sbSaved = false;
-    try {
-      const { data: sbInserted, error: sbErr } = await supabase.from('instructor_time_off').insert({
-        instructor_id: data.instructorId || 'wally',
-        instructor_name: data.instructorName || 'Wally',
+      console.warn('[TimeOff] Failed inserting to SQL, generating local ID:', err);
+      createdBlock = {
+        id: Date.now(),
+        instructorId: data.instructorId || 'wally',
+        instructorName: data.instructorName || 'Wally',
         date: normDate,
-        is_full_day: isFull ? 1 : 0,
-        start_time: isFull ? null : s24,
-        end_time: isFull ? null : e24,
-        start_minutes: startMin,
-        end_minutes: endMin,
+        isFullDay: isFull,
+        startTime: isFull ? null : s24,
+        endTime: isFull ? null : e24,
+        startMinutes: startMin,
+        endMinutes: endMin,
+        displayStartTime: isFull ? null : to12HourDisplay(data.startTime),
+        displayEndTime: isFull ? null : to12HourDisplay(data.endTime),
         reason: data.reason?.trim() || null,
-      }).select('*');
-
-      if (!sbErr && sbInserted && sbInserted[0]) {
-        createdBlock.id = sbInserted[0].id || createdBlock.id;
-        sbSaved = true;
-      }
-    } catch {}
-
-    // Fallback: If table does not exist in Supabase, store in bookings table with DayOff status
-    if (!sbSaved) {
-      try {
-        await supabase.from('bookings').insert({
-          booking_ref: `TIMEOFF-${Date.now()}`,
-          student_name: '[INSTRUCTOR_TIME_OFF]',
-          phone: '0000000000',
-          email: 'instructor@internal',
-          suburb: 'Western Sydney',
-          package_title: isFull ? 'Instructor Day Off' : 'Instructor Partial Time Off',
-          package_price: 0,
-          date: normDate,
-          time: isFull ? 'Full Day Off' : `${s24} - ${e24}`,
-          status: 'DayOff',
-          payment_status: 'paid',
-          notes: JSON.stringify(createdBlock),
-        });
-      } catch (fbErr) {
-        console.warn('[TimeOff] Supabase fallback insert warning:', fbErr);
-      }
+        createdAt: now,
+        updatedAt: now,
+      };
     }
+  } else {
+    createdBlock = {
+      id: Date.now(),
+      instructorId: data.instructorId || 'wally',
+      instructorName: data.instructorName || 'Wally',
+      date: normDate,
+      isFullDay: isFull,
+      startTime: isFull ? null : s24,
+      endTime: isFull ? null : e24,
+      startMinutes: startMin,
+      endMinutes: endMin,
+      displayStartTime: isFull ? null : to12HourDisplay(data.startTime),
+      displayEndTime: isFull ? null : to12HourDisplay(data.endTime),
+      reason: data.reason?.trim() || null,
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
-  // 3. Update in-memory array and serverless writable file
-  inMemoryTimeOff = inMemoryTimeOff.filter(b => !(b.date === normDate && b.isFullDay === isFull && b.startTime === s24));
+  // Update in-memory and disk file
   inMemoryTimeOff.push(createdBlock);
   writeTimeOffFile(inMemoryTimeOff);
 
@@ -1177,6 +1255,7 @@ export async function updateTimeOffBlock(
 
   const strId = String(id).trim();
   const numId = (!isNaN(Number(id)) && Number(id) <= 2147483647 && Number(id) > 0) ? Number(id) : null;
+
   const normDate = normalizeDate(data.date) || data.date;
   const isFull = Boolean(data.isFullDay);
   let startMin: number | null = null;
@@ -1194,6 +1273,7 @@ export async function updateTimeOffBlock(
     e24 = minutesTo24HourTime(endMin);
   }
 
+  // Pre-check for booking conflicts
   if (!data.overrideConflicts) {
     const conflictCheck = await checkTimeOffBookingConflicts(
       normDate,
@@ -1215,7 +1295,7 @@ export async function updateTimeOffBlock(
   const now = new Date();
   let updatedBlock: TimeOffBlock | null = null;
 
-  // 1. Try SQL update if SQL is configured
+  // 1. Try SQL update if SQL is configured and numId is a valid Postgres serial integer
   if (db && isSqlConfigured && numId !== null) {
     try {
       const [updated] = await db.update(instructorTimeOff)
@@ -1255,35 +1335,19 @@ export async function updateTimeOffBlock(
     }
   }
 
-  // 2. Supabase update
-  const supabase = getSupabaseServerClient();
-  if (supabase && numId !== null) {
-    try {
-      await supabase.from('instructor_time_off').update({
-        date: normDate,
-        is_full_day: isFull ? 1 : 0,
-        start_time: isFull ? null : s24,
-        end_time: isFull ? null : e24,
-        start_minutes: startMin,
-        end_minutes: endMin,
-        reason: data.reason?.trim() || null,
-        updated_at: now.toISOString(),
-      }).eq('id', numId);
-    } catch {}
-  }
+  // 2. Locate in in-memory array and file store
+  inMemoryTimeOff = readTimeOffFile();
 
-  // 3. In-memory & file store update
-  const currentBlocks = await getTimeOffBlocks();
-  const idx = currentBlocks.findIndex(b => {
+  let idx = inMemoryTimeOff.findIndex(b => {
     const bStr = String(b.id || '').trim();
     if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) return true;
-    if (numId !== null && Number(b.id) === numId) return true;
+    if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) return true;
     if (fallbackDate && b.date === fallbackDate) return true;
     return false;
   });
 
   if (idx !== -1) {
-    const existing = currentBlocks[idx];
+    const existing = inMemoryTimeOff[idx];
     const updatedMem: TimeOffBlock = {
       ...existing,
       date: normDate,
@@ -1297,17 +1361,17 @@ export async function updateTimeOffBlock(
       reason: data.reason?.trim() || null,
       updatedAt: now,
     };
-    currentBlocks[idx] = updatedMem;
-    inMemoryTimeOff = currentBlocks;
-    writeTimeOffFile(currentBlocks);
+    inMemoryTimeOff[idx] = updatedMem;
+    writeTimeOffFile(inMemoryTimeOff);
     if (!updatedBlock) {
       updatedBlock = updatedMem;
     }
   }
 
   if (!updatedBlock) {
+    // If not found in file or memory, create it as the updated block so state doesn't get lost
     updatedBlock = {
-      id: id || Date.now(),
+      id: id || `block_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       instructorId: 'wally',
       instructorName: 'Wally',
       date: normDate,
@@ -1333,97 +1397,71 @@ export async function updateTimeOffBlock(
 export async function deleteTimeOffBlock(id: number | string, fallbackDate?: string): Promise<boolean> {
   await ensureTimeOffTable();
 
-  const currentBlocks = await getTimeOffBlocks();
+  // Read current file to identify the target item if possible
+  const currentBlocks = readTimeOffFile();
   const strId = String(id || '').trim();
   const numId = (!isNaN(Number(strId)) && Number(strId) > 0) ? Number(strId) : null;
   const is32Bit = numId !== null && numId <= 2147483647;
 
-  // Gather all possible date strings associated with this block
-  const candidateDates = new Set<string>();
-  if (fallbackDate && fallbackDate.trim() !== '') {
-    const fb = fallbackDate.trim();
-    candidateDates.add(fb);
-    const fbNorm = normalizeDate(fb);
-    if (fbNorm) candidateDates.add(fbNorm);
-  }
-
-  // Check if the id itself is or contains a date string
-  if (strId) {
-    if (strId.startsWith('date_')) {
-      const d = strId.replace('date_', '').trim();
-      candidateDates.add(d);
-      const dNorm = normalizeDate(d);
-      if (dNorm) candidateDates.add(dNorm);
-    } else if (/^\d{4}-\d{2}-\d{2}$/.test(strId) || /^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(strId)) {
-      candidateDates.add(strId);
-      const dNorm = normalizeDate(strId);
-      if (dNorm) candidateDates.add(dNorm);
-    }
-  }
-
-  // Find target item from current blocks to get its exact date
-  for (const b of currentBlocks) {
+  // Find target item to get its exact date
+  const targetItem = currentBlocks.find(b => {
     const bStr = String(b.id || '').trim();
-    const matchId = (strId && (bStr === strId || bStr === decodeURIComponent(strId))) ||
-                    (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId);
-    const matchDate = (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate)));
-    if (matchId || matchDate) {
-      if (b.date) {
-        candidateDates.add(b.date);
-        const normD = normalizeDate(b.date);
-        if (normD) candidateDates.add(normD);
+    if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) return true;
+    if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) return true;
+    if (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate))) return true;
+    return false;
+  });
+
+  const targetDate = targetItem?.date || fallbackDate;
+  const targetNormDate = targetDate ? normalizeDate(targetDate) : undefined;
+
+  // Delete from Supabase if configured (for Vercel & cloud production)
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      if (numId !== null) {
+        try {
+          await supabase.from('instructor_time_off').delete().eq('id', numId);
+        } catch {
+          // Ignore
+        }
       }
+      if (targetNormDate) {
+        try {
+          await supabase.from('instructor_time_off').delete().eq('date', targetNormDate);
+        } catch {
+          // Ignore
+        }
+      }
+      if (targetDate && targetDate !== targetNormDate) {
+        try {
+          await supabase.from('instructor_time_off').delete().eq('date', targetDate);
+        } catch {
+          // Ignore
+        }
+      }
+    } catch (sbErr) {
+      console.warn('[TimeOff] Supabase delete notice:', sbErr);
     }
   }
 
-  const dateList = Array.from(candidateDates);
-
-  // 1. Delete from SQL DB
   if (db && isSqlConfigured) {
     try {
       if (is32Bit && numId !== null) {
-        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId)).catch(() => {});
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.id, numId));
       }
-      for (const d of dateList) {
-        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, d)).catch(() => {});
-        // Also remove any DayOff bookings from SQL bookings table
-        await db.delete(bookings).where(
-          and(
-            eq(bookings.date, d),
-            or(
-              eq(bookings.status, 'DayOff'),
-              eq(bookings.status, 'TimeOff'),
-              eq(bookings.studentName, '[INSTRUCTOR_TIME_OFF]'),
-              like(bookings.bookingRef, 'TIMEOFF-%')
-            )
-          )
-        ).catch(() => {});
+      if (targetNormDate) {
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, targetNormDate));
+      }
+      if (targetDate && targetDate !== targetNormDate) {
+        await db.delete(instructorTimeOff).where(eq(instructorTimeOff.date, targetDate));
       }
     } catch (err) {
       console.warn('[TimeOff] Failed deleting from SQL:', err);
     }
   }
 
-  // 2. Delete from Supabase
-  const supabase = getSupabaseServerClient();
-  if (supabase) {
-    try {
-      if (is32Bit && numId !== null) {
-        await supabase.from('instructor_time_off').delete().eq('id', numId);
-      }
-      for (const d of dateList) {
-        await supabase.from('instructor_time_off').delete().eq('date', d);
-        await supabase.from('bookings').delete().eq('date', d).eq('status', 'DayOff');
-        await supabase.from('bookings').delete().eq('date', d).eq('status', 'TimeOff');
-        await supabase.from('bookings').delete().eq('date', d).eq('student_name', '[INSTRUCTOR_TIME_OFF]');
-        await supabase.from('bookings').delete().eq('date', d).ilike('booking_ref', 'TIMEOFF-%');
-      }
-    } catch (sbErr) {
-      console.warn('[TimeOff] Failed deleting from Supabase:', sbErr);
-    }
-  }
-
-  // 3. Filter in-memory & file store
+  // Filter in-memory & file store
   inMemoryTimeOff = currentBlocks.filter(b => {
     const bStr = String(b.id || '').trim();
     if (strId && (bStr === strId || bStr === decodeURIComponent(strId))) {
@@ -1432,8 +1470,10 @@ export async function deleteTimeOffBlock(id: number | string, fallbackDate?: str
     if (numId !== null && !isNaN(Number(b.id)) && Number(b.id) === numId) {
       return false;
     }
-    const bNorm = normalizeDate(b.date) || b.date;
-    if (candidateDates.has(b.date) || candidateDates.has(bNorm)) {
+    if (targetNormDate && normalizeDate(b.date) === targetNormDate) {
+      return false;
+    }
+    if (fallbackDate && (b.date === fallbackDate || normalizeDate(b.date) === normalizeDate(fallbackDate))) {
       return false;
     }
     return true;
@@ -1443,7 +1483,7 @@ export async function deleteTimeOffBlock(id: number | string, fallbackDate?: str
   return true;
 }
 
-// Authoritatively test if a date or time slot is blocked by instructor availability
+// Authoritatively test if a date or time slot is blocked by instructor availability, operating hours, breaks, or external calendar
 export async function checkDateOrSlotBlockedByTimeOff(
   date: string,
   time: string,
@@ -1452,31 +1492,9 @@ export async function checkDateOrSlotBlockedByTimeOff(
   const normDate = normalizeDate(date);
   if (!normDate) return { blocked: false };
 
-  const allBlocks = await getTimeOffBlocks(instructorId);
-  const dateBlocks = allBlocks.filter(b => {
-    if (normalizeDate(b.date) !== normDate) return false;
-    if (instructorId && b.instructorId && b.instructorId.toLowerCase() !== instructorId.toLowerCase()) {
-      return false;
-    }
-    return true;
-  });
-
-  if (dateBlocks.length === 0) return { blocked: false };
-
-  // 1. Any full day off block makes the whole day unavailable
-  const fullDayBlock = dateBlocks.find(b => b.isFullDay);
-  if (fullDayBlock) {
-    return {
-      blocked: true,
-      isFullDay: true,
-      reason: fullDayBlock.reason || 'Instructor unavailable (Day Off)'
-    };
-  }
-
-  // 2. Partial blocks check: bookingStart < blockEnd AND bookingEnd > blockStart
+  // Parse candidate slot interval
   let bookingStart: number | null = null;
   let bookingEnd: number | null = null;
-
   const slotInterval = parseTimeInterval(time);
   if (slotInterval) {
     bookingStart = slotInterval.start;
@@ -1488,38 +1506,158 @@ export async function checkDateOrSlotBlockedByTimeOff(
     }
   }
 
-  if (bookingStart === null || bookingEnd === null) {
-    return { blocked: false };
-  }
-
-  for (const b of dateBlocks) {
-    if (b.isFullDay) {
-      return {
-        blocked: true,
-        isFullDay: true,
-        reason: b.reason || 'Instructor unavailable'
-      };
-    }
-
-    let bStart = b.startMinutes;
-    let bEnd = b.endMinutes;
-    if (bStart === null || bStart === undefined) {
-      bStart = b.startTime ? timeStringToMinutes(b.startTime) : null;
-    }
-    if (bEnd === null || bEnd === undefined) {
-      bEnd = b.endTime ? timeStringToMinutes(b.endTime) : null;
-    }
-
-    if (bStart !== null && bStart !== undefined && bEnd !== null && bEnd !== undefined) {
-      // Overlap logic: bookingStart < blockEnd AND bookingEnd > blockStart
-      if (bookingStart < bEnd && bookingEnd > bStart) {
-        return {
-          blocked: true,
-          isFullDay: false,
-          reason: b.reason || 'Time blocked by instructor'
-        };
+  // 1. Check Date-Specific Overrides (Highest priority date exception)
+  try {
+    const overridesFile = path.join(process.cwd(), 'data', 'date-overrides.json');
+    if (fs.existsSync(overridesFile)) {
+      const overrides: any[] = JSON.parse(fs.readFileSync(overridesFile, 'utf-8'));
+      const override = overrides.find(o => normalizeDate(o.date) === normDate);
+      if (override) {
+        if (override.type === 'unavailable' || override.isFullDay) {
+          return {
+            blocked: true,
+            isFullDay: true,
+            reason: override.reason || 'Instructor unavailable on this date (Date Override)'
+          };
+        }
+        if (override.type === 'custom_hours' && Array.isArray(override.periods) && override.periods.length > 0) {
+          if (bookingStart !== null && bookingEnd !== null) {
+            const fits = override.periods.some((p: any) => {
+              const sMin = p.startMinutes ?? (p.start ? timeStringToMinutes(p.start) : null);
+              const eMin = p.endMinutes ?? (p.end ? timeStringToMinutes(p.end) : null);
+              return sMin !== null && eMin !== null && bookingStart! >= sMin && bookingEnd! <= eMin;
+            });
+            if (!fits) {
+              return {
+                blocked: true,
+                reason: 'Requested time is outside instructor custom hours for this date'
+              };
+            }
+          }
+        }
       }
     }
+  } catch (err) {
+    console.warn('[checkDateOrSlotBlockedByTimeOff] Overrides read error:', err);
+  }
+
+  // 2. Check Instructor Time Off Blocks (legacy & current)
+  const allBlocks = await getTimeOffBlocks(instructorId);
+  const dateBlocks = allBlocks.filter(b => {
+    if (normalizeDate(b.date) !== normDate) return false;
+    if (instructorId && b.instructorId && b.instructorId.toLowerCase() !== instructorId.toLowerCase()) {
+      return false;
+    }
+    return true;
+  });
+
+  const fullDayBlock = dateBlocks.find(b => b.isFullDay);
+  if (fullDayBlock) {
+    return {
+      blocked: true,
+      isFullDay: true,
+      reason: fullDayBlock.reason || 'Instructor unavailable (Day Off)'
+    };
+  }
+
+  // Check partial blocks
+  if (bookingStart !== null && bookingEnd !== null) {
+    for (const b of dateBlocks) {
+      let bStart = b.startMinutes;
+      let bEnd = b.endMinutes;
+      if (bStart === null || bStart === undefined) {
+        bStart = b.startTime ? timeStringToMinutes(b.startTime) : null;
+      }
+      if (bEnd === null || bEnd === undefined) {
+        bEnd = b.endTime ? timeStringToMinutes(b.endTime) : null;
+      }
+
+      if (bStart !== null && bStart !== undefined && bEnd !== null && bEnd !== undefined) {
+        if (bookingStart < bEnd && bookingEnd > bStart) {
+          return {
+            blocked: true,
+            isFullDay: false,
+            reason: b.reason || 'Time blocked by instructor'
+          };
+        }
+      }
+    }
+  }
+
+  // 3. Check Weekly Operating Hours & Breaks
+  let bufferMinutes = 15;
+  try {
+    const hoursFile = path.join(process.cwd(), 'data', 'instructor-operating-hours.json');
+    if (fs.existsSync(hoursFile)) {
+      const settings = JSON.parse(fs.readFileSync(hoursFile, 'utf-8'));
+      if (typeof settings.bufferMinutes === 'number') {
+        bufferMinutes = settings.bufferMinutes;
+      }
+
+      const parts = normDate.split('-').map(Number);
+      if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+        const dayIdx = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
+        const mapping = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const dayKey = mapping[dayIdx];
+        const daySchedule = settings.operatingHours?.[dayKey];
+
+        if (daySchedule) {
+          if (!daySchedule.enabled || !daySchedule.periods || daySchedule.periods.length === 0) {
+            return {
+              blocked: true,
+              isFullDay: true,
+              reason: `Instructor does not operate on ${daySchedule.label || dayKey}s.`
+            };
+          }
+
+          if (bookingStart !== null && bookingEnd !== null) {
+            const fits = daySchedule.periods.some((p: any) => {
+              const sMin = p.startMinutes ?? (p.start ? timeStringToMinutes(p.start) : null);
+              const eMin = p.endMinutes ?? (p.end ? timeStringToMinutes(p.end) : null);
+              return sMin !== null && eMin !== null && bookingStart! >= sMin && bookingEnd! <= eMin;
+            });
+
+            if (!fits) {
+              return {
+                blocked: true,
+                reason: `Requested time is outside instructor operating hours or during a scheduled break on ${daySchedule.label || dayKey}.`
+              };
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[checkDateOrSlotBlockedByTimeOff] Operating hours read error:', err);
+  }
+
+  // 4. Check External Calendar Events (+ buffer)
+  try {
+    const extEventsFile = path.join(process.cwd(), 'data', 'external-calendar-events.json');
+    if (fs.existsSync(extEventsFile)) {
+      const extEvents: any[] = JSON.parse(fs.readFileSync(extEventsFile, 'utf-8'));
+      const dayEvents = extEvents.filter(e => normalizeDate(e.date) === normDate);
+
+      if (bookingStart !== null && bookingEnd !== null) {
+        for (const e of dayEvents) {
+          const eStart = e.startMinutes ?? (e.startTime ? timeStringToMinutes(e.startTime) : null);
+          const eEnd = e.endMinutes ?? (e.endTime ? timeStringToMinutes(e.endTime) : null);
+          if (eStart !== null && eEnd !== null) {
+            const eStartWithBuffer = Math.max(0, eStart - bufferMinutes);
+            const eEndWithBuffer = eEnd + bufferMinutes;
+            if (bookingStart < eEndWithBuffer && bookingEnd > eStartWithBuffer) {
+              return {
+                blocked: true,
+                isFullDay: false,
+                reason: `Conflicts with instructor's external calendar appointment (${e.title || 'Busy'})`
+              };
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[checkDateOrSlotBlockedByTimeOff] External events read error:', err);
   }
 
   return { blocked: false };
@@ -1545,7 +1683,7 @@ export async function checkSlotDetailed(
       isTimeOff: true,
       isFullDay: timeOffResult.isFullDay,
       code: "INSTRUCTOR_TIME_OFF",
-      reason: "This time is unavailable because the instructor is off. Please choose another time."
+      reason: timeOffResult.reason || "This time is unavailable because the instructor is off. Please choose another time."
     };
   }
 

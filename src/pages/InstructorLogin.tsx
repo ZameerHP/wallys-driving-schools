@@ -29,12 +29,15 @@ import {
   CalendarX,
   Edit3,
   AlertTriangle,
-  Check
+  Check,
+  Sliders
 } from 'lucide-react';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
 import { ManualBookingModal } from '../components/ManualBookingModal';
 import { EditBookingModal } from '../components/EditBookingModal';
+import { InstructorOperatingHours } from '../components/InstructorOperatingHours';
+import { fetchTimeOffBlocks, createClientTimeOffBlock, deleteClientTimeOffBlock } from '../lib/timeOff';
 
 const TIME_SLOT_OPTIONS = [
   '07:00 AM', '07:30 AM', '08:00 AM', '08:30 AM', '09:00 AM', '09:30 AM',
@@ -264,18 +267,10 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   } | null>(null);
 
   // Section navigation state
-  const [activeTab, setActiveTab] = useState<'schedule' | 'availability'>('schedule');
+  const [activeTab, setActiveTab] = useState<'schedule' | 'availability' | 'operating-hours'>('schedule');
 
-  // Blocked Days & Time Off state with resilient localStorage persistence
-  const [blockedDaysList, setBlockedDaysList] = useState<any[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const cached = localStorage.getItem('wallys_time_off_blocks_v1');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
+  // Blocked Days & Time Off state
+  const [blockedDaysList, setBlockedDaysList] = useState<any[]>([]);
   const [isDeletingBlockId, setIsDeletingBlockId] = useState<string | number | null>(null);
 
   // Block Modal State for direct blocking on dashboard
@@ -371,45 +366,25 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
 
     setBlockedDaysList(prev => {
       const filtered = prev.filter(b => b.date !== blockDate);
-      const updated = [optimisticBlock, ...filtered].sort((a, b) => a.date.localeCompare(b.date));
-      try {
-        localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
-      } catch {}
-      return updated;
+      return [optimisticBlock, ...filtered].sort((a, b) => a.date.localeCompare(b.date));
     });
 
     try {
-      const res = await fetch('/api/instructor/time-off', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-instructor-token': 'wally_owner_session'
-        },
-        body: JSON.stringify({
-          date: blockDate,
-          isFullDay: blockIsFullDay,
-          startTime: blockIsFullDay ? null : blockStartTime,
-          endTime: blockIsFullDay ? null : blockEndTime,
-          reason: blockReason.trim() || 'Instructor Time Off',
-          instructorId: 'wally',
-          instructorName: 'Wally'
-        })
+      await createClientTimeOffBlock({
+        date: blockDate,
+        isFullDay: blockIsFullDay,
+        startTime: blockIsFullDay ? null : blockStartTime,
+        endTime: blockIsFullDay ? null : blockEndTime,
+        reason: blockReason.trim() || 'Instructor Time Off',
+        instructorId: 'wally',
+        instructorName: 'Wally'
       });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.message || data.error || 'Failed to save block');
-      }
 
       setIsBlockModalOpen(false);
       setActionFeedback(`Availability blocked for ${formatBlockDate(blockDate)} (${blockIsFullDay ? 'All Day' : `${blockStartTime} – ${blockEndTime}`})! Customers cannot book this slot.`);
 
-      // Sync from backend
+      // Sync from storage/backend
       await loadBlockedDays();
-
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('wallys-availability-updated'));
-      }
     } catch (err: any) {
       console.error('Failed to create block:', err);
       setActionFeedback(`Error: ${err.message || 'Failed to block availability'}`);
@@ -426,74 +401,14 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   // Manual booking modal state
   const [isAddBookingModalOpen, setIsAddBookingModalOpen] = useState(false);
 
-  // Track recently deleted blocks to prevent ghost resurrection from cold cached responses
-  const recentlyDeletedRef = useRef<Map<string, number>>(new Map());
-
-  const normalizeDateKey = (d: string): string => {
-    if (!d) return '';
-    const clean = d.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
-    if (/^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(clean)) {
-      const parts = clean.split(/[/-]/);
-      const day = parts[0].padStart(2, '0');
-      const month = parts[1].padStart(2, '0');
-      const year = parts[2];
-      return `${year}-${month}-${day}`;
-    }
-    const parsed = new Date(clean);
-    if (!isNaN(parsed.getTime())) {
-      return parsed.toISOString().split('T')[0];
-    }
-    return clean;
-  };
-
-  const markDeletedKey = useCallback((id: string | number | undefined, dateStr: string) => {
-    const now = Date.now();
-    if (id) recentlyDeletedRef.current.set(String(id), now);
-    if (dateStr) {
-      recentlyDeletedRef.current.set(dateStr, now);
-      const norm = normalizeDateKey(dateStr);
-      if (norm) recentlyDeletedRef.current.set(norm, now);
-    }
-    for (const [k, t] of recentlyDeletedRef.current.entries()) {
-      if (now - t > 60000) recentlyDeletedRef.current.delete(k);
-    }
-  }, []);
-
-  const isRecentlyDeleted = useCallback((id: string | number | undefined, dateStr: string): boolean => {
-    const now = Date.now();
-    const checkKey = (k: string) => {
-      const t = recentlyDeletedRef.current.get(k);
-      return Boolean(t && (now - t < 60000));
-    };
-    if (id && checkKey(String(id))) return true;
-    if (dateStr) {
-      if (checkKey(dateStr)) return true;
-      const norm = normalizeDateKey(dateStr);
-      if (norm && checkKey(norm)) return true;
-    }
-    return false;
-  }, []);
-
   const loadBlockedDays = useCallback(async () => {
     try {
-      const res = await fetch(`/api/availability/blocked-days?_t=${Date.now()}`, { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.blocks)) {
-          const liveBlocks = data.blocks.filter((b: any) => !isRecentlyDeleted(b.id, b.date));
-          const sorted = liveBlocks.sort((a: any, b: any) => a.date.localeCompare(b.date));
-          setBlockedDaysList(sorted);
-          try {
-            localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(sorted));
-          } catch {}
-          return;
-        }
-      }
+      const blocks = await fetchTimeOffBlocks();
+      setBlockedDaysList(blocks);
     } catch (err) {
       console.warn('Failed to load blocked days list:', err);
     }
-  }, [isRecentlyDeleted]);
+  }, []);
 
   const loadData = async () => {
     setIsRefreshing(true);
@@ -519,66 +434,22 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       loadBlockedDays();
     };
     window.addEventListener('wallys-availability-updated', handleAvailabilitySync);
-    window.addEventListener('storage', handleAvailabilitySync);
-    return () => {
-      window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
-      window.removeEventListener('storage', handleAvailabilitySync);
-    };
+    return () => window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
   }, [loadBlockedDays]);
 
   const handleRemoveBlock = async (block: any) => {
     const blockId = block.id;
     const blockDate = block.date;
-    const blockDateNorm = normalizeDateKey(blockDate);
     setIsDeletingBlockId(blockId);
-    markDeletedKey(blockId, blockDate);
 
-    // Optimistic UI update: instantly remove from state and local storage
-    setBlockedDaysList(prev => {
-      const updated = prev.filter(b => {
-        if (String(b.id) === String(blockId)) return false;
-        const bNorm = normalizeDateKey(b.date);
-        if (b.date === blockDate || bNorm === blockDateNorm) return false;
-        return true;
-      });
-      try {
-        localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
-        localStorage.setItem('wallys_time_off_sync_event', Date.now().toString());
-      } catch {}
-      return updated;
-    });
+    // Optimistic UI update: instantly remove from state
+    setBlockedDaysList(prev => prev.filter(b => String(b.id) !== String(blockId) && b.date !== blockDate));
     setActionFeedback(`Removing block for ${blockDate}...`);
 
     try {
-      const safeId = blockId ? String(blockId).trim() : '0';
-      let res = await fetch(`/api/instructor/time-off/${encodeURIComponent(safeId)}?date=${encodeURIComponent(blockDate)}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-instructor-token': 'wally_owner_session'
-        },
-        body: JSON.stringify({ id: blockId, date: blockDate })
-      }).catch(() => null);
-
-      if (!res || !res.ok) {
-        await fetch(`/api/instructor/time-off/delete?date=${encodeURIComponent(blockDate)}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-instructor-token': 'wally_owner_session'
-          },
-          body: JSON.stringify({ id: blockId, date: blockDate })
-        }).catch(() => null);
-      }
-
-      setActionFeedback(`Time off on ${blockDate} removed completely! Date is unblocked and students can now book.`);
+      await deleteClientTimeOffBlock(blockId, blockDate);
+      setActionFeedback(`Time off on ${blockDate} removed successfully! Date is now unblocked and students can book.`);
       await loadBlockedDays();
-
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('wallys-availability-updated', {
-          detail: { date: blockDate, normDate: blockDateNorm, id: blockId, action: 'removed' }
-        }));
-      }
     } catch (err: any) {
       console.error('Failed to remove block:', err);
       setActionFeedback(`Error removing block: ${err?.message || 'Server error'}`);
@@ -732,6 +603,19 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             </button>
             
             <button
+              onClick={() => setActiveTab('operating-hours')}
+              className={cn(
+                "flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all text-left cursor-pointer w-full",
+                activeTab === 'operating-hours'
+                  ? "bg-brand-red text-white shadow-[0_0_15px_rgba(227,34,42,0.3)]"
+                  : "text-white/80 hover:text-white hover:bg-white/10"
+              )}
+            >
+              <Clock className="w-4 h-4 text-sky-400" />
+              <span>Operating Hours</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('availability')}
               className={cn(
                 "flex items-center justify-between px-4 py-3 rounded-xl font-bold text-sm transition-all text-left cursor-pointer w-full",
@@ -804,6 +688,19 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             </button>
 
             <button
+              onClick={() => setActiveTab('operating-hours')}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer",
+                activeTab === 'operating-hours'
+                  ? "bg-brand-black text-white shadow-md"
+                  : "bg-white text-black/60 hover:text-black border border-black/5 hover:bg-black/5"
+              )}
+            >
+              <Clock className="w-4 h-4 text-sky-500" />
+              <span>Operating Hours</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('availability')}
               className={cn(
                 "flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer",
@@ -822,7 +719,9 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             </button>
           </div>
 
-          {activeTab === 'availability' ? (
+          {activeTab === 'operating-hours' ? (
+            <InstructorOperatingHours />
+          ) : activeTab === 'availability' ? (
             <InstructorAvailability />
           ) : (
             <>
