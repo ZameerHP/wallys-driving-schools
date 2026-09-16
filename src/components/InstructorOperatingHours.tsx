@@ -71,14 +71,24 @@ export function InstructorOperatingHours() {
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const [operatingHours, setOperatingHours] = useState<WeeklyOperatingHours>({
-    monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
-    sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
+  const [operatingHours, setOperatingHours] = useState<WeeklyOperatingHours>(() => {
+    try {
+      const cached = localStorage.getItem('wallys_operating_settings');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        const hours = parsed.operatingHours || parsed.settings?.operatingHours;
+        if (hours) return hours;
+      }
+    } catch {}
+    return {
+      monday: { enabled: false, label: 'Monday', periods: [] },
+      tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+      wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+      thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+      friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+      saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
+      sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
+    };
   });
   const [bufferMinutes, setBufferMinutes] = useState<number>(15);
   const [timezone, setTimezone] = useState('Australia/Sydney');

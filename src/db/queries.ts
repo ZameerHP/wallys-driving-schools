@@ -847,8 +847,14 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
         });
 
         // Keep in-memory store and file synced with latest DB state
-        inMemoryTimeOff = mapped;
-        writeTimeOffFile(mapped);
+        if (mapped.length > 0 || (inMemoryTimeOff.length === 0 && readTimeOffFile().length === 0)) {
+          inMemoryTimeOff = mapped;
+          writeTimeOffFile(mapped);
+        } else if (mapped.length === 0 && (inMemoryTimeOff.length > 0 || readTimeOffFile().length > 0)) {
+          // If Supabase table is empty but local file has blocks, retain local blocks
+          const localBlocks = inMemoryTimeOff.length > 0 ? inMemoryTimeOff : readTimeOffFile();
+          mapped.push(...localBlocks);
+        }
 
         if (instructorId) {
           return mapped.filter(b => b.instructorId.toLowerCase() === instructorId.toLowerCase());

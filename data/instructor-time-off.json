@@ -62,5 +62,21 @@
     "reason": "Personal Day Off",
     "createdAt": "2026-09-16T09:22:08.849Z",
     "updatedAt": "2026-09-16T09:22:08.849Z"
+  },
+  {
+    "id": 1789580197637,
+    "instructorId": "wally",
+    "instructorName": "Wally",
+    "date": "2026-09-28",
+    "isFullDay": true,
+    "startTime": null,
+    "endTime": null,
+    "startMinutes": null,
+    "endMinutes": null,
+    "displayStartTime": null,
+    "displayEndTime": null,
+    "reason": "Test Monday Off",
+    "createdAt": "2026-09-16T17:36:37.637Z",
+    "updatedAt": "2026-09-16T17:36:37.637Z"
   }
 ]

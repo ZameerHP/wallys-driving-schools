@@ -33,6 +33,7 @@ import {
   saveLocalTimeOffBlocks,
   isTimeOffBlockDeleted,
   markTimeOffBlockDeleted,
+  unmarkTimeOffBlockDeleted,
   broadcastAvailabilityChange,
   TimeOffItem
 } from '../lib/timeOff';
@@ -328,6 +329,14 @@ export function InstructorAvailability() {
       });
       return;
     }
+
+    // Explicitly unmark any deletion tombstone so this block is immediately recognized
+    unmarkTimeOffBlockDeleted(date, editingBlockId || undefined);
+    const norm = normalizeDateKey(date);
+    if (norm) unmarkTimeOffBlockDeleted(norm);
+    recentlyDeletedRef.current.delete(date);
+    if (norm) recentlyDeletedRef.current.delete(norm);
+    if (editingBlockId) recentlyDeletedRef.current.delete(String(editingBlockId));
 
     setIsSaving(true);
     try {

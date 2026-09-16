@@ -132,11 +132,17 @@ export function markTimeOffBlockDeleted(id: string | number | undefined, dateStr
   saveRawLocalTimeOffBlocks(filtered);
 }
 
-export function unmarkTimeOffBlockDeleted(dateStr: string): void {
+export function unmarkTimeOffBlockDeleted(dateStr: string, id?: string | number): void {
   if (typeof window === 'undefined') return;
   const norm = normalizeDateKey(dateStr);
+  const strId = id !== undefined && id !== null ? String(id).trim() : '';
   const current = getDeletedTombstones();
-  const filtered = current.filter(t => t.date !== dateStr && t.normDate !== norm);
+  const filtered = current.filter(t => {
+    if (strId && t.id && String(t.id) === strId) return false;
+    if (dateStr && t.date === dateStr) return false;
+    if (norm && (t.normDate === norm || t.date === norm)) return false;
+    return true;
+  });
   saveDeletedTombstones(filtered);
 }
 
@@ -149,11 +155,18 @@ export function isTimeOffBlockDeleted(id: string | number | undefined, dateStr?:
   const rawDate = dateStr ? dateStr.trim() : '';
   const normDate = dateStr ? normalizeDateKey(dateStr) : '';
 
+  // 1. If an ID is provided, ONLY match against tombstoned IDs
+  if (strId) {
+    return tombstones.some(t => t.id && String(t.id) === strId);
+  }
+
+  // 2. If NO ID is provided, only match date if the deletion was recent (within last 30 seconds)
+  // This bridges replication lag for instant optimistic deletes, but never blocks future blocks on that date!
+  const now = Date.now();
   return tombstones.some(t => {
-    if (strId && t.id && String(t.id) === strId) return true;
-    if (rawDate && t.date === rawDate) return true;
-    if (normDate && t.normDate === normDate) return true;
-    return false;
+    const matchesDate = (rawDate && t.date === rawDate) || (normDate && t.normDate === normDate);
+    if (!matchesDate) return false;
+    return (now - (t.deletedAt || 0)) < 30000;
   });
 }
 
@@ -163,20 +176,25 @@ export function filterLiveTimeOffBlocks(blocks: TimeOffItem[]): TimeOffItem[] {
   const tombstones = getDeletedTombstones();
   if (tombstones.length === 0) return blocks;
 
+  const now = Date.now();
   return blocks.filter(b => {
     if (!b) return false;
     const bId = b.id !== undefined && b.id !== null ? String(b.id).trim() : '';
     const bDate = b.date ? String(b.date).trim() : '';
     const bNorm = normalizeDateKey(bDate);
 
-    const isDeleted = tombstones.some(t => {
-      if (bId && t.id && String(t.id) === bId) return true;
-      if (bDate && t.date === bDate) return true;
-      if (bNorm && t.normDate === bNorm) return true;
-      return false;
+    // If block has an ID, only filter it out if that specific block ID was tombstoned
+    if (bId) {
+      return !tombstones.some(t => t.id && String(t.id) === bId);
+    }
+
+    // If block has no ID, only filter it out if deleted within the last 30 seconds
+    const isRecentDateTombstone = tombstones.some(t => {
+      const matchesDate = (bDate && t.date === bDate) || (bNorm && t.normDate === bNorm);
+      return matchesDate && (now - (t.deletedAt || 0)) < 30000;
     });
 
-    return !isDeleted;
+    return !isRecentDateTombstone;
   });
 }
 
@@ -225,7 +243,17 @@ export function getLocalTimeOffBlocks(): TimeOffItem[] {
 
 // Persist blocks to localStorage across all version keys
 export function saveLocalTimeOffBlocks(blocks: TimeOffItem[]): void {
-  const clean = filterLiveTimeOffBlocks(blocks).sort((a, b) => a.date.localeCompare(b.date));
+  const valid = Array.isArray(blocks) ? blocks.filter(b => b && b.date) : [];
+  // Automatically purge tombstones for any date present in live blocks
+  const activeDates = new Set(valid.map(b => normalizeDateKey(b.date)).filter(Boolean));
+  if (activeDates.size > 0) {
+    const tombstones = getDeletedTombstones();
+    const pruned = tombstones.filter(t => !activeDates.has(t.normDate || normalizeDateKey(t.date)));
+    if (pruned.length !== tombstones.length) {
+      saveDeletedTombstones(pruned);
+    }
+  }
+  const clean = filterLiveTimeOffBlocks(valid).sort((a, b) => a.date.localeCompare(b.date));
   saveRawLocalTimeOffBlocks(clean);
 }
 

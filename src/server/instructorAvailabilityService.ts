@@ -162,7 +162,7 @@ const DEFAULT_SETTINGS: InstructorSettings = {
   minNoticeHours: 2,
   maxAdvanceDays: 60,
   operatingHours: DEFAULT_WEEKLY_HOURS,
-  updatedAt: new Date().toISOString()
+  updatedAt: '1970-01-01T00:00:00.000Z'
 };
 
 // In-memory cache for high-throughput responses

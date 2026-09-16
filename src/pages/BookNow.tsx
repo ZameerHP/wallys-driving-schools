@@ -49,7 +49,7 @@ import {
   formatDurationDisplay,
   SlotPeriod
 } from '../lib/bookingSlots';
-import { fetchTimeOffBlocks, isTimeOffBlockDeleted } from '../lib/timeOff';
+import { fetchTimeOffBlocks, isTimeOffBlockDeleted, getLocalTimeOffBlocks, normalizeDateKey } from '../lib/timeOff';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -298,13 +298,64 @@ export function BookNow() {
   const [testCentreDropdownOpen, setTestCentreDropdownOpen] = useState(false);
   const [testTime, setTestTime] = useState('');
   const [infoErrors, setInfoErrors] = useState<{ [key: string]: string }>({});
-  const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string; status?: string; isFullDay?: boolean; reason?: string }[]>([]);
-  const [blockedOffDays, setBlockedOffDays] = useState<Map<string, { isFullDay: boolean; reason?: string }>>(new Map());
+  const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string; status?: string; isFullDay?: boolean; reason?: string }[]>(() => {
+    try {
+      const cached = getLocalTimeOffBlocks();
+      const initialSlots: { date: string; time: string; status?: string; isFullDay?: boolean; reason?: string }[] = [];
+      if (Array.isArray(cached)) {
+        for (const b of cached) {
+          const norm = normalizeDateKey(b.date);
+          if (norm) {
+            const isFull = Boolean(b.isFullDay) || (!b.startTime && !b.endTime);
+            if (isFull) {
+              initialSlots.push({
+                date: norm,
+                time: 'Full Day Off',
+                status: 'Blocked',
+                isFullDay: true,
+                reason: b.reason || 'Instructor Day Off'
+              });
+            } else if (b.startTime && b.endTime) {
+              initialSlots.push({
+                date: norm,
+                time: `${b.displayStartTime || b.startTime} - ${b.displayEndTime || b.endTime}`,
+                status: 'Blocked',
+                isFullDay: false,
+                reason: b.reason || 'Instructor Unavailable'
+              });
+            }
+          }
+        }
+      }
+      return initialSlots;
+    } catch {
+      return [];
+    }
+  });
+  const [blockedOffDays, setBlockedOffDays] = useState<Map<string, { isFullDay: boolean; reason?: string }>>(() => {
+    const map = new Map<string, { isFullDay: boolean; reason?: string }>();
+    try {
+      const cached = getLocalTimeOffBlocks();
+      if (Array.isArray(cached)) {
+        for (const b of cached) {
+          const norm = normalizeDateKey(b.date);
+          if (norm) {
+            const isFull = Boolean(b.isFullDay) || (!b.startTime && !b.endTime);
+            if (isFull) {
+              map.set(norm, { isFullDay: true, reason: b.reason || 'Instructor Day Off' });
+            }
+          }
+        }
+      }
+    } catch {}
+    return map;
+  });
   const [operatingSettings, setOperatingSettings] = useState<{
     operatingHours?: any;
     dateOverrides?: any[];
     bufferMinutes?: number;
     timezone?: string;
+    disabledDays?: number[];
   }>(() => {
     try {
       const cached = localStorage.getItem('wallys_operating_settings');
@@ -316,7 +367,7 @@ export function BookNow() {
     } catch {}
     return {
       operatingHours: {
-        monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+        monday: { enabled: false, label: 'Monday', periods: [] },
         tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
@@ -324,6 +375,7 @@ export function BookNow() {
         saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
         sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
       },
+      disabledDays: [1],
       bufferMinutes: 15,
       timezone: 'Australia/Sydney'
     };
@@ -587,6 +639,28 @@ export function BookNow() {
     if (!dateStr) return { isClosed: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
 
     const norm = normalizeDateStr(dateStr);
+
+    // 1. Check explicit Time Off / Blocked Days
+    if (norm && blockedOffDays.has(norm)) {
+      return { 
+        isClosed: true, 
+        periods: [], 
+        reason: blockedOffDays.get(norm)?.reason || 'Instructor Day Off' 
+      };
+    }
+
+    // 2. Check full-day blocks in bookedSlots
+    const hasFullDayBooking = bookedSlots.some(b => {
+      if (b.status === 'Cancelled') return false;
+      if (normalizeDateStr(b.date) !== norm) return false;
+      const cleanTime = (b.time || '').trim().toLowerCase();
+      return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
+    });
+    if (hasFullDayBooking) {
+      return { isClosed: true, periods: [], reason: 'Instructor Day Off' };
+    }
+
+    // 3. Check custom Date Overrides
     const overrides = operatingSettings.dateOverrides || [];
     const override = overrides.find(o => normalizeDateStr(o.date) === norm);
     if (override) {
@@ -598,12 +672,17 @@ export function BookNow() {
       }
     }
 
-    const parts = dateStr.split('-').map(Number);
+    // 4. Check weekly Operating Hours
+    const parts = norm.split('-').map(Number);
     if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
       const dayIdx = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
       const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
       const dayKey = dayNames[dayIdx];
       const dayConfig = operatingSettings.operatingHours?.[dayKey];
+
+      if (operatingSettings.disabledDays && operatingSettings.disabledDays.includes(dayIdx)) {
+        return { isClosed: true, periods: [], reason: `Closed on ${dayConfig?.label || dayKey}s` };
+      }
 
       if (dayConfig) {
         if (!dayConfig.enabled || !dayConfig.periods || dayConfig.periods.length === 0) {
@@ -614,7 +693,7 @@ export function BookNow() {
     }
 
     return { isClosed: false, periods: [{ start: '08:00 AM', end: '05:00 PM' }] };
-  }, [operatingSettings]);
+  }, [operatingSettings, blockedOffDays, bookedSlots]);
 
   // Helper to find next non-blocked, upcoming available date
   const findNextAvailableDate = useCallback((startDateStr: string, blockedMap: Map<string, { isFullDay: boolean; reason?: string }>, offsetDays = 0) => {
@@ -2039,22 +2118,8 @@ export function BookNow() {
 
                               // Check if date is marked as instructor/owner Full Day Off or closed via operating hours
                               const dayInfo = getDayOperatingInfo(item.dateStr);
-                              const isDeletedTombstone = isTimeOffBlockDeleted(undefined, item.dateStr);
-                              const isBlockedByTimeOff = (blockedOffDays.has(item.dateStr) || bookedSlots.some(b => {
-                                if (b.status === 'Cancelled') return false;
-                                if (normalizeDateStr(b.date) !== item.dateStr) return false;
-                                const cleanTime = (b.time || '').trim().toLowerCase();
-                                return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
-                              })) && !isDeletedTombstone;
-
-                              const isDayOff = dayInfo.isClosed || isBlockedByTimeOff;
-
-                              const dayOffReason = (dayInfo.isClosed ? dayInfo.reason : null) || (!isDeletedTombstone ? (blockedOffDays.get(item.dateStr)?.reason || bookedSlots.find(b => {
-                                if (b.status === 'Cancelled') return false;
-                                if (normalizeDateStr(b.date) !== item.dateStr) return false;
-                                const cleanTime = (b.time || '').trim().toLowerCase();
-                                return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
-                              })?.reason) : null) || 'Instructor Closed / Unavailable';
+                              const isDayOff = dayInfo.isClosed;
+                              const dayOffReason = dayInfo.reason || 'Instructor Closed / Unavailable';
 
                               // Check if any other lesson is booked on this date
                               const otherLessonsOnDate = packageSpecs.lessonCount > 1 
