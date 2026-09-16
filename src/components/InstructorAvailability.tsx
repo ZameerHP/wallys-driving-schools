@@ -30,6 +30,9 @@ import {
   createClientTimeOffBlock, 
   deleteClientTimeOffBlock, 
   getLocalTimeOffBlocks, 
+  saveLocalTimeOffBlocks,
+  isTimeOffBlockDeleted,
+  markTimeOffBlockDeleted,
   broadcastAvailabilityChange,
   TimeOffItem
 } from '../lib/timeOff';
@@ -104,13 +107,7 @@ function formatHumanDate(dateStr: string): string {
 
 export function InstructorAvailability() {
   const [blocks, setBlocks] = useState<TimeOffItem[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const cached = localStorage.getItem('wallys_time_off_blocks_v1');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
+    return getLocalTimeOffBlocks();
   });
   const [isLoading, setIsLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -224,13 +221,11 @@ export function InstructorAvailability() {
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.blocks)) {
-          // Filter out any blocks that were recently deleted
-          const liveBlocks = data.blocks.filter((b: any) => !isRecentlyDeleted(b.id, b.date));
+          // Filter out any blocks that were recently deleted or marked as tombstone
+          const liveBlocks = data.blocks.filter((b: any) => !isRecentlyDeleted(b.id, b.date) && !isTimeOffBlockDeleted(b.id, b.date));
           const sorted = liveBlocks.sort((a: any, b: any) => a.date.localeCompare(b.date));
           setBlocks(sorted);
-          try {
-            localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(sorted));
-          } catch {}
+          saveLocalTimeOffBlocks(sorted);
         }
       }
     } catch (err) {
@@ -370,9 +365,7 @@ export function InstructorAvailability() {
         setBlocks(prev => {
           const filtered = prev.filter(b => String(b.id) !== String(data.block.id) && b.date !== data.block.date);
           const updated = [...filtered, data.block].sort((a, b) => a.date.localeCompare(b.date));
-          try {
-            localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
-          } catch {}
+          saveLocalTimeOffBlocks(updated);
           return updated;
         });
       }
@@ -414,6 +407,7 @@ export function InstructorAvailability() {
 
     const blockDateNorm = normalizeDateKey(block.date);
     markDeletedKey(block.id, block.date);
+    markTimeOffBlockDeleted(block.id, block.date);
 
     // Optimistic UI update: remove block immediately from view and local storage
     setBlocks(prev => {
@@ -423,10 +417,7 @@ export function InstructorAvailability() {
         if (b.date === block.date || bNorm === blockDateNorm) return false;
         return true;
       });
-      try {
-        localStorage.setItem('wallys_time_off_blocks_v1', JSON.stringify(updated));
-        localStorage.setItem('wallys_time_off_sync_event', Date.now().toString());
-      } catch {}
+      saveLocalTimeOffBlocks(updated);
       return updated;
     });
 

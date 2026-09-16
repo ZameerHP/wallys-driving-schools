@@ -37,7 +37,13 @@ import { cn } from '../lib/utils';
 import { ManualBookingModal } from '../components/ManualBookingModal';
 import { EditBookingModal } from '../components/EditBookingModal';
 import { InstructorOperatingHours } from '../components/InstructorOperatingHours';
-import { fetchTimeOffBlocks, createClientTimeOffBlock, deleteClientTimeOffBlock } from '../lib/timeOff';
+import { 
+  fetchTimeOffBlocks, 
+  createClientTimeOffBlock, 
+  deleteClientTimeOffBlock,
+  getLocalTimeOffBlocks,
+  isTimeOffBlockDeleted 
+} from '../lib/timeOff';
 
 const TIME_SLOT_OPTIONS = [
   '07:00 AM', '07:30 AM', '08:00 AM', '08:30 AM', '09:00 AM', '09:30 AM',
@@ -269,8 +275,10 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   // Section navigation state
   const [activeTab, setActiveTab] = useState<'schedule' | 'availability' | 'operating-hours'>('schedule');
 
-  // Blocked Days & Time Off state
-  const [blockedDaysList, setBlockedDaysList] = useState<any[]>([]);
+  // Blocked Days & Time Off state - initialized from cache to avoid displaying 0 on page refresh
+  const [blockedDaysList, setBlockedDaysList] = useState<any[]>(() => {
+    return getLocalTimeOffBlocks();
+  });
   const [isDeletingBlockId, setIsDeletingBlockId] = useState<string | number | null>(null);
 
   // Block Modal State for direct blocking on dashboard
@@ -404,9 +412,14 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   const loadBlockedDays = useCallback(async () => {
     try {
       const blocks = await fetchTimeOffBlocks();
-      setBlockedDaysList(blocks);
+      if (Array.isArray(blocks)) {
+        setBlockedDaysList(blocks);
+      } else {
+        setBlockedDaysList(getLocalTimeOffBlocks());
+      }
     } catch (err) {
       console.warn('Failed to load blocked days list:', err);
+      setBlockedDaysList(getLocalTimeOffBlocks());
     }
   }, []);
 
@@ -433,8 +446,23 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     const handleAvailabilitySync = () => {
       loadBlockedDays();
     };
+
     window.addEventListener('wallys-availability-updated', handleAvailabilitySync);
-    return () => window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
+    window.addEventListener('storage', handleAvailabilitySync);
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      if ('BroadcastChannel' in window) {
+        channel = new BroadcastChannel('wallys-availability-channel');
+        channel.onmessage = () => handleAvailabilitySync();
+      }
+    } catch {}
+
+    return () => {
+      window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
+      window.removeEventListener('storage', handleAvailabilitySync);
+      if (channel) channel.close();
+    };
   }, [loadBlockedDays]);
 
   const handleRemoveBlock = async (block: any) => {

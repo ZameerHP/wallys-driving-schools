@@ -49,7 +49,7 @@ import {
   formatDurationDisplay,
   SlotPeriod
 } from '../lib/bookingSlots';
-import { fetchTimeOffBlocks } from '../lib/timeOff';
+import { fetchTimeOffBlocks, isTimeOffBlockDeleted } from '../lib/timeOff';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
 
@@ -474,6 +474,11 @@ export function BookNow() {
       if (Array.isArray(blocks)) {
         for (const b of blocks) {
           const norm = normalizeDateStr(b.date);
+          // Skip if this block was recently deleted / tombstoned
+          if (isTimeOffBlockDeleted(b.id, b.date) || (norm && isTimeOffBlockDeleted(b.id, norm))) {
+            continue;
+          }
+
           const isFullDay = Boolean(b.isFullDay) || (b as any).isFullDay === 'true' || (!b.startTime && !b.endTime);
           if (norm) {
             if (isFullDay) {
@@ -515,14 +520,25 @@ export function BookNow() {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
+          // Filter out any slots for dates that are in deleted tombstones
+          const sanitized = data.filter(s => {
+            const sNorm = normalizeDateStr(s.date);
+            if (isTimeOffBlockDeleted(undefined, s.date) || (sNorm && isTimeOffBlockDeleted(undefined, sNorm))) {
+              if (s.status === 'Blocked' || Boolean(s.isFullDay)) {
+                return false;
+              }
+            }
+            return true;
+          });
+
           if (targetDate) {
             const normTarget = normalizeDateStr(targetDate);
             setBookedSlots(prev => {
               const others = prev.filter(b => normalizeDateStr(b.date) !== normTarget);
-              return [...others, ...data];
+              return [...others, ...sanitized];
             });
           } else {
-            setBookedSlots(data);
+            setBookedSlots(sanitized);
           }
         }
       }
@@ -640,33 +656,52 @@ export function BookNow() {
     }, 8000);
 
     const handleSync = (e?: any) => {
-      const detail = e?.detail;
+      let detail = e?.detail || e?.data;
+      if (!detail && e?.key === 'wallys_availability_ping' && e?.newValue) {
+        try {
+          detail = JSON.parse(e.newValue);
+        } catch {}
+      }
+      if (!detail) {
+        try {
+          const rawPing = localStorage.getItem('wallys_availability_ping');
+          if (rawPing) detail = JSON.parse(rawPing);
+        } catch {}
+      }
+
       const removedDate = detail?.date;
       const removedNorm = detail?.normDate || (removedDate ? normalizeDateStr(removedDate) : null);
 
-      if (removedDate || removedNorm) {
-        // Instantly unblock the day from the calendar
-        setBlockedOffDays(prev => {
-          const next = new Map(prev);
-          if (removedDate) next.delete(removedDate);
-          if (removedNorm) next.delete(removedNorm);
-          return next;
-        });
-
-        // Clear any day off / full day blocked slots from bookedSlots
-        setBookedSlots(prev => prev.filter(b => {
-          const bNorm = normalizeDateStr(b.date);
-          if (bNorm === removedNorm || b.date === removedDate) {
-            const cleanTime = (b.time || '').trim().toLowerCase();
-            return !Boolean((b as any).isFullDay) && cleanTime !== 'full_day' && !cleanTime.includes('day off');
+      // Instantly unblock the day from local state
+      setBlockedOffDays(prev => {
+        const next = new Map(prev);
+        if (removedDate) next.delete(removedDate);
+        if (removedNorm) next.delete(removedNorm);
+        for (const k of next.keys()) {
+          if (isTimeOffBlockDeleted(undefined, k)) {
+            next.delete(k);
           }
-          return true;
-        }));
-
-        // Clear any conflict banner if selected date was the removed date
-        if (selectedDate && (normalizeDateStr(selectedDate) === removedNorm || selectedDate === removedDate)) {
-          setSlotConflictError(null);
         }
+        return next;
+      });
+
+      // Clear any day off / full day blocked slots from bookedSlots
+      setBookedSlots(prev => prev.filter(b => {
+        const bNorm = normalizeDateStr(b.date);
+        if (isTimeOffBlockDeleted(undefined, b.date) || (bNorm && isTimeOffBlockDeleted(undefined, bNorm))) {
+          const cleanTime = (b.time || '').trim().toLowerCase();
+          return !Boolean((b as any).isFullDay) && cleanTime !== 'full_day' && !cleanTime.includes('day off') && b.status !== 'Blocked';
+        }
+        if (bNorm === removedNorm || b.date === removedDate) {
+          const cleanTime = (b.time || '').trim().toLowerCase();
+          return !Boolean((b as any).isFullDay) && cleanTime !== 'full_day' && !cleanTime.includes('day off') && b.status !== 'Blocked';
+        }
+        return true;
+      }));
+
+      // Clear any conflict banner if selected date was the removed date
+      if (selectedDate && (normalizeDateStr(selectedDate) === removedNorm || selectedDate === removedDate || isTimeOffBlockDeleted(undefined, selectedDate))) {
+        setSlotConflictError(null);
       }
 
       refreshBlockedDays();
@@ -681,7 +716,7 @@ export function BookNow() {
     try {
       if ('BroadcastChannel' in window) {
         channel = new BroadcastChannel('wallys-availability-channel');
-        channel.onmessage = () => handleSync();
+        channel.onmessage = (msg) => handleSync(msg);
       }
     } catch {}
 
@@ -1996,27 +2031,30 @@ export function BookNow() {
                           {/* Days Grid */}
                           <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold">
                             {calendarDays.map((item, idx) => {
-                              if (!item.isCurrentMonth) {
-                                return <div key={idx} className="h-8" />;
+                              if (!item.isCurrentMonth || !item.day || item.day <= 0) {
+                                return <div key={idx} className="h-8" aria-hidden="true" />;
                               }
                               const isSelected = selectedDate === item.dateStr;
                               const isUnavailable = item.isPast;
 
                               // Check if date is marked as instructor/owner Full Day Off or closed via operating hours
                               const dayInfo = getDayOperatingInfo(item.dateStr);
-                              const isDayOff = dayInfo.isClosed || blockedOffDays.has(item.dateStr) || bookedSlots.some(b => {
+                              const isDeletedTombstone = isTimeOffBlockDeleted(undefined, item.dateStr);
+                              const isBlockedByTimeOff = (blockedOffDays.has(item.dateStr) || bookedSlots.some(b => {
                                 if (b.status === 'Cancelled') return false;
                                 if (normalizeDateStr(b.date) !== item.dateStr) return false;
                                 const cleanTime = (b.time || '').trim().toLowerCase();
                                 return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
-                              });
+                              })) && !isDeletedTombstone;
 
-                              const dayOffReason = (dayInfo.isClosed ? dayInfo.reason : null) || blockedOffDays.get(item.dateStr)?.reason || bookedSlots.find(b => {
+                              const isDayOff = dayInfo.isClosed || isBlockedByTimeOff;
+
+                              const dayOffReason = (dayInfo.isClosed ? dayInfo.reason : null) || (!isDeletedTombstone ? (blockedOffDays.get(item.dateStr)?.reason || bookedSlots.find(b => {
                                 if (b.status === 'Cancelled') return false;
                                 if (normalizeDateStr(b.date) !== item.dateStr) return false;
                                 const cleanTime = (b.time || '').trim().toLowerCase();
                                 return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
-                              })?.reason || 'Instructor Closed / Unavailable';
+                              })?.reason) : null) || 'Instructor Closed / Unavailable';
 
                               // Check if any other lesson is booked on this date
                               const otherLessonsOnDate = packageSpecs.lessonCount > 1 
