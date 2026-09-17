@@ -2046,7 +2046,7 @@ app.get("/api/availability/operating-hours", async (req, res) => {
       if (dbSettings && dbSettings.operatingHours) {
         const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
         const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime >= localTime) {
+        if (dbTime > localTime) {
           settings = saveInstructorSettings(dbSettings);
         }
       }
@@ -2086,15 +2086,21 @@ app.get("/api/instructor/operating-hours", async (req, res) => {
       if (dbSettings && dbSettings.operatingHours) {
         const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
         const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime >= localTime) {
+        if (dbTime > localTime) {
           settings = saveInstructorSettings(dbSettings);
         }
       }
     } catch {}
 
+    const disabledDays = getDisabledDaysOfWeek(instructorId);
+
     res.json({
       success: true,
-      settings
+      settings,
+      operatingHours: settings.operatingHours,
+      disabledDays,
+      bufferMinutes: settings.bufferMinutes,
+      timezone: settings.timezone
     });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to load instructor settings" });
@@ -2119,15 +2125,26 @@ app.put("/api/instructor/operating-hours", attachInstructorOrAuth, async (req, r
       maxAdvanceDays: typeof maxAdvanceDays === 'number' ? maxAdvanceDays : undefined
     });
 
-    // Asynchronously persist to Supabase / PostgreSQL database
-    saveInstructorSettingsDb(instructorId, updated).catch(err => {
+    // Synchronously/asynchronously persist to database with fallback timeout
+    try {
+      await Promise.race([
+        saveInstructorSettingsDb(instructorId, updated),
+        new Promise(resolve => setTimeout(resolve, 1500))
+      ]);
+    } catch (err) {
       console.warn('[OperatingHours] Warning saving settings to database:', err);
-    });
+    }
+
+    const disabledDays = getDisabledDaysOfWeek(instructorId);
 
     res.json({
       success: true,
       message: "Operating hours updated successfully",
-      settings: updated
+      settings: updated,
+      operatingHours: updated.operatingHours,
+      disabledDays,
+      bufferMinutes: updated.bufferMinutes,
+      timezone: updated.timezone
     });
   } catch (err: any) {
     console.error("Error saving operating hours:", err);

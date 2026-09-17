@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Clock,
@@ -65,59 +65,124 @@ const DAYS_ORDER: (keyof WeeklyOperatingHours)[] = [
   'sunday'
 ];
 
+const DEFAULT_INITIAL_HOURS: WeeklyOperatingHours = {
+  monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }] },
+  tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }] },
+  wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }] },
+  thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }] },
+  friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }] },
+  saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM', startMinutes: 480, endMinutes: 1020 }] },
+  sunday: { enabled: false, label: 'Sunday', periods: [] }
+};
+
+function parseTimeToMinutes(timeStr: string): number {
+  if (!timeStr) return 0;
+  const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (!match) return 0;
+  let h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  const ampm = (match[3] || '').toUpperCase();
+  if (ampm === 'PM' && h < 12) h += 12;
+  if (ampm === 'AM' && h === 12) h = 0;
+  return h * 60 + m;
+}
+
+function computeDisabledDays(hours: WeeklyOperatingHours): number[] {
+  const dayKeys: (keyof WeeklyOperatingHours)[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const res: number[] = [];
+  dayKeys.forEach((key, idx) => {
+    const d = hours[key];
+    if (!d || !d.enabled || !d.periods || d.periods.length === 0) {
+      res.push(idx);
+    }
+  });
+  return res;
+}
+
+function getInitialOperatingState(): { hours: WeeklyOperatingHours; buffer: number; tz: string; hasCache: boolean } {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem('wallys_operating_settings') : null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const hours = parsed.operatingHours || parsed.settings?.operatingHours;
+      const buffer = typeof parsed.bufferMinutes === 'number' ? parsed.bufferMinutes : (parsed.settings?.bufferMinutes ?? 15);
+      const tz = parsed.timezone || parsed.settings?.timezone || 'Australia/Sydney';
+      if (hours && typeof hours === 'object' && hours.monday) {
+        return { hours, buffer, tz, hasCache: true };
+      }
+    }
+  } catch {}
+  return { hours: DEFAULT_INITIAL_HOURS, buffer: 15, tz: 'Australia/Sydney', hasCache: false };
+}
+
 export function InstructorOperatingHours() {
-  const [isLoading, setIsLoading] = useState(true);
+  const initial = useMemo(() => getInitialOperatingState(), []);
+  const [operatingHours, setOperatingHours] = useState<WeeklyOperatingHours>(initial.hours);
+  const [bufferMinutes, setBufferMinutes] = useState<number>(initial.buffer);
+  const [timezone, setTimezone] = useState<string>(initial.tz);
+  const [isLoading, setIsLoading] = useState<boolean>(!initial.hasCache);
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const [operatingHours, setOperatingHours] = useState<WeeklyOperatingHours>({
-    monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-    saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
-    sunday: { enabled: false, label: 'Sunday', periods: [] }
-  });
-  const [bufferMinutes, setBufferMinutes] = useState<number>(15);
-  const [timezone, setTimezone] = useState('Australia/Sydney');
+  // Synchronous references to eliminate stale closures and fast click race-conditions
+  const operatingHoursRef = useRef<WeeklyOperatingHours>(initial.hours);
+  const bufferMinutesRef = useRef<number>(initial.buffer);
+  const timezoneRef = useRef<string>(initial.tz);
+  const lastSavedTimestampRef = useRef<number>(Date.now());
 
+  useEffect(() => {
+    operatingHoursRef.current = operatingHours;
+  }, [operatingHours]);
+
+  useEffect(() => {
+    bufferMinutesRef.current = bufferMinutes;
+  }, [bufferMinutes]);
+
+  useEffect(() => {
+    timezoneRef.current = timezone;
+  }, [timezone]);
+
+  // Load from server in background, smoothly merging if server has newer data
   const loadSettings = useCallback(async () => {
     try {
-      const cached = localStorage.getItem('wallys_operating_settings');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        const hours = parsed.operatingHours || parsed.settings?.operatingHours;
-        if (hours) setOperatingHours(hours);
-        const buf = typeof parsed.bufferMinutes === 'number' ? parsed.bufferMinutes : parsed.settings?.bufferMinutes;
-        if (typeof buf === 'number') setBufferMinutes(buf);
-        const tz = parsed.timezone || parsed.settings?.timezone;
-        if (tz) setTimezone(tz);
-      }
-    } catch {}
-
-    setIsLoading(true);
-    try {
-      const headers = { 'x-instructor-token': 'wally_owner_session' };
+      const token = (typeof window !== 'undefined' && localStorage.getItem('instructor_token')) || 'wally_owner_session';
       const res = await fetch(`/api/instructor/operating-hours?_t=${Date.now()}`, {
-        headers,
+        headers: {
+          'x-instructor-token': token,
+          'Authorization': `Bearer ${token}`
+        },
         cache: 'no-store'
       });
+
       if (res.ok) {
         const data = await res.json();
         const settings = data.settings || data;
-        if (settings) {
-          if (settings.operatingHours) setOperatingHours(settings.operatingHours);
-          if (typeof settings.bufferMinutes === 'number') setBufferMinutes(settings.bufferMinutes);
-          if (settings.timezone) setTimezone(settings.timezone);
+        if (settings && settings.operatingHours) {
+          const serverTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
+          if (serverTime >= lastSavedTimestampRef.current) {
+            setOperatingHours(settings.operatingHours);
+            operatingHoursRef.current = settings.operatingHours;
+            if (typeof settings.bufferMinutes === 'number') {
+              setBufferMinutes(settings.bufferMinutes);
+              bufferMinutesRef.current = settings.bufferMinutes;
+            }
+            if (settings.timezone) {
+              setTimezone(settings.timezone);
+              timezoneRef.current = settings.timezone;
+            }
 
-          try {
-            localStorage.setItem('wallys_operating_settings', JSON.stringify(settings));
-          } catch {}
+            try {
+              const disabledDays = data.disabledDays || computeDisabledDays(settings.operatingHours);
+              localStorage.setItem('wallys_operating_settings', JSON.stringify({
+                ...settings,
+                disabledDays
+              }));
+            } catch {}
+          }
         }
       }
     } catch (err) {
-      console.error('[OperatingHours] Failed to load settings:', err);
+      console.warn('[OperatingHours] Background load warning:', err);
     } finally {
       setIsLoading(false);
     }
@@ -134,25 +199,43 @@ export function InstructorOperatingHours() {
     tzToSave: string,
     successMsg?: string
   ) => {
-    // 1. Immediately write to localStorage so refresh is 100% instant & never loses state
+    operatingHoursRef.current = hoursToSave;
+    bufferMinutesRef.current = bufferToSave;
+    timezoneRef.current = tzToSave;
+    const nowTs = Date.now();
+    lastSavedTimestampRef.current = nowTs;
+    const disabledDays = computeDisabledDays(hoursToSave);
+
+    // 1. Immediately write to localStorage so refresh or browser close is 100% sticky & instant
+    const cacheObj = {
+      operatingHours: hoursToSave,
+      disabledDays,
+      bufferMinutes: bufferToSave,
+      timezone: tzToSave,
+      updatedAt: new Date(nowTs).toISOString()
+    };
+
     try {
-      localStorage.setItem('wallys_operating_settings', JSON.stringify({
-        operatingHours: hoursToSave,
-        bufferMinutes: bufferToSave,
-        timezone: tzToSave,
-        updatedAt: new Date().toISOString()
-      }));
+      localStorage.setItem('wallys_operating_settings', JSON.stringify(cacheObj));
+      window.dispatchEvent(new Event('storage'));
     } catch {}
 
-    broadcastAvailabilityChange();
+    broadcastAvailabilityChange({ action: 'updated' });
+
+    if (successMsg) {
+      setFeedback({ type: 'success', message: successMsg });
+      setTimeout(() => setFeedback(null), 3200);
+    }
 
     // 2. Persist to server API
     try {
+      const token = (typeof window !== 'undefined' && localStorage.getItem('instructor_token')) || 'wally_owner_session';
       const res = await fetch('/api/instructor/operating-hours', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'x-instructor-token': 'wally_owner_session'
+          'x-instructor-token': token,
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           operatingHours: hoursToSave,
@@ -164,67 +247,74 @@ export function InstructorOperatingHours() {
       if (res.ok) {
         const data = await res.json();
         const settings = data.settings || data;
-        if (settings && settings.operatingHours) {
+        if (lastSavedTimestampRef.current <= nowTs && settings && settings.operatingHours) {
           setOperatingHours(settings.operatingHours);
+          operatingHoursRef.current = settings.operatingHours;
           try {
-            localStorage.setItem('wallys_operating_settings', JSON.stringify(settings));
+            localStorage.setItem('wallys_operating_settings', JSON.stringify({
+              ...cacheObj,
+              ...settings,
+              disabledDays: data.disabledDays || disabledDays
+            }));
           } catch {}
         }
-        broadcastAvailabilityChange();
-        if (successMsg) {
-          setFeedback({ type: 'success', message: successMsg });
-          setTimeout(() => setFeedback(null), 3500);
-        }
+        broadcastAvailabilityChange({ action: 'updated' });
+      } else {
+        console.warn('[OperatingHours] Server save warning status:', res.status);
       }
     } catch (err: any) {
-      console.warn('[OperatingHours] Save background error:', err);
+      console.warn('[OperatingHours] Background sync warning:', err);
     }
   };
 
   const handleToggleDay = (day: keyof WeeklyOperatingHours) => {
-    const current = operatingHours[day];
-    const willBeEnabled = !current.enabled;
+    const currentHours = operatingHoursRef.current;
+    const currentDay = currentHours[day];
+    const willBeEnabled = !currentDay.enabled;
 
     // Standard working hours when toggling a day back ON
     const defaultPeriods: TimePeriod[] = (day === 'saturday' || day === 'sunday')
       ? [{ start: '08:00 AM', end: '05:00 PM', startMinutes: 480, endMinutes: 1020 }]
       : [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }];
 
-    let validPeriods = (current.periods || []).filter(p => p && p.start && p.end);
+    let validPeriods = (currentDay.periods || []).filter(p => p && p.start && p.end);
     if (willBeEnabled && validPeriods.length === 0) {
       validPeriods = defaultPeriods;
     }
 
     const nextHours: WeeklyOperatingHours = {
-      ...operatingHours,
+      ...currentHours,
       [day]: {
-        ...current,
+        ...currentDay,
         enabled: willBeEnabled,
         periods: validPeriods
       }
     };
+
     setOperatingHours(nextHours);
+    operatingHoursRef.current = nextHours;
 
     const shiftDesc = validPeriods.map(p => `${p.start} – ${p.end}`).join(', ');
     const msg = willBeEnabled
-      ? `${nextHours[day].label} is now OPEN (${shiftDesc}). Calendar synced.`
-      : `${nextHours[day].label} is now CLOSED. Calendar synced.`;
+      ? `${currentDay.label} is now OPEN (${shiftDesc}). Calendar synced.`
+      : `${currentDay.label} is now CLOSED. Calendar synced.`;
 
     // Auto-save immediately to database, localStorage, and trigger calendar sync
     persistSettings(
       nextHours,
-      bufferMinutes,
-      timezone,
+      bufferMinutesRef.current,
+      timezoneRef.current,
       msg
     );
   };
 
   const handleBufferChange = (mins: number) => {
     setBufferMinutes(mins);
+    bufferMinutesRef.current = mins;
     persistSettings(
-      operatingHours,
+      operatingHoursRef.current,
       mins,
-      timezone,
+      timezoneRef.current,
       `Buffer time set to ${mins === 0 ? 'none' : `${mins} min`}. Saved automatically.`
     );
   };
@@ -235,43 +325,57 @@ export function InstructorOperatingHours() {
     field: 'start' | 'end',
     val: string
   ) => {
-    const dayData = operatingHours[day];
+    const currentHours = operatingHoursRef.current;
+    const dayData = currentHours[day];
     const updatedPeriods = [...dayData.periods];
-    updatedPeriods[periodIndex] = {
-      ...updatedPeriods[periodIndex],
-      [field]: val
-    };
+    const target = { ...updatedPeriods[periodIndex], [field]: val };
+    target.startMinutes = parseTimeToMinutes(target.start);
+    target.endMinutes = parseTimeToMinutes(target.end);
+    updatedPeriods[periodIndex] = target;
+
     const nextHours: WeeklyOperatingHours = {
-      ...operatingHours,
+      ...currentHours,
       [day]: { ...dayData, periods: updatedPeriods }
     };
     setOperatingHours(nextHours);
-    persistSettings(nextHours, bufferMinutes, timezone);
+    operatingHoursRef.current = nextHours;
+    persistSettings(nextHours, bufferMinutesRef.current, timezoneRef.current);
   };
 
   const handleAddPeriod = (day: keyof WeeklyOperatingHours) => {
-    const dayData = operatingHours[day];
+    const currentHours = operatingHoursRef.current;
+    const dayData = currentHours[day];
     const lastPeriod = dayData.periods[dayData.periods.length - 1];
     const newStart = lastPeriod ? lastPeriod.end : '01:00 PM';
     const newEnd = '06:00 PM';
 
     const nextHours: WeeklyOperatingHours = {
-      ...operatingHours,
+      ...currentHours,
       [day]: {
         ...dayData,
         enabled: true,
-        periods: [...dayData.periods, { start: newStart, end: newEnd }]
+        periods: [
+          ...dayData.periods,
+          {
+            start: newStart,
+            end: newEnd,
+            startMinutes: parseTimeToMinutes(newStart),
+            endMinutes: parseTimeToMinutes(newEnd)
+          }
+        ]
       }
     };
     setOperatingHours(nextHours);
-    persistSettings(nextHours, bufferMinutes, timezone, `Added shift for ${dayData.label}. Saved automatically.`);
+    operatingHoursRef.current = nextHours;
+    persistSettings(nextHours, bufferMinutesRef.current, timezoneRef.current, `Added shift for ${dayData.label}. Saved automatically.`);
   };
 
   const handleDeletePeriod = (day: keyof WeeklyOperatingHours, periodIndex: number) => {
-    const dayData = operatingHours[day];
+    const currentHours = operatingHoursRef.current;
+    const dayData = currentHours[day];
     const updatedPeriods = dayData.periods.filter((_, idx) => idx !== periodIndex);
     const nextHours: WeeklyOperatingHours = {
-      ...operatingHours,
+      ...currentHours,
       [day]: {
         ...dayData,
         enabled: updatedPeriods.length > 0 ? dayData.enabled : false,
@@ -279,30 +383,33 @@ export function InstructorOperatingHours() {
       }
     };
     setOperatingHours(nextHours);
-    persistSettings(nextHours, bufferMinutes, timezone, `Removed shift for ${dayData.label}. Saved automatically.`);
+    operatingHoursRef.current = nextHours;
+    persistSettings(nextHours, bufferMinutesRef.current, timezoneRef.current, `Removed shift for ${dayData.label}. Saved automatically.`);
   };
 
   const handleCopyMondayToWeekdays = () => {
-    const mondayPeriods = [...operatingHours.monday.periods];
-    const mondayEnabled = operatingHours.monday.enabled;
+    const currentHours = operatingHoursRef.current;
+    const mondayPeriods = [...currentHours.monday.periods];
+    const mondayEnabled = currentHours.monday.enabled;
 
     const nextHours: WeeklyOperatingHours = {
-      ...operatingHours,
-      tuesday: { ...operatingHours.tuesday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) },
-      wednesday: { ...operatingHours.wednesday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) },
-      thursday: { ...operatingHours.thursday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) },
-      friday: { ...operatingHours.friday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) }
+      ...currentHours,
+      tuesday: { ...currentHours.tuesday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) },
+      wednesday: { ...currentHours.wednesday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) },
+      thursday: { ...currentHours.thursday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) },
+      friday: { ...currentHours.friday, enabled: mondayEnabled, periods: JSON.parse(JSON.stringify(mondayPeriods)) }
     };
 
     setOperatingHours(nextHours);
-    persistSettings(nextHours, bufferMinutes, timezone, 'Monday hours copied to Tuesday through Friday & saved automatically.');
+    operatingHoursRef.current = nextHours;
+    persistSettings(nextHours, bufferMinutesRef.current, timezoneRef.current, 'Monday hours copied to Tuesday through Friday & saved automatically.');
   };
 
   const handleSaveHours = async () => {
     setIsSaving(true);
     setFeedback(null);
     try {
-      await persistSettings(operatingHours, bufferMinutes, timezone, 'All operating hours saved successfully.');
+      await persistSettings(operatingHoursRef.current, bufferMinutesRef.current, timezoneRef.current, 'All operating hours saved successfully.');
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Failed to save changes.' });
     } finally {

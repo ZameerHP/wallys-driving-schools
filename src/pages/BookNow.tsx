@@ -42,16 +42,7 @@ import { Country, DEFAULT_COUNTRY } from '../lib/countries';
 import { PhoneInputWithCountry } from '../components/PhoneInputWithCountry';
 import { useAuth } from '../context/AuthContext';
 import { PACKAGES } from '../lib/content';
-
-// Authentic 4-Color Google 'G' vector mark
-const GoogleGIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4" }) => (
-  <svg className={className} viewBox="0 0 24 24">
-    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
-    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.14-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
-    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
-  </svg>
-);
+import { GoogleAutofillModal, GoogleGIcon } from '../components/booking/GoogleAutofillModal';
 import { 
   getPackageSpecs, 
   generateSlotsForDuration, 
@@ -305,8 +296,24 @@ export function BookNow() {
   const [emailTouched, setEmailTouched] = useState(false);
   const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
   const [isGoogleVerified, setIsGoogleVerified] = useState(false);
+  const [isGoogleAutofillModalOpen, setIsGoogleAutofillModalOpen] = useState(false);
+  const [autofillSuccessNotice, setAutofillSuccessNotice] = useState<string | null>(null);
 
-  // Auto-fill from authenticated Google account if logged in
+  // Helper to load saved verified Google profile from localStorage
+  const getSavedGoogleAccount = () => {
+    try {
+      const stored = localStorage.getItem('wallys_verified_google_account');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.email && validateWorkingEmail(parsed.email).isValid) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  };
+
+  // Auto-fill from authenticated Google account or saved profile if available
   useEffect(() => {
     if (auth?.user?.email && !email) {
       const gEmail = auth.user.email;
@@ -318,10 +325,24 @@ export function BookNow() {
         if (!firstName) setFirstName(parts[0] || '');
         if (!lastName && parts.length > 1) setLastName(parts.slice(1).join(' ') || '');
       }
+      return;
+    }
+
+    // Check if user has previously saved a verified Google account on this device
+    if (!email) {
+      const saved = getSavedGoogleAccount();
+      if (saved?.email) {
+        setEmail(saved.email);
+        setIsGoogleVerified(true);
+        if (saved.firstName && !firstName) setFirstName(saved.firstName);
+        if (saved.lastName && !lastName) setLastName(saved.lastName);
+        if (saved.phone && !phone) setPhone(saved.phone);
+      }
     }
   }, [auth?.user]);
 
   const handleAutofillWithGoogle = async () => {
+    // 1. If currently signed in via AuthContext
     if (auth?.user?.email) {
       const gEmail = auth.user.email;
       setEmail(gEmail);
@@ -338,16 +359,48 @@ export function BookNow() {
         delete copy.email;
         return copy;
       });
+      setAutofillSuccessNotice(`✓ Auto-filled with connected Google Account: ${gEmail}`);
+      setTimeout(() => setAutofillSuccessNotice(null), 5000);
       return;
     }
 
-    try {
-      if (typeof auth?.signInWithGoogle === 'function') {
-        await auth.signInWithGoogle();
-      }
-    } catch (err: any) {
-      console.warn('[Google Auth] Sign-in notice:', err);
+    // 2. Check if a remembered account exists and form email is empty
+    const saved = getSavedGoogleAccount();
+    if (saved?.email && (!email || email !== saved.email)) {
+      setEmail(saved.email);
+      setEmailTouched(true);
+      setIsGoogleVerified(true);
+      if (saved.firstName && !firstName) setFirstName(saved.firstName);
+      if (saved.lastName && !lastName) setLastName(saved.lastName);
+      if (saved.phone && !phone) setPhone(saved.phone);
+      setInfoErrors(prev => {
+        const copy = { ...prev };
+        delete copy.email;
+        return copy;
+      });
+      setAutofillSuccessNotice(`✓ Auto-filled with remembered Google Account: ${saved.email}`);
+      setTimeout(() => setAutofillSuccessNotice(null), 5000);
+      return;
     }
+
+    // 3. Open the interactive Google Autofill Modal
+    setIsGoogleAutofillModalOpen(true);
+  };
+
+  const handleApplyGoogleAutofill = (data: { email: string; firstName: string; lastName: string; phone?: string }) => {
+    setEmail(data.email);
+    setEmailTouched(true);
+    setIsGoogleVerified(true);
+    if (data.firstName) setFirstName(data.firstName);
+    if (data.lastName) setLastName(data.lastName);
+    if (data.phone) setPhone(data.phone);
+    setInfoErrors(prev => {
+      const copy = { ...prev };
+      delete copy.email;
+      return copy;
+    });
+    setAutofillSuccessNotice(`✓ Auto-filled with Google Account: ${data.email}`);
+    setTimeout(() => setAutofillSuccessNotice(null), 6000);
   };
   const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [countryCode, setCountryCode] = useState('+61');
@@ -428,15 +481,15 @@ export function BookNow() {
     } catch {}
     return {
       operatingHours: {
-        monday: { enabled: false, label: 'Monday', periods: [] },
+        monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
-        sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
+        sunday: { enabled: false, label: 'Sunday', periods: [] }
       },
-      disabledDays: [1],
+      disabledDays: [0],
       bufferMinutes: 15,
       timezone: 'Australia/Sydney'
     };
@@ -687,6 +740,7 @@ export function BookNow() {
             ...prev,
             ...s,
             operatingHours: s.operatingHours || prev.operatingHours,
+            disabledDays: Array.isArray(s.disabledDays) ? s.disabledDays : prev.disabledDays,
             bufferMinutes: typeof s.bufferMinutes === 'number' ? s.bufferMinutes : prev.bufferMinutes
           }));
         }
@@ -697,7 +751,12 @@ export function BookNow() {
       const res = await fetch(`/api/availability/operating-hours?_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        setOperatingSettings(data);
+        setOperatingSettings(prev => ({
+          ...prev,
+          ...data,
+          operatingHours: data.operatingHours || data.settings?.operatingHours || prev.operatingHours,
+          disabledDays: Array.isArray(data.disabledDays) ? data.disabledDays : prev.disabledDays
+        }));
         try {
           localStorage.setItem('wallys_operating_settings', JSON.stringify(data));
         } catch {}
@@ -2605,6 +2664,46 @@ export function BookNow() {
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-4"
                     >
+                      {/* Autofill Success Notification */}
+                      {autofillSuccessNotice && (
+                        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between text-xs text-emerald-900 shadow-2xs">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span className="font-semibold">{autofillSuccessNotice}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setAutofillSuccessNotice(null)}
+                            className="text-emerald-700 hover:text-emerald-950 text-xs font-bold px-2 py-0.5 rounded hover:bg-emerald-100 transition-colors cursor-pointer"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Google Quick Autofill Card */}
+                      {(!email || !isGoogleVerified) && (
+                        <div className="p-3 bg-gradient-to-r from-neutral-900 via-neutral-900 to-neutral-800 text-white rounded-xl shadow-xs flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-xs">
+                              <GoogleGIcon className="w-4 h-4" />
+                            </div>
+                            <div className="truncate">
+                              <p className="text-xs font-bold leading-tight text-white">Speed up booking with Google</p>
+                              <p className="text-[11px] text-neutral-300 truncate">1-click auto-fill for name, email & Google Calendar invites</p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleAutofillWithGoogle}
+                            className="px-3 py-1.5 bg-white hover:bg-neutral-100 text-neutral-900 rounded-lg text-xs font-bold transition-all shrink-0 active:scale-95 cursor-pointer shadow-xs flex items-center gap-1.5"
+                          >
+                            <GoogleGIcon className="w-3.5 h-3.5" />
+                            <span>Auto-fill</span>
+                          </button>
+                        </div>
+                      )}
+
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {/* First Name */}
                         <div>
@@ -2652,15 +2751,25 @@ export function BookNow() {
                               <span>Google Account Email <span className="text-brand-red">*</span></span>
                             </label>
                             {email.trim() && !infoErrors.email ? (
-                              <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                Google Account Verified
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  Google Account Verified
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsGoogleAutofillModalOpen(true)}
+                                  className="text-[11px] text-neutral-500 hover:text-brand-black font-semibold underline cursor-pointer"
+                                  title="Change or switch Google account"
+                                >
+                                  Switch
+                                </button>
+                              </div>
                             ) : (
                               <button
                                 type="button"
                                 onClick={handleAutofillWithGoogle}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] font-semibold text-neutral-700 bg-white hover:bg-neutral-50 border border-neutral-200 rounded-lg shadow-xs transition-all hover:border-neutral-300 active:scale-95 cursor-pointer"
+                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] font-semibold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 hover:border-neutral-400 rounded-lg shadow-xs transition-all active:scale-95 cursor-pointer"
                                 title="Auto-fill with your connected Google Account"
                               >
                                 <GoogleGIcon className="w-3.5 h-3.5" />
@@ -3132,6 +3241,18 @@ export function BookNow() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Interactive Google Autofill Modal */}
+      <GoogleAutofillModal
+        isOpen={isGoogleAutofillModalOpen}
+        onClose={() => setIsGoogleAutofillModalOpen(false)}
+        onApply={handleApplyGoogleAutofill}
+        initialEmail={email}
+        initialFirstName={firstName}
+        initialLastName={lastName}
+        initialPhone={phone}
+        onSignInOAuth={typeof auth?.signInWithGoogle === 'function' ? auth.signInWithGoogle : undefined}
+      />
     </div>
   );
 }

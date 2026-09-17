@@ -272,8 +272,23 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     };
   } | null>(null);
 
-  // Section navigation state
-  const [activeTab, setActiveTab] = useState<'schedule' | 'availability' | 'operating-hours'>('schedule');
+  // Section navigation state - strictly sticky across page refresh and browser close
+  const [activeTab, setActiveTabState] = useState<'schedule' | 'availability' | 'operating-hours'>(() => {
+    try {
+      const saved = localStorage.getItem('wallys_instructor_active_tab');
+      if (saved === 'schedule' || saved === 'availability' || saved === 'operating-hours') {
+        return saved;
+      }
+    } catch {}
+    return 'schedule';
+  });
+
+  const setActiveTab = useCallback((tab: 'schedule' | 'availability' | 'operating-hours') => {
+    setActiveTabState(tab);
+    try {
+      localStorage.setItem('wallys_instructor_active_tab', tab);
+    } catch {}
+  }, []);
 
   // Blocked Days & Time Off state - initialized from cache to avoid displaying 0 on page refresh
   const [blockedDaysList, setBlockedDaysList] = useState<any[]>(() => {

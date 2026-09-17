@@ -7,8 +7,15 @@
     "monday": {
       "day": "monday",
       "label": "Monday",
-      "enabled": false,
-      "periods": []
+      "enabled": true,
+      "periods": [
+        {
+          "start": "08:00 AM",
+          "end": "06:00 PM",
+          "startMinutes": 480,
+          "endMinutes": 1080
+        }
+      ]
     },
     "tuesday": {
       "day": "tuesday",
@@ -78,16 +85,9 @@
     "sunday": {
       "day": "sunday",
       "label": "Sunday",
-      "enabled": true,
-      "periods": [
-        {
-          "start": "08:00 AM",
-          "end": "05:00 PM",
-          "startMinutes": 480,
-          "endMinutes": 1020
-        }
-      ]
+      "enabled": false,
+      "periods": []
     }
   },
-  "updatedAt": "2026-09-16T17:36:33.517Z"
+  "updatedAt": "2026-09-17T14:56:58.235Z"
 }
