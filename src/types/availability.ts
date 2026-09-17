@@ -83,3 +83,25 @@ export interface AvailabilityPayload {
   externalEvents: ExternalCalendarEvent[];
   calendarConnection: CalendarConnectionConfig;
 }
+
+export function computeDisabledDays(hours?: WeeklyOperatingHours | Record<string, any>): number[] {
+  if (!hours) return [0];
+  const daysMap: Record<string, number> = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6
+  };
+  const disabled: number[] = [];
+  Object.entries(hours).forEach(([key, val]: [string, any]) => {
+    if (!val || !val.enabled || !val.periods || val.periods.length === 0) {
+      if (typeof daysMap[key] === 'number') {
+        disabled.push(daysMap[key]);
+      }
+    }
+  });
+  return disabled;
+}

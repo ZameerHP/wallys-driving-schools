@@ -218,9 +218,10 @@ export function InstructorOperatingHours() {
     try {
       localStorage.setItem('wallys_operating_settings', JSON.stringify(cacheObj));
       window.dispatchEvent(new Event('storage'));
+      window.dispatchEvent(new CustomEvent('wallys-operating-hours-updated', { detail: cacheObj }));
     } catch {}
 
-    broadcastAvailabilityChange({ action: 'updated' });
+    broadcastAvailabilityChange({ action: 'updated', operatingSettings: cacheObj });
 
     if (successMsg) {
       setFeedback({ type: 'success', message: successMsg });
@@ -258,7 +259,7 @@ export function InstructorOperatingHours() {
             }));
           } catch {}
         }
-        broadcastAvailabilityChange({ action: 'updated' });
+        broadcastAvailabilityChange({ action: 'updated', operatingSettings: cacheObj });
       } else {
         console.warn('[OperatingHours] Server save warning status:', res.status);
       }

@@ -277,10 +277,12 @@ export function saveLocalTimeOffBlocks(blocks: TimeOffItem[]): void {
 
 // Helper to broadcast availability changes across all components, iframe boundaries, and tabs
 export function broadcastAvailabilityChange(detail?: {
-  action?: 'deleted' | 'created' | 'updated' | 'refreshed';
+  action?: 'deleted' | 'created' | 'updated' | 'refreshed' | 'added' | 'removed';
   id?: string | number;
   date?: string;
   normDate?: string;
+  block?: any;
+  operatingSettings?: any;
 }): void {
   if (typeof window === 'undefined') return;
 
@@ -290,7 +292,9 @@ export function broadcastAvailabilityChange(detail?: {
     action: detail?.action || 'refreshed',
     id: detail?.id,
     date: detail?.date,
-    normDate: detail?.normDate || (detail?.date ? normalizeDateKey(detail.date) : undefined)
+    normDate: detail?.normDate || (detail?.date ? normalizeDateKey(detail.date) : undefined),
+    block: detail?.block,
+    operatingSettings: detail?.operatingSettings
   };
 
   // 1. Dispatch custom DOM event

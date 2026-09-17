@@ -51,6 +51,7 @@ import {
   formatDurationDisplay,
   SlotPeriod
 } from '../lib/bookingSlots';
+import { computeDisabledDays } from '../types/availability';
 import { fetchTimeOffBlocks, isTimeOffBlockDeleted, getLocalTimeOffBlocks, normalizeDateKey } from '../lib/timeOff';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
@@ -475,8 +476,18 @@ export function BookNow() {
       const cached = localStorage.getItem('wallys_operating_settings');
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (parsed?.operatingHours) return parsed;
-        if (parsed?.settings?.operatingHours) return parsed.settings;
+        if (parsed?.operatingHours) {
+          return {
+            ...parsed,
+            disabledDays: Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(parsed.operatingHours)
+          };
+        }
+        if (parsed?.settings?.operatingHours) {
+          return {
+            ...parsed.settings,
+            disabledDays: Array.isArray(parsed.settings.disabledDays) ? parsed.settings.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(parsed.settings.operatingHours))
+          };
+        }
       }
     } catch {}
     return {
@@ -736,11 +747,12 @@ export function BookNow() {
         const parsed = JSON.parse(cached);
         if (parsed && (parsed.operatingHours || parsed.settings?.operatingHours)) {
           const s = parsed.operatingHours ? parsed : parsed.settings;
+          const computedDisabled = computeDisabledDays(s.operatingHours);
           setOperatingSettings(prev => ({
             ...prev,
             ...s,
             operatingHours: s.operatingHours || prev.operatingHours,
-            disabledDays: Array.isArray(s.disabledDays) ? s.disabledDays : prev.disabledDays,
+            disabledDays: Array.isArray(s.disabledDays) ? s.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computedDisabled),
             bufferMinutes: typeof s.bufferMinutes === 'number' ? s.bufferMinutes : prev.bufferMinutes
           }));
         }
@@ -751,11 +763,12 @@ export function BookNow() {
       const res = await fetch(`/api/availability/operating-hours?_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
+        const computedDisabled = computeDisabledDays(data.operatingHours || data.settings?.operatingHours);
         setOperatingSettings(prev => ({
           ...prev,
           ...data,
           operatingHours: data.operatingHours || data.settings?.operatingHours || prev.operatingHours,
-          disabledDays: Array.isArray(data.disabledDays) ? data.disabledDays : prev.disabledDays
+          disabledDays: Array.isArray(data.disabledDays) ? data.disabledDays : computedDisabled
         }));
         try {
           localStorage.setItem('wallys_operating_settings', JSON.stringify(data));
@@ -880,10 +893,50 @@ export function BookNow() {
         } catch {}
       }
 
+      // 1. Instantly update operating hours state for zero-latency calendar day fading
+      if (detail?.operatingSettings?.operatingHours) {
+        const op = detail.operatingSettings;
+        setOperatingSettings(prev => ({
+          ...prev,
+          ...op,
+          disabledDays: Array.isArray(op.disabledDays) ? op.disabledDays : computeDisabledDays(op.operatingHours)
+        }));
+      } else {
+        try {
+          const cached = localStorage.getItem('wallys_operating_settings');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            const s = parsed.operatingHours ? parsed : parsed.settings;
+            if (s?.operatingHours) {
+              setOperatingSettings(prev => ({
+                ...prev,
+                ...s,
+                operatingHours: s.operatingHours,
+                disabledDays: Array.isArray(s.disabledDays) ? s.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(s.operatingHours)),
+                bufferMinutes: typeof s.bufferMinutes === 'number' ? s.bufferMinutes : prev.bufferMinutes
+              }));
+            }
+          }
+        } catch {}
+      }
+
+      // 2. Optimistically add newly blocked days if received in payload
+      if ((detail?.action === 'added' || detail?.action === 'created' || detail?.action === 'updated') && (detail?.block || detail?.date)) {
+        const b = detail.block || { date: detail.date, isFullDay: true };
+        const bNorm = normalizeDateStr(b.date);
+        if (bNorm && (Boolean(b.isFullDay) || (!b.startTime && !b.endTime))) {
+          setBlockedOffDays(prev => {
+            const next = new Map(prev);
+            next.set(bNorm, { isFullDay: true, reason: b.reason || 'Instructor Day Off' });
+            return next;
+          });
+        }
+      }
+
       const removedDate = detail?.date;
       const removedNorm = detail?.normDate || (removedDate ? normalizeDateStr(removedDate) : null);
 
-      // Instantly unblock the day from local state
+      // Instantly unblock the day from local state if deleted
       setBlockedOffDays(prev => {
         const next = new Map(prev);
         if (removedDate) next.delete(removedDate);
@@ -921,6 +974,7 @@ export function BookNow() {
     };
 
     window.addEventListener('wallys-availability-updated', handleSync);
+    window.addEventListener('wallys-operating-hours-updated', handleSync);
     window.addEventListener('storage', handleSync);
 
     let channel: BroadcastChannel | null = null;
@@ -934,6 +988,7 @@ export function BookNow() {
     return () => {
       clearInterval(timer);
       window.removeEventListener('wallys-availability-updated', handleSync);
+      window.removeEventListener('wallys-operating-hours-updated', handleSync);
       window.removeEventListener('storage', handleSync);
       try {
         channel?.close();
@@ -2297,7 +2352,7 @@ export function BookNow() {
                                   className={cn(
                                     "relative h-8 rounded-lg flex items-center justify-center transition-all duration-200 text-xs select-none",
                                     isDayOff
-                                      ? "bg-neutral-100/90 text-neutral-400 cursor-not-allowed line-through border border-dashed border-neutral-300 opacity-60 pointer-events-none"
+                                      ? "opacity-15 text-neutral-400/50 cursor-not-allowed line-through pointer-events-none select-none bg-transparent hover:bg-transparent"
                                       : isUnavailable 
                                       ? "text-black/20 cursor-not-allowed line-through"
                                       : isSelected 
@@ -2306,14 +2361,6 @@ export function BookNow() {
                                   )}
                                 >
                                   <span>{item.day}</span>
-                                  {isDayOff && (
-                                    <span 
-                                      title={`Instructor unavailable: ${dayOffReason}`}
-                                      className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-neutral-400 text-[8px] text-white font-bold shadow-xs"
-                                    >
-                                      ✕
-                                    </span>
-                                  )}
                                   {otherLessonsOnDate.length > 0 && !isSelected && !isDayOff && (
                                     <span 
                                       title={`Lesson ${otherLessonsOnDate.map(l => l.lessonNumber).join(', ')} scheduled`}
@@ -2332,8 +2379,8 @@ export function BookNow() {
                               <span>Selected</span>
                             </div>
                             <div className="flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded bg-neutral-200 border border-dashed border-neutral-400 inline-flex items-center justify-center text-[7px] text-neutral-600 font-bold">✕</span>
-                              <span>Instructor unavailable / Day Off</span>
+                              <span className="w-2.5 h-2.5 rounded bg-neutral-400/40 opacity-25 line-through inline-block"></span>
+                              <span>Day Off / Unavailable (Faded)</span>
                             </div>
                           </div>
                         </div>
