@@ -32,22 +32,6 @@
     "updatedAt": "2026-09-16T09:20:18.647Z"
   },
   {
-    "id": 9,
-    "instructorId": "wally",
-    "instructorName": "Wally",
-    "date": "2026-09-20",
-    "isFullDay": true,
-    "startTime": null,
-    "endTime": null,
-    "startMinutes": null,
-    "endMinutes": null,
-    "displayStartTime": null,
-    "displayEndTime": null,
-    "reason": "Personal Day Off",
-    "createdAt": "2026-09-16T09:20:30.983Z",
-    "updatedAt": "2026-09-16T09:20:30.983Z"
-  },
-  {
     "id": 12,
     "instructorId": "wally",
     "instructorName": "Wally",
