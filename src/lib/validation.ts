@@ -8,6 +8,7 @@ const DISPOSABLE_EMAIL_DOMAINS = new Set([
   'mailinator.com',
   'tempmail.com',
   'temp-mail.org',
+  'temp-mail.io',
   '10minutemail.com',
   'guerrillamail.com',
   'guerrillamail.net',
@@ -47,10 +48,61 @@ const DISPOSABLE_EMAIL_DOMAINS = new Set([
   'inboxbear.com',
   'harakirimail.com',
   'mailcatch.com',
-  'zillamail.com'
+  'zillamail.com',
+  'slipry.net',
+  'emailfake.com',
+  'fakemail.net',
+  'armyspy.com',
+  'cuvox.de',
+  'dayrep.com',
+  'einrot.com',
+  'fambest.com',
+  'fleckens.hu',
+  'gustr.com',
+  'jourrapide.com',
+  'rhyta.com',
+  'superrito.com',
+  'teleworm.us',
+  'chacuo.net',
+  '0815.ru',
+  '10mail.org',
+  '20minutemail.com',
+  'binkmail.com',
+  'bobmail.info',
+  'chammy.info',
+  'devnullmail.com',
+  'disposableaddress.com',
+  'emailproxsy.com',
+  'filzmail.com',
+  'incognitomail.org',
+  'jetable.org',
+  'kasmail.com',
+  'mailforspam.com',
+  'mailnull.com',
+  'meltmail.com',
+  'noclickemail.com',
+  'notsharingmy.info',
+  'onewaymail.com',
+  'pookmail.com',
+  'safe-mail.net',
+  'shieldedmail.com',
+  'soodonims.com',
+  'spambox.us',
+  'spamday.com',
+  'spamex.com',
+  'spamevader.com',
+  'spaminator.de',
+  'spaml.com',
+  'temporaryinbox.com',
+  'tempsky.com',
+  'trbvm.com',
+  'uggsrock.com',
+  'wegwerfmail.de',
+  'whyspam.me',
+  'willselfdestruct.com'
 ]);
 
-// Known dummy / placeholder domains
+// Known dummy, test, and placeholder domains
 const DUMMY_DOMAINS = new Set([
   'example.com',
   'example.org',
@@ -58,9 +110,11 @@ const DUMMY_DOMAINS = new Set([
   'test.com',
   'testing.com',
   'tester.com',
+  'testmail.com',
   'fake.com',
   'fakeemail.com',
   'fakemail.com',
+  'fakedomain.com',
   'asdf.com',
   'none.com',
   'sample.com',
@@ -73,43 +127,235 @@ const DUMMY_DOMAINS = new Set([
   'null.com',
   'nowhere.com',
   'domain.com',
-  'website.com'
+  'website.com',
+  'myemail.com',
+  'email.com',
+  'foo.com',
+  'bar.com',
+  'foobar.com',
+  'blah.com',
+  'random.com',
+  'fake.org',
+  'test.org',
+  'test.net',
+  'invalid.com',
+  '123.com',
+  'aaa.com',
+  'bbb.com',
+  'ccc.com',
+  'qwerty.com',
+  'notreal.com',
+  'noreal.com',
+  'trash.com',
+  'spam.com'
 ]);
+
+// Common domain typos and their correct suggestions
+const DOMAIN_TYPO_MAP: Record<string, string> = {
+  'gamil.com': 'gmail.com',
+  'gmial.com': 'gmail.com',
+  'gmai.com': 'gmail.com',
+  'gmaill.com': 'gmail.com',
+  'gmal.com': 'gmail.com',
+  'gmaii.com': 'gmail.com',
+  'gmil.com': 'gmail.com',
+  'gmail.con': 'gmail.com',
+  'gmail.co': 'gmail.com',
+  'gmail.cm': 'gmail.com',
+  'gemail.com': 'gmail.com',
+  'gmeil.com': 'gmail.com',
+  'gmaul.com': 'gmail.com',
+  'gmail.om': 'gmail.com',
+  'gmail.cpm': 'gmail.com',
+  'gmail.com.au': 'gmail.com',
+  'googlemail.con': 'googlemail.com',
+  'googlemail.co': 'googlemail.com',
+  'google.com': 'gmail.com',
+  'g-mail.com': 'gmail.com',
+  'g.mail.com': 'gmail.com',
+  'gmail.net': 'gmail.com',
+  'gmail.org': 'gmail.com',
+  'hotmial.com': 'hotmail.com',
+  'hotmale.com': 'hotmail.com',
+  'hotmaill.com': 'hotmail.com',
+  'hotmai.com': 'hotmail.com',
+  'hotmil.com': 'hotmail.com',
+  'hotmali.com': 'hotmail.com',
+  'hotmail.con': 'hotmail.com',
+  'hotmail.co': 'hotmail.com',
+  'hotmail.cm': 'hotmail.com',
+  'outlok.com': 'outlook.com',
+  'outloo.com': 'outlook.com',
+  'outlook.con': 'outlook.com',
+  'outlock.com': 'outlook.com',
+  'outllok.com': 'outlook.com',
+  'outlook.co': 'outlook.com',
+  'outlook.cm': 'outlook.com',
+  'yaho.com': 'yahoo.com',
+  'yahooo.com': 'yahoo.com',
+  'yaho.co': 'yahoo.com',
+  'yahoo.con': 'yahoo.com',
+  'yahu.com': 'yahoo.com',
+  'yahoo.cm': 'yahoo.com',
+  'iclud.com': 'icloud.com',
+  'icld.com': 'icloud.com',
+  'icloud.con': 'icloud.com',
+  'icloude.com': 'icloud.com',
+  'icould.com': 'icloud.com',
+  'icloud.co': 'icloud.com',
+  'bigpond.con': 'bigpond.com',
+  'bigpond.co': 'bigpond.com',
+  'bigpond.cm': 'bigpond.com',
+  'proton.con': 'proton.me',
+  'protonmail.con': 'proton.me'
+};
 
 // Common dummy usernames/localparts
 const DUMMY_USERNAMES = new Set([
   'test',
   'testing',
   'tester',
-  'asdf',
+  'test1',
+  'test2',
+  'test123',
+  'test1234',
+  'mytest',
   'fake',
+  'fakeuser',
+  'fakeperson',
+  'fakeemail',
+  'fakeaccount',
   'dummy',
+  'dummyuser',
+  'dummyperson',
+  'sample',
+  'sampleuser',
+  'asdf',
+  'asdfgh',
+  'asdfghjkl',
+  'qwerty',
+  'qwertyuiop',
+  'zxcvbnm',
   'none',
   'noemail',
   'nomail',
-  'sample',
+  'null',
+  'nowhere',
   'abc',
+  'abcd',
+  'abcdef',
   'xyz',
-  'qwerty',
+  '123',
+  '1234',
+  '12345',
   '123456',
+  '12345678',
+  '000000',
   'user',
-  'email'
+  'username',
+  'email',
+  'student',
+  'studentdriver',
+  'learner',
+  'driver',
+  'guest',
+  'customer',
+  'person',
+  'someone',
+  'somebody',
+  'anyone',
+  'anybody',
+  'nobody',
+  'blah',
+  'whatever',
+  'admin',
+  'administrator',
+  'demo',
+  'demouser',
+  'trial',
+  'trash',
+  'spam',
+  'burner',
+  'junk',
+  'temp',
+  'temporary',
+  'tempmail',
+  'random',
+  'example',
+  'placeholder',
+  'notreal',
+  'wallystest'
 ]);
 
+// Well-known trusted mail providers
+const TRUSTED_EMAIL_DOMAINS = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'outlook.com',
+  'outlook.com.au',
+  'hotmail.com',
+  'hotmail.com.au',
+  'live.com',
+  'live.com.au',
+  'msn.com',
+  'windowslive.com',
+  'icloud.com',
+  'me.com',
+  'mac.com',
+  'yahoo.com',
+  'yahoo.com.au',
+  'ymail.com',
+  'rocketmail.com',
+  'bigpond.com',
+  'bigpond.net.au',
+  'optusnet.com.au',
+  'tpg.com.au',
+  'iinet.net.au',
+  'dodo.com.au',
+  'westnet.com.au',
+  'internode.on.net',
+  'ozemail.com.au',
+  'exemail.com.au',
+  'proton.me',
+  'protonmail.com',
+  'zoho.com',
+  'aol.com',
+  'mail.com',
+  'gmx.com',
+  'gmx.net',
+  'fastmail.com',
+  'fastmail.com.au',
+  'hey.com'
+]);
+
+export interface EmailValidationResult {
+  isValid: boolean;
+  email: string;
+  isGoogle?: boolean;
+  error?: string;
+  suggestion?: string;
+  isKnownProvider?: boolean;
+}
+
 /**
- * Validates that an email address is real, active-format, non-disposable and non-dummy.
+ * Validates that an email address is a genuine, active Google registered email (@gmail.com or @googlemail.com),
+ * non-disposable, non-dummy, and strictly adhering to Google's account registration standards.
  */
-export function validateWorkingEmail(rawEmail: string): { isValid: boolean; email: string; error?: string } {
+export function validateWorkingEmail(rawEmail: string, options: { requireGoogle?: boolean } = { requireGoogle: true }): EmailValidationResult {
   const email = (rawEmail || '').trim().toLowerCase();
 
   if (!email) {
-    return { isValid: false, email: '', error: 'Email address is required.' };
+    return { 
+      isValid: false, 
+      email: '', 
+      error: 'Google email address is required to receive your booking confirmation, Google Calendar invite & tax receipt.' 
+    };
   }
 
   // Basic RFC 5322 structure
   const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
   if (!emailRegex.test(email)) {
-    return { isValid: false, email, error: 'Please enter a valid email address (e.g. name@gmail.com).' };
+    return { isValid: false, email, error: 'Please enter a valid Google email address (e.g. yourname@gmail.com).' };
   }
 
   // Prevent consecutive dots or trailing/leading dots
@@ -124,37 +370,159 @@ export function validateWorkingEmail(rawEmail: string): { isValid: boolean; emai
 
   const [username, domain] = parts;
 
-  // Local part sanity
-  if (username.length < 2) {
-    return { isValid: false, email, error: 'Email username must be at least 2 characters.' };
-  }
-
-  if (DUMMY_USERNAMES.has(username)) {
-    return { isValid: false, email, error: 'Please enter your genuine working email, not a test placeholder.' };
+  // Check domain typo suggestions (e.g. user@gamil.com -> user@gmail.com)
+  if (DOMAIN_TYPO_MAP[domain]) {
+    const suggestedDomain = DOMAIN_TYPO_MAP[domain];
+    const suggestedEmail = `${username}@${suggestedDomain}`;
+    return {
+      isValid: false,
+      email,
+      suggestion: suggestedEmail,
+      error: `Typo detected: Did you mean "${suggestedEmail}"?`
+    };
   }
 
   // Check top-level domain (TLD)
   const domainParts = domain.split('.');
   if (domainParts.length < 2) {
-    return { isValid: false, email, error: 'Please enter a full email with domain (e.g. @gmail.com or @outlook.com).' };
+    return { isValid: false, email, error: 'Please enter a complete Google email (e.g. @gmail.com).' };
   }
 
   const tld = domainParts[domainParts.length - 1];
-  if (tld.length < 2 || !/^[a-z]+$/.test(tld)) {
-    return { isValid: false, email, error: 'Invalid domain extension in email address.' };
+
+  // Disallow common typo TLDs
+  const typoTlds = new Set(['con', 'comm', 'coom', 'c', 'cm', 'coo', 'col', 'vom', 'xom', 'cpm', 'ney', 'ogr', 'og', 'ed']);
+  if (typoTlds.has(tld)) {
+    return { isValid: false, email, error: `Invalid domain ending ".${tld}". Did you mean ".com"?` };
   }
 
   // Check disposable domains
   if (DISPOSABLE_EMAIL_DOMAINS.has(domain)) {
-    return { isValid: false, email, error: 'Temporary or disposable burner emails are not permitted. Please use your real working email.' };
+    return { isValid: false, email, error: 'Disposable or temporary burner emails are not permitted. Please use your real Google account.' };
   }
 
   // Check dummy domains
   if (DUMMY_DOMAINS.has(domain)) {
-    return { isValid: false, email, error: 'Placeholder or test email domains are not allowed. Please enter your real email.' };
+    return { isValid: false, email, error: 'Test or dummy email domains are not allowed. Please enter your real Google account (@gmail.com).' };
   }
 
-  return { isValid: true, email };
+  // Require Google Registered Email by default
+  const isGoogleDomain = domain === 'gmail.com' || domain === 'googlemail.com';
+  if (options.requireGoogle !== false && !isGoogleDomain) {
+    return {
+      isValid: false,
+      email,
+      isGoogle: false,
+      error: 'Only Google-registered emails (@gmail.com) are accepted to ensure real delivery of booking confirmations and Google Calendar invites.'
+    };
+  }
+
+  // Google Account username checks
+  const cleanUsername = username.replace(/\./g, '');
+  
+  if (cleanUsername.length < 6) {
+    return { 
+      isValid: false, 
+      email, 
+      isGoogle: isGoogleDomain,
+      error: 'Google requires Gmail usernames to be at least 6 characters (letters and numbers).' 
+    };
+  }
+  if (cleanUsername.length > 30) {
+    return { 
+      isValid: false, 
+      email, 
+      isGoogle: isGoogleDomain,
+      error: 'Google requires Gmail usernames to be 30 characters or fewer.' 
+    };
+  }
+
+  // Google only allows letters, numbers, and periods in email usernames
+  if (!/^[a-z0-9.]+$/.test(username)) {
+    return {
+      isValid: false,
+      email,
+      isGoogle: isGoogleDomain,
+      error: 'Google email usernames can only contain letters (a-z), numbers (0-9), and periods (.).'
+    };
+  }
+
+  // Google does not allow consecutive, leading, or trailing periods in usernames
+  if (username.startsWith('.') || username.endsWith('.') || username.includes('..')) {
+    return {
+      isValid: false,
+      email,
+      isGoogle: isGoogleDomain,
+      error: 'Google does not allow consecutive, leading, or trailing periods in Gmail usernames.'
+    };
+  }
+
+  // Google requires Gmail usernames to contain letters (cannot be all numbers)
+  if (!/[a-z]/.test(cleanUsername)) {
+    return {
+      isValid: false,
+      email,
+      isGoogle: isGoogleDomain,
+      error: 'Google requires Gmail usernames to contain letters (cannot be purely numeric).'
+    };
+  }
+
+  // Check exact dummy usernames
+  if (DUMMY_USERNAMES.has(cleanUsername) || DUMMY_USERNAMES.has(username)) {
+    return { 
+      isValid: false, 
+      email, 
+      isGoogle: isGoogleDomain,
+      error: `"${username}@gmail.com" is a placeholder/test username. Please enter your real personal Google account.` 
+    };
+  }
+
+  // Check pattern-based dummy usernames (e.g., test123, fake99, asdf88, user123)
+  if (/^(test|fake|dummy|asdf|sample|noemail|nomail|burner|trash|junk|temp|temporary|demo|trial|placeholder|example|random|user|guest|customer|nobody|someone|somebody|anyone|anybody|client|learner|student|driver|admin|testing|tester)[0-9_.-]*/i.test(cleanUsername)) {
+    return { 
+      isValid: false, 
+      email, 
+      isGoogle: isGoogleDomain,
+      error: 'Please enter your genuine personal Google email, not a test or placeholder address.' 
+    };
+  }
+
+  // Check sequential numbers pattern
+  if (/(01234|12345|23456|34567|45678|56789|98765|87654|76543|65432|54321)/.test(cleanUsername)) {
+    return {
+      isValid: false,
+      email,
+      isGoogle: isGoogleDomain,
+      error: 'Sequential numbers detected. Please enter your real Google account.'
+    };
+  }
+
+  // Check keyboard smash rows
+  if (/(qwerty|qwertz|azerty|asdfgh|zxcvbn|poiuyt|lkjhgf|mnbvcx)/.test(cleanUsername)) {
+    return {
+      isValid: false,
+      email,
+      isGoogle: isGoogleDomain,
+      error: 'Keyboard smash pattern detected. Please enter your real Google account.'
+    };
+  }
+
+  // Check single character repeated 4+ times (e.g. aaaaa@, 11111@) or repetitive patterns
+  if (/(.)\1{3,}/.test(cleanUsername) || /(..+)\1{2,}/.test(cleanUsername) || cleanUsername === 'asdfasdf' || cleanUsername === 'qweqwe' || cleanUsername === '121212' || cleanUsername === '123123' || cleanUsername === 'ababab' || cleanUsername === 'abcabc') {
+    return { 
+      isValid: false, 
+      email, 
+      isGoogle: isGoogleDomain,
+      error: 'Repetitive pattern detected. Please enter your real, active Google email address.' 
+    };
+  }
+
+  return { 
+    isValid: true, 
+    email,
+    isGoogle: isGoogleDomain,
+    isKnownProvider: true 
+  };
 }
 
 /**

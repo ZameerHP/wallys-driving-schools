@@ -337,7 +337,7 @@ export const ManualBookingModal: React.FC<ManualBookingModalProps> = ({
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="e.g. jordan.miller@example.com"
+                      placeholder="jordan.miller@gmail.com"
                       className="w-full text-xs sm:text-sm pl-9 pr-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-brand-red/30 focus:border-brand-red outline-none transition-all"
                     />
                   </div>

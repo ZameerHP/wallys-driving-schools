@@ -40,7 +40,18 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import { validateInternationalPhone, validateWorkingEmail } from '../lib/validation';
 import { Country, DEFAULT_COUNTRY } from '../lib/countries';
 import { PhoneInputWithCountry } from '../components/PhoneInputWithCountry';
+import { useAuth } from '../context/AuthContext';
 import { PACKAGES } from '../lib/content';
+
+// Authentic 4-Color Google 'G' vector mark
+const GoogleGIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4" }) => (
+  <svg className={className} viewBox="0 0 24 24">
+    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
+    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
+    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.14-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+  </svg>
+);
 import { 
   getPackageSpecs, 
   generateSlotsForDuration, 
@@ -284,10 +295,60 @@ export function BookNow() {
   ]);
   const [expandedCartItem, setExpandedCartItem] = useState<string | null>('cart-init-1');
 
+  // Authentication & Google Account Integration
+  const auth = useAuth();
+
   // Student Information
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
+  const [isGoogleVerified, setIsGoogleVerified] = useState(false);
+
+  // Auto-fill from authenticated Google account if logged in
+  useEffect(() => {
+    if (auth?.user?.email && !email) {
+      const gEmail = auth.user.email;
+      setEmail(gEmail);
+      setIsGoogleVerified(true);
+      const fullName = auth.user.user_metadata?.full_name || auth.user.user_metadata?.name || '';
+      if (fullName) {
+        const parts = fullName.trim().split(' ');
+        if (!firstName) setFirstName(parts[0] || '');
+        if (!lastName && parts.length > 1) setLastName(parts.slice(1).join(' ') || '');
+      }
+    }
+  }, [auth?.user]);
+
+  const handleAutofillWithGoogle = async () => {
+    if (auth?.user?.email) {
+      const gEmail = auth.user.email;
+      setEmail(gEmail);
+      setEmailTouched(true);
+      setIsGoogleVerified(true);
+      const fullName = auth.user.user_metadata?.full_name || auth.user.user_metadata?.name || '';
+      if (fullName) {
+        const parts = fullName.trim().split(' ');
+        if (!firstName) setFirstName(parts[0] || '');
+        if (!lastName && parts.length > 1) setLastName(parts.slice(1).join(' ') || '');
+      }
+      setInfoErrors(prev => {
+        const copy = { ...prev };
+        delete copy.email;
+        return copy;
+      });
+      return;
+    }
+
+    try {
+      if (typeof auth?.signInWithGoogle === 'function') {
+        await auth.signInWithGoogle();
+      }
+    } catch (err: any) {
+      console.warn('[Google Auth] Sign-in notice:', err);
+    }
+  };
   const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [countryCode, setCountryCode] = useState('+61');
   const [phone, setPhone] = useState('');
@@ -549,11 +610,14 @@ export function BookNow() {
       }
       setBlockedOffDays(map);
 
-      // If partial blocks exist, integrate them into bookedSlots to block overlapping slots
+      // If partial blocks exist, integrate them into bookedSlots to block overlapping slots without doubling
       if (partialBlockSlots.length > 0) {
         setBookedSlots(prev => {
-          const withoutLocalBlocks = prev.filter(s => s.status !== 'Blocked');
-          return [...withoutLocalBlocks, ...partialBlockSlots];
+          const combined = [...prev, ...partialBlockSlots];
+          return combined.filter((s, idx, arr) => {
+            const sNorm = normalizeDateStr(s.date);
+            return arr.findIndex(other => normalizeDateStr(other.date) === sNorm && other.time === s.time) === idx;
+          });
         });
       }
     } catch (err) {
@@ -583,14 +647,23 @@ export function BookNow() {
             return true;
           });
 
+          const dedupedSanitized = sanitized.filter((s, idx, arr) => {
+            const sNorm = normalizeDateStr(s.date);
+            return arr.findIndex(other => normalizeDateStr(other.date) === sNorm && other.time === s.time) === idx;
+          });
+
           if (targetDate) {
             const normTarget = normalizeDateStr(targetDate);
             setBookedSlots(prev => {
               const others = prev.filter(b => normalizeDateStr(b.date) !== normTarget);
-              return [...others, ...sanitized];
+              const combined = [...others, ...dedupedSanitized];
+              return combined.filter((s, idx, arr) => {
+                const sNorm = normalizeDateStr(s.date);
+                return arr.findIndex(other => normalizeDateStr(other.date) === sNorm && other.time === s.time) === idx;
+              });
             });
           } else {
-            setBookedSlots(sanitized);
+            setBookedSlots(dedupedSanitized);
           }
         }
       }
@@ -1123,8 +1196,12 @@ export function BookNow() {
 
       // Strict real working email check
       const emailCheck = validateWorkingEmail(email);
+      setEmailTouched(true);
       if (!emailCheck.isValid) {
         errors.email = emailCheck.error || 'Please enter a valid working email address';
+        setEmailSuggestion(emailCheck.suggestion || null);
+      } else {
+        setEmailSuggestion(null);
       }
 
       // Phone number check with international country code support
@@ -1273,6 +1350,17 @@ export function BookNow() {
 
     const targetDate = primaryItem.date || selectedDate;
     const targetTime = primaryItem.time || selectedTimeSlot;
+
+    // Authoritative Google email validation before initiating any payment
+    const emailCheck = validateWorkingEmail(email);
+    if (!emailCheck.isValid) {
+      setIsProcessing(false);
+      setEmailTouched(true);
+      setInfoErrors(prev => ({ ...prev, email: emailCheck.error || 'A valid Google email address (@gmail.com) is required.' }));
+      setEmailSuggestion(emailCheck.suggestion || null);
+      setActiveStepId('info');
+      return;
+    }
 
     // Check if target date or any lesson date is blocked by the owner
     const blockedLesson = scheduledLessons.find(l => {
@@ -2558,29 +2646,138 @@ export function BookNow() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {/* Email */}
                         <div>
-                          <label className="block text-xs font-bold text-brand-black/80 uppercase tracking-wider mb-1">
-                            Email <span className="text-brand-red">*</span>
-                          </label>
-                          <input 
-                            type="email"
-                            value={email}
-                            onChange={(e) => {
-                              setEmail(e.target.value);
-                              if (infoErrors.email) {
-                                setInfoErrors(prev => {
-                                  const copy = { ...prev };
-                                  delete copy.email;
-                                  return copy;
-                                });
-                              }
-                            }}
-                            placeholder="e.g. john.smith@gmail.com"
-                            className={cn(
-                              "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none focus:bg-white transition-all",
-                              infoErrors.email ? "border-brand-red ring-2 ring-brand-red/20" : "border-black/10 focus:border-brand-red"
+                          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                            <label className="text-xs font-bold text-brand-black/80 uppercase tracking-wider flex items-center gap-1.5">
+                              <GoogleGIcon className="w-3.5 h-3.5 shrink-0" />
+                              <span>Google Account Email <span className="text-brand-red">*</span></span>
+                            </label>
+                            {email.trim() && !infoErrors.email ? (
+                              <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                Google Account Verified
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={handleAutofillWithGoogle}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] font-semibold text-neutral-700 bg-white hover:bg-neutral-50 border border-neutral-200 rounded-lg shadow-xs transition-all hover:border-neutral-300 active:scale-95 cursor-pointer"
+                                title="Auto-fill with your connected Google Account"
+                              >
+                                <GoogleGIcon className="w-3.5 h-3.5" />
+                                <span>{auth?.user?.email ? 'Use My Google Account' : 'Auto-fill with Google'}</span>
+                              </button>
                             )}
-                          />
-                          {infoErrors.email && <span className="text-[10px] text-brand-red font-semibold block mt-1">{infoErrors.email}</span>}
+                          </div>
+                          <div className="relative">
+                            <input 
+                              type="email"
+                              value={email}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEmail(val);
+                                setEmailTouched(true);
+                                if (!val.trim()) {
+                                  setEmailSuggestion(null);
+                                  setIsGoogleVerified(false);
+                                  setInfoErrors(prev => {
+                                    const copy = { ...prev };
+                                    delete copy.email;
+                                    return copy;
+                                  });
+                                  return;
+                                }
+                                const res = validateWorkingEmail(val);
+                                if (!res.isValid) {
+                                  setIsGoogleVerified(false);
+                                  setEmailSuggestion(res.suggestion || null);
+                                  setInfoErrors(prev => ({ ...prev, email: res.error || 'Please enter a valid Google email address' }));
+                                } else {
+                                  setIsGoogleVerified(true);
+                                  setEmailSuggestion(null);
+                                  setInfoErrors(prev => {
+                                    const copy = { ...prev };
+                                    delete copy.email;
+                                    return copy;
+                                  });
+                                }
+                              }}
+                              onBlur={() => {
+                                setEmailTouched(true);
+                                if (!email.trim()) {
+                                  setIsGoogleVerified(false);
+                                  setInfoErrors(prev => ({ ...prev, email: 'Google email address is required to receive your booking confirmation & calendar invite.' }));
+                                  return;
+                                }
+                                const res = validateWorkingEmail(email);
+                                if (!res.isValid) {
+                                  setIsGoogleVerified(false);
+                                  setEmailSuggestion(res.suggestion || null);
+                                  setInfoErrors(prev => ({ ...prev, email: res.error || 'Please enter a valid Google email address' }));
+                                } else {
+                                  setEmail(res.email);
+                                  setIsGoogleVerified(true);
+                                  setEmailSuggestion(null);
+                                  setInfoErrors(prev => {
+                                    const copy = { ...prev };
+                                    delete copy.email;
+                                    return copy;
+                                  });
+                                }
+                              }}
+                              placeholder="yourname@gmail.com"
+                              className={cn(
+                                "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none transition-all pr-10",
+                                infoErrors.email 
+                                  ? "border-brand-red bg-rose-50/50 ring-2 ring-brand-red/20 focus:border-brand-red" 
+                                  : email.trim() && !infoErrors.email
+                                    ? "border-emerald-500 bg-emerald-50/30 focus:border-emerald-600 ring-2 ring-emerald-500/20"
+                                    : "border-black/10 focus:border-brand-red focus:bg-white"
+                              )}
+                            />
+                            {email.trim() && !infoErrors.email ? (
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none flex items-center gap-1">
+                                <Check className="w-4 h-4 text-emerald-600" />
+                              </div>
+                            ) : (
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none opacity-40">
+                                <GoogleGIcon className="w-4 h-4" />
+                              </div>
+                            )}
+                          </div>
+                          {emailSuggestion && (
+                            <div className="mt-1.5 p-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-amber-900 font-medium">
+                                Did you mean <strong>{emailSuggestion}</strong>?
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEmail(emailSuggestion);
+                                  setEmailSuggestion(null);
+                                  setIsGoogleVerified(true);
+                                  setInfoErrors(prev => {
+                                    const copy = { ...prev };
+                                    delete copy.email;
+                                    return copy;
+                                  });
+                                }}
+                                className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded shadow-sm transition-colors cursor-pointer shrink-0"
+                              >
+                                Use this
+                              </button>
+                            </div>
+                          )}
+                          {infoErrors.email && !emailSuggestion && (
+                            <div className="flex items-start gap-1.5 text-[11px] text-brand-red font-semibold mt-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                              <span>{infoErrors.email}</span>
+                            </div>
+                          )}
+                          {!infoErrors.email && (
+                            <span className="text-[10px] text-brand-black/50 block mt-1">
+                              Only Google-registered accounts (@gmail.com) are accepted to ensure real delivery of lesson confirmations and calendar sync.
+                            </span>
+                          )}
                         </div>
 
                         {/* Phone with Country Code Selector */}

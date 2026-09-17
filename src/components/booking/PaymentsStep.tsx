@@ -23,6 +23,7 @@ import {
   useStripe,
   useElements
 } from '@stripe/react-stripe-js';
+import { validateWorkingEmail } from '../../lib/validation';
 
 // Authentic Vector Google Pay Mark (Google 4-Color 'G' + 'Pay')
 export const GooglePayMark: React.FC<{ className?: string; size?: 'sm' | 'md' | 'lg' }> = ({ 
@@ -618,7 +619,7 @@ const RealStripeCheckoutForm: React.FC<RealStripeCheckoutFormProps> = ({
                       {customerInfo.name || `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || 'Google User'}
                     </div>
                     <div className="text-[11px] text-neutral-500 truncate">
-                      {customerInfo.email || '3d.threadz14@gmail.com'}
+                      {customerInfo.email || 'Email verified'}
                     </div>
                   </div>
                   <Check className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1013,6 +1014,20 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
     setIsLoadingIntent(true);
     setErrorMessage(null);
 
+    const email = (customerInfo?.email || '').trim();
+    if (!email) {
+      setErrorMessage('Google email address is required (@gmail.com).');
+      setIsLoadingIntent(false);
+      return;
+    }
+
+    const emailCheck = validateWorkingEmail(email);
+    if (!emailCheck.isValid) {
+      setErrorMessage(emailCheck.error || 'A valid Google email address (@gmail.com) is required.');
+      setIsLoadingIntent(false);
+      return;
+    }
+
     const activeRef = propBookingRef || bookingRef;
 
     try {
@@ -1098,6 +1113,14 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
   const handleRequestHostedCheckout = async () => {
     setIsCreatingHosted(true);
     setErrorMessage(null);
+
+    const email = (customerInfo?.email || '').trim();
+    const emailCheck = validateWorkingEmail(email);
+    if (!emailCheck.isValid) {
+      setErrorMessage(emailCheck.error || 'A valid Google email address (@gmail.com) is required.');
+      setIsCreatingHosted(false);
+      return;
+    }
 
     try {
       const primaryItem = verifiedItems[0] || { name: 'Driving Lesson', unitPrice: serverTotal };

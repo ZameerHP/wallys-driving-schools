@@ -372,8 +372,19 @@ export function InstructorAvailability() {
       // Optimistic update of local blocks state
       if (data.block) {
         setBlocks(prev => {
-          const filtered = prev.filter(b => String(b.id) !== String(data.block.id) && b.date !== data.block.date);
-          const updated = [...filtered, data.block].sort((a, b) => a.date.localeCompare(b.date));
+          const newBlock = data.block;
+          const newId = String(newBlock.id);
+          const newNormDate = normalizeDateKey(newBlock.date);
+          const filtered = prev.filter(b => {
+            if (String(b.id) === newId) return false;
+            const bNorm = normalizeDateKey(b.date);
+            if (b.date === newBlock.date || (bNorm && bNorm === newNormDate)) {
+              if (newBlock.isFullDay || b.isFullDay) return false;
+              if (b.startTime === newBlock.startTime && b.endTime === newBlock.endTime) return false;
+            }
+            return true;
+          });
+          const updated = [...filtered, newBlock].sort((a, b) => a.date.localeCompare(b.date));
           saveLocalTimeOffBlocks(updated);
           return updated;
         });

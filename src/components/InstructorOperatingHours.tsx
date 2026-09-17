@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { broadcastAvailabilityChange } from '../lib/timeOff';
-import { getSupabase } from '../lib/supabase';
 
 export interface TimePeriod {
   start: string;
@@ -71,24 +70,14 @@ export function InstructorOperatingHours() {
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const [operatingHours, setOperatingHours] = useState<WeeklyOperatingHours>(() => {
-    try {
-      const cached = localStorage.getItem('wallys_operating_settings');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        const hours = parsed.operatingHours || parsed.settings?.operatingHours;
-        if (hours) return hours;
-      }
-    } catch {}
-    return {
-      monday: { enabled: false, label: 'Monday', periods: [] },
-      tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-      wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-      thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-      friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-      saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
-      sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
-    };
+  const [operatingHours, setOperatingHours] = useState<WeeklyOperatingHours>({
+    monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+    tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+    wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+    thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+    friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
+    saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
+    sunday: { enabled: false, label: 'Sunday', periods: [] }
   });
   const [bufferMinutes, setBufferMinutes] = useState<number>(15);
   const [timezone, setTimezone] = useState('Australia/Sydney');
@@ -157,28 +146,7 @@ export function InstructorOperatingHours() {
 
     broadcastAvailabilityChange();
 
-    // 2. Direct client Supabase update if configured
-    const client = getSupabase();
-    if (client) {
-      try {
-        await client.from('instructor_settings').upsert({
-          instructor_id: 'wally',
-          settings_json: JSON.stringify({
-            instructorId: 'wally',
-            instructorName: 'Wally',
-            timezone: tzToSave,
-            bufferMinutes: bufferToSave,
-            operatingHours: hoursToSave,
-            updatedAt: new Date().toISOString()
-          }),
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'instructor_id' });
-      } catch (sbErr) {
-        console.warn('[OperatingHours] Supabase direct client save warning:', sbErr);
-      }
-    }
-
-    // 3. Persist to server API
+    // 2. Persist to server API
     try {
       const res = await fetch('/api/instructor/operating-hours', {
         method: 'PUT',
@@ -194,10 +162,18 @@ export function InstructorOperatingHours() {
       });
 
       if (res.ok) {
+        const data = await res.json();
+        const settings = data.settings || data;
+        if (settings && settings.operatingHours) {
+          setOperatingHours(settings.operatingHours);
+          try {
+            localStorage.setItem('wallys_operating_settings', JSON.stringify(settings));
+          } catch {}
+        }
         broadcastAvailabilityChange();
         if (successMsg) {
           setFeedback({ type: 'success', message: successMsg });
-          setTimeout(() => setFeedback(null), 3000);
+          setTimeout(() => setFeedback(null), 3500);
         }
       }
     } catch (err: any) {
@@ -208,24 +184,38 @@ export function InstructorOperatingHours() {
   const handleToggleDay = (day: keyof WeeklyOperatingHours) => {
     const current = operatingHours[day];
     const willBeEnabled = !current.enabled;
+
+    // Standard working hours when toggling a day back ON
+    const defaultPeriods: TimePeriod[] = (day === 'saturday' || day === 'sunday')
+      ? [{ start: '08:00 AM', end: '05:00 PM', startMinutes: 480, endMinutes: 1020 }]
+      : [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }];
+
+    let validPeriods = (current.periods || []).filter(p => p && p.start && p.end);
+    if (willBeEnabled && validPeriods.length === 0) {
+      validPeriods = defaultPeriods;
+    }
+
     const nextHours: WeeklyOperatingHours = {
       ...operatingHours,
       [day]: {
         ...current,
         enabled: willBeEnabled,
-        periods: willBeEnabled && current.periods.length === 0
-          ? [{ start: '08:00 AM', end: (day === 'sunday' || day === 'saturday') ? '05:00 PM' : '06:00 PM' }]
-          : current.periods
+        periods: validPeriods
       }
     };
     setOperatingHours(nextHours);
 
-    // Auto-save immediately so refreshing the page never turns it back on!
+    const shiftDesc = validPeriods.map(p => `${p.start} – ${p.end}`).join(', ');
+    const msg = willBeEnabled
+      ? `${nextHours[day].label} is now OPEN (${shiftDesc}). Calendar synced.`
+      : `${nextHours[day].label} is now CLOSED. Calendar synced.`;
+
+    // Auto-save immediately to database, localStorage, and trigger calendar sync
     persistSettings(
       nextHours,
       bufferMinutes,
       timezone,
-      `${nextHours[day].label} is now ${willBeEnabled ? 'open' : 'closed'}. Saved automatically.`
+      msg
     );
   };
 

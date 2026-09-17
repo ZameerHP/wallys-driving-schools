@@ -615,7 +615,19 @@ function readTimeOffFile(): TimeOffBlock[] {
 }
 
 function writeTimeOffFile(blocks: TimeOffBlock[]) {
-  const content = JSON.stringify(blocks, null, 2);
+  // Strictly deduplicate before writing
+  const seenKeys = new Set<string>();
+  const deduped = blocks.filter(b => {
+    const idKey = b.id ? `id_${String(b.id)}` : '';
+    const dateSlotKey = `date_${b.date}_${b.isFullDay ? 'FULL' : `${b.startTime || ''}-${b.endTime || ''}`}`;
+    if (idKey && seenKeys.has(idKey)) return false;
+    if (seenKeys.has(dateSlotKey)) return false;
+    if (idKey) seenKeys.add(idKey);
+    seenKeys.add(dateSlotKey);
+    return true;
+  });
+
+  const content = JSON.stringify(deduped, null, 2);
   try {
     const dir = path.dirname(TIME_OFF_FILE);
     if (!fs.existsSync(dir)) {

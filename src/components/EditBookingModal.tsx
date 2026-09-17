@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { BookingItem } from '../lib/bookings';
 import { cn } from '../lib/utils';
+import { validateWorkingEmail, validateInternationalPhone } from '../lib/validation';
 
 interface EditBookingModalProps {
   isOpen: boolean;
@@ -94,6 +95,17 @@ export function EditBookingModal({ isOpen, booking, onClose, onSave }: EditBooki
       return;
     }
 
+    if (!email.trim()) {
+      setErrorMessage('Student Google email is required (@gmail.com).');
+      return;
+    }
+
+    const emailCheck = validateWorkingEmail(email.trim());
+    if (!emailCheck.isValid) {
+      setErrorMessage(emailCheck.error || 'Please enter a valid Google email address (@gmail.com).');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const updatedFields: Partial<BookingItem> = {
@@ -101,7 +113,7 @@ export function EditBookingModal({ isOpen, booking, onClose, onSave }: EditBooki
         time: effectiveTime,
         studentName: studentName.trim(),
         phone: phone.trim(),
-        email: email.trim(),
+        email: emailCheck.email,
         pickupAddress: pickupAddress.trim(),
         suburb: suburb.trim(),
         packageTitle: packageTitle.trim(),
@@ -273,16 +285,34 @@ export function EditBookingModal({ isOpen, booking, onClose, onSave }: EditBooki
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-brand-black/70 uppercase tracking-wider mb-1.5">
-                  Email Address
+                <label className="block text-xs font-bold text-brand-black/70 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Google Email Address</span>
+                  {email.trim() && validateWorkingEmail(email).isValid && (
+                    <span className="text-[10px] text-emerald-600 font-bold lowercase flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" /> google verified
+                    </span>
+                  )}
                 </label>
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="student@example.com"
-                  className="w-full bg-white border border-black/10 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-brand-black focus:outline-none focus:border-brand-red"
+                  placeholder="student@gmail.com"
+                  className={cn(
+                    "w-full bg-white border rounded-xl px-3.5 py-2.5 text-xs font-semibold text-brand-black focus:outline-none transition-all",
+                    email.trim() && !validateWorkingEmail(email).isValid
+                      ? "border-brand-red bg-rose-50/40 focus:border-brand-red"
+                      : email.trim() && validateWorkingEmail(email).isValid
+                        ? "border-emerald-500 bg-emerald-50/30 focus:border-emerald-600"
+                        : "border-black/10 focus:border-brand-red"
+                  )}
+                  required
                 />
+                {email.trim() && !validateWorkingEmail(email).isValid && (
+                  <p className="text-[10px] text-brand-red font-medium mt-1">
+                    {validateWorkingEmail(email).error}
+                  </p>
+                )}
               </div>
             </div>
           </div>

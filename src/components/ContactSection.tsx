@@ -305,13 +305,13 @@ export function ContactSection({ showBreadcrumbs = false, isFullPage = false }: 
                       {/* Field 3: Email Address */}
                       <div>
                         <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-black/70 mb-1">
-                          Email Address <span className="text-brand-red">*</span>
+                          Google Email Address (@gmail.com) <span className="text-brand-red">*</span>
                         </label>
                         <div className="relative">
                           <Mail className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-brand-black/40 pointer-events-none" />
                           <input 
                             type="email" 
-                            placeholder="name@example.com"
+                            placeholder="yourname@gmail.com"
                             value={formData.email}
                             onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
                             className={`w-full bg-brand-offwhite border rounded-xl pl-9 pr-3 py-2.5 text-xs sm:text-sm text-brand-black placeholder:text-brand-black/35 focus:outline-none transition-all ${

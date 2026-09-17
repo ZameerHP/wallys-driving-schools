@@ -1,8 +1,9 @@
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Calendar, User, ArrowLeft, Clock, MessageSquare, Send } from 'lucide-react';
+import { Calendar, User, ArrowLeft, Clock, MessageSquare, Send, CheckCircle2, AlertCircle } from 'lucide-react';
 import { BLOG_POSTS } from '../lib/content';
 import { useState } from 'react';
+import { validateWorkingEmail } from '../lib/validation';
 
 export function BlogPost() {
   const { id } = useParams();
@@ -10,6 +11,7 @@ export function BlogPost() {
 
   const [commentName, setCommentName] = useState('');
   const [commentEmail, setCommentEmail] = useState('');
+  const [commentEmailError, setCommentEmailError] = useState<string | null>(null);
   const [commentText, setCommentText] = useState('');
   const [comments, setComments] = useState<any[]>([]);
 
@@ -26,6 +28,17 @@ export function BlogPost() {
 
   const handleCommentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!commentEmail.trim()) {
+      setCommentEmailError('Google email address (@gmail.com) is required to post a comment.');
+      return;
+    }
+    const check = validateWorkingEmail(commentEmail.trim());
+    if (!check.isValid) {
+      setCommentEmailError(check.error || 'Please enter a valid Google email address (@gmail.com).');
+      return;
+    }
+    setCommentEmailError(null);
+
     if (commentName.trim() && commentText.trim()) {
       setComments([
         ...comments,
@@ -144,15 +157,37 @@ export function BlogPost() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-bold text-brand-black/70 mb-2">Email Address</label>
+                <label className="block text-sm font-bold text-brand-black/70 mb-2 flex items-center justify-between">
+                  <span>Google Email Address</span>
+                  {commentEmail.trim() && validateWorkingEmail(commentEmail).isValid && (
+                    <span className="text-xs text-emerald-600 font-bold lowercase flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> google verified
+                    </span>
+                  )}
+                </label>
                 <input 
                   type="email" 
                   required
                   value={commentEmail}
-                  onChange={(e) => setCommentEmail(e.target.value)}
-                  className="w-full bg-brand-offwhite border border-black/10 rounded-xl px-4 py-3 focus:outline-none focus:border-brand-red/50 focus:ring-2 focus:ring-brand-red/20 transition-all font-medium"
-                  placeholder="john@example.com"
+                  onChange={(e) => {
+                    setCommentEmail(e.target.value);
+                    if (commentEmailError) setCommentEmailError(null);
+                  }}
+                  className={`w-full bg-brand-offwhite border rounded-xl px-4 py-3 focus:outline-none transition-all font-medium ${
+                    commentEmailError
+                      ? 'border-brand-red ring-2 ring-brand-red/20 focus:border-brand-red'
+                      : commentEmail.trim() && validateWorkingEmail(commentEmail).isValid
+                        ? 'border-emerald-500 bg-emerald-50/20 focus:border-emerald-600 ring-2 ring-emerald-500/20'
+                        : 'border-black/10 focus:border-brand-red/50 focus:ring-2 focus:ring-brand-red/20'
+                  }`}
+                  placeholder="yourname@gmail.com"
                 />
+                {commentEmailError && (
+                  <p className="text-xs text-brand-red flex items-start gap-1 font-medium mt-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{commentEmailError}</span>
+                  </p>
+                )}
               </div>
             </div>
             <div>

@@ -244,8 +244,26 @@ export function getLocalTimeOffBlocks(): TimeOffItem[] {
 // Persist blocks to localStorage across all version keys
 export function saveLocalTimeOffBlocks(blocks: TimeOffItem[]): void {
   const valid = Array.isArray(blocks) ? blocks.filter(b => b && b.date) : [];
+
+  // Strictly deduplicate by ID and date/time key to prevent doubling
+  const seenKeys = new Set<string>();
+  const deduplicated: TimeOffItem[] = [];
+
+  for (const b of valid) {
+    const norm = normalizeDateKey(b.date);
+    const idKey = b.id ? `id_${String(b.id)}` : '';
+    const dateSlotKey = `date_${norm}_${b.isFullDay ? 'FULL' : `${b.startTime || ''}-${b.endTime || ''}`}`;
+
+    if (idKey && seenKeys.has(idKey)) continue;
+    if (seenKeys.has(dateSlotKey)) continue;
+
+    if (idKey) seenKeys.add(idKey);
+    seenKeys.add(dateSlotKey);
+    deduplicated.push(b);
+  }
+
   // Automatically purge tombstones for any date present in live blocks
-  const activeDates = new Set(valid.map(b => normalizeDateKey(b.date)).filter(Boolean));
+  const activeDates = new Set(deduplicated.map(b => normalizeDateKey(b.date)).filter(Boolean));
   if (activeDates.size > 0) {
     const tombstones = getDeletedTombstones();
     const pruned = tombstones.filter(t => !activeDates.has(t.normDate || normalizeDateKey(t.date)));
@@ -253,7 +271,7 @@ export function saveLocalTimeOffBlocks(blocks: TimeOffItem[]): void {
       saveDeletedTombstones(pruned);
     }
   }
-  const clean = filterLiveTimeOffBlocks(valid).sort((a, b) => a.date.localeCompare(b.date));
+  const clean = filterLiveTimeOffBlocks(deduplicated).sort((a, b) => a.date.localeCompare(b.date));
   saveRawLocalTimeOffBlocks(clean);
 }
 

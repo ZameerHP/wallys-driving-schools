@@ -575,6 +575,15 @@ app.post("/api/create-checkout-session", async (req, res) => {
     const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : `http://localhost:${PORT}`);
     const targetRef = bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    // Strictly enforce real, non-fake working email
+    const emailCheck = validateWorkingEmail(studentEmail);
+    if (!emailCheck.isValid) {
+      return res.status(400).json({
+        error: "INVALID_EMAIL",
+        message: emailCheck.error || "A genuine, working email address is required to complete your booking and receive receipts."
+      });
+    }
+
     // Authoritative slot check before creating checkout session
     if (Array.isArray(lessons) && lessons.length > 0) {
       const batchCheck = await checkMultipleSlotsBooked(lessons, targetRef, studentEmail, studentPhone);
@@ -951,6 +960,21 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
     const bookingTime = customerInfo?.bookingTime || customerInfo?.time;
     const customerEmail = customerInfo?.email ? sanitizeText(customerInfo.email).toLowerCase() : undefined;
     const customerPhone = customerInfo?.phone ? sanitizeText(customerInfo.phone) : undefined;
+
+    // Strictly validate working email before creating payment intent
+    if (!customerEmail) {
+      return res.status(400).json({
+        error: "INVALID_EMAIL",
+        message: "A valid email address is required to process your booking."
+      });
+    }
+    const emailCheck = validateWorkingEmail(customerEmail);
+    if (!emailCheck.isValid) {
+      return res.status(400).json({
+        error: "INVALID_EMAIL",
+        message: emailCheck.error || "A genuine, working email address is required to complete your booking."
+      });
+    }
 
     // Check if the student already has an unpaid pending reservation for this slot (reuse ref)
     let targetRef = bookingRef;
@@ -2016,19 +2040,15 @@ app.get("/api/availability/operating-hours", async (req, res) => {
     const instructorId = (req.query.instructorId as string) || 'wally';
     let settings = getInstructorSettings(instructorId);
 
-    // Synchronize between database and file store using timestamps
+    // If database has saved settings, keep memory synchronized
     try {
       const dbSettings = await getInstructorSettingsDb(instructorId);
       if (dbSettings && dbSettings.operatingHours) {
         const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
         const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime > localTime) {
+        if (dbTime >= localTime) {
           settings = saveInstructorSettings(dbSettings);
-        } else if (localTime > dbTime) {
-          saveInstructorSettingsDb(instructorId, settings).catch(() => {});
         }
-      } else if (settings && settings.operatingHours) {
-        saveInstructorSettingsDb(instructorId, settings).catch(() => {});
       }
     } catch {}
 
@@ -2066,13 +2086,9 @@ app.get("/api/instructor/operating-hours", async (req, res) => {
       if (dbSettings && dbSettings.operatingHours) {
         const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
         const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime > localTime) {
+        if (dbTime >= localTime) {
           settings = saveInstructorSettings(dbSettings);
-        } else if (localTime > dbTime) {
-          saveInstructorSettingsDb(instructorId, settings).catch(() => {});
         }
-      } else if (settings && settings.operatingHours) {
-        saveInstructorSettingsDb(instructorId, settings).catch(() => {});
       }
     } catch {}
 
@@ -2103,12 +2119,10 @@ app.put("/api/instructor/operating-hours", attachInstructorOrAuth, async (req, r
       maxAdvanceDays: typeof maxAdvanceDays === 'number' ? maxAdvanceDays : undefined
     });
 
-    // Ensure persisted to Supabase / PostgreSQL database
-    try {
-      await saveInstructorSettingsDb(instructorId, updated);
-    } catch (err) {
+    // Asynchronously persist to Supabase / PostgreSQL database
+    saveInstructorSettingsDb(instructorId, updated).catch(err => {
       console.warn('[OperatingHours] Warning saving settings to database:', err);
-    }
+    });
 
     res.json({
       success: true,
@@ -2714,6 +2728,17 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
       }
     }
 
+    if (req.body.email) {
+      const emailCheck = validateWorkingEmail(req.body.email);
+      if (!emailCheck.isValid) {
+        return res.status(400).json({
+          error: "INVALID_EMAIL",
+          message: emailCheck.error || "A valid Google email address (@gmail.com) is required."
+        });
+      }
+      req.body.email = emailCheck.email;
+    }
+
     const updated = await updateBooking(id, req.body);
 
     if (updated) {
@@ -2808,6 +2833,17 @@ app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => 
           message: "The selected reschedule time slot is already booked. Please choose another time."
         });
       }
+    }
+
+    if (req.body.email) {
+      const emailCheck = validateWorkingEmail(req.body.email);
+      if (!emailCheck.isValid) {
+        return res.status(400).json({
+          error: "INVALID_EMAIL",
+          message: emailCheck.error || "A valid Google email address (@gmail.com) is required."
+        });
+      }
+      req.body.email = emailCheck.email;
     }
 
     const updated = await updateBookingByRef(ref, req.body);

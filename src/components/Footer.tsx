@@ -1,8 +1,28 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Mail, MapPin, Clock, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Mail, MapPin, Clock, ArrowRight, ShieldCheck, CheckCircle2, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { validateWorkingEmail } from '../lib/validation';
 
 export function Footer() {
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [subscribed, setSubscribed] = useState(false);
+
+  const handleSubscribe = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) {
+      setEmailError('Please enter your Google email address (@gmail.com).');
+      return;
+    }
+    const check = validateWorkingEmail(email.trim());
+    if (!check.isValid) {
+      setEmailError(check.error || 'Please enter a valid Google email address (@gmail.com).');
+      return;
+    }
+    setEmailError(null);
+    setSubscribed(true);
+  };
   return (
     <footer className="bg-brand-black text-white pt-24 pb-10 border-t border-white/10 relative overflow-hidden">
       {/* Subtle ambient lighting */}
@@ -90,25 +110,46 @@ export function Footer() {
             <p className="text-white/70 mb-4 text-sm leading-relaxed">
               Subscribe for exclusive driving tips, RMS test route advice, and special discount offers.
             </p>
-            <form onSubmit={(e) => { e.preventDefault(); alert("Thanks for subscribing!"); }} className="flex flex-col gap-2.5">
-              <div className="relative">
-                <input 
-                  type="email" 
-                  required
-                  placeholder="Your email address" 
-                  className="w-full bg-white/5 border border-white/15 rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-brand-red focus:bg-white/10 transition-all duration-300"
-                />
+            {subscribed ? (
+              <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center gap-2.5 text-emerald-400 text-xs font-semibold">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                <span>Subscribed! Check your Google Inbox for our learner guide.</span>
               </div>
-              <motion.button 
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                type="submit" 
-                className="w-full bg-brand-red py-3 rounded-xl font-bold text-sm hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_20px_rgba(227,34,42,0.4)] flex items-center justify-center gap-2"
-              >
-                <span>Subscribe Now</span>
-                <ArrowRight className="w-4 h-4" />
-              </motion.button>
-            </form>
+            ) : (
+              <form onSubmit={handleSubscribe} className="flex flex-col gap-2.5">
+                <div className="relative">
+                  <input 
+                    type="email" 
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (emailError) setEmailError(null);
+                    }}
+                    placeholder="yourname@gmail.com" 
+                    className={`w-full bg-white/5 border rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none transition-all duration-300 ${
+                      emailError 
+                        ? 'border-brand-red ring-1 ring-brand-red/30' 
+                        : 'border-white/15 focus:border-brand-red focus:bg-white/10'
+                    }`}
+                  />
+                </div>
+                {emailError && (
+                  <p className="text-[11px] text-brand-red flex items-start gap-1 font-medium">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{emailError}</span>
+                  </p>
+                )}
+                <motion.button 
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  type="submit" 
+                  className="w-full bg-brand-red py-3 rounded-xl font-bold text-sm hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_20px_rgba(227,34,42,0.4)] flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <span>Subscribe Now</span>
+                  <ArrowRight className="w-4 h-4" />
+                </motion.button>
+              </form>
+            )}
           </div>
         </div>
 
