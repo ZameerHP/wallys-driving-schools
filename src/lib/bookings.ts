@@ -399,7 +399,7 @@ export interface ManualBookingData {
 
 // Create new driving lesson booking across database, Supabase, and local storage
 export async function createBookingInDb(
-  booking: Omit<BookingItem, 'id' | 'ref' | 'createdAt'> & Partial<ManualBookingData>, 
+  booking: Omit<BookingItem, 'id' | 'ref' | 'createdAt'> & Partial<ManualBookingData> & { verificationToken?: string }, 
   token?: string | null
 ): Promise<BookingItem> {
   const effectiveToken = token || (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null);
@@ -413,6 +413,9 @@ export async function createBookingInDb(
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
+    if (booking.verificationToken) {
+      headers['x-email-verification-token'] = booking.verificationToken;
+    }
     if (effectiveToken) {
       headers['Authorization'] = `Bearer ${effectiveToken}`;
       headers['x-instructor-token'] = effectiveToken;
@@ -437,7 +440,7 @@ export async function createBookingInDb(
     finalItem = mapDbToBookingItem(data);
   } catch (err: any) {
     // If backend threw an availability error or validation error, rethrow immediately
-    if (err?.message?.includes('time slot') || err?.message?.includes('reserved') || err?.message?.includes('available') || err?.message?.includes('required') || err?.message?.includes('phone') || err?.message?.includes('email')) {
+    if (err?.message?.includes('time slot') || err?.message?.includes('reserved') || err?.message?.includes('available') || err?.message?.includes('required') || err?.message?.includes('phone') || err?.message?.includes('email') || err?.message?.toLowerCase().includes('verif')) {
       throw err;
     }
     console.warn('Backend API error, falling back:', err);

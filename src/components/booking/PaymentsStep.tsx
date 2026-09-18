@@ -92,6 +92,7 @@ export interface CustomerPaymentInfo {
   packagePrice?: number;
   userId?: string | null;
   lessons?: any[];
+  verificationToken?: string | null;
 }
 
 export interface PaymentsStepProps {
@@ -1138,7 +1139,8 @@ export const PaymentsStep: React.FC<PaymentsStepProps> = ({
           bookingTime: customerInfo.time || customerInfo.bookingTime,
           bookingRef,
           items: verifiedItems,
-          lessons: customerInfo.lessons
+          lessons: customerInfo.lessons,
+          verificationToken: customerInfo.verificationToken || undefined
         })
       });
 

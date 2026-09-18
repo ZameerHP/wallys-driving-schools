@@ -31,7 +31,8 @@ import {
   Menu,
   X,
   CalendarOff,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
@@ -351,6 +352,14 @@ export function BookNow() {
     setEmail(data.email);
     setEmailTouched(true);
     setIsGoogleVerified(true);
+    // Reset verification status if a new email is selected
+    setIsEmailVerified(false);
+    setVerifiedEmailAddress(null);
+    setVerificationToken(null);
+    setCodeSent(false);
+    setVerificationCode('');
+    setVerificationSuccessMsg(null);
+    setVerificationError(null);
     if (data.firstName) setFirstName(data.firstName);
     if (data.lastName) setLastName(data.lastName);
     if (data.phone) setPhone(data.phone);
@@ -361,6 +370,115 @@ export function BookNow() {
     });
     setAutofillSuccessNotice(`✓ Auto-filled with Google Account: ${data.email}`);
     setTimeout(() => setAutofillSuccessNotice(null), 6000);
+  };
+
+  // Real Email Verification State
+  const [isEmailVerified, setIsEmailVerified] = useState(false);
+  const [verifiedEmailAddress, setVerifiedEmailAddress] = useState<string | null>(null);
+  const [verificationToken, setVerificationToken] = useState<string | null>(null);
+  const [isSendingCode, setIsSendingCode] = useState(false);
+  const [isVerifyingCode, setIsVerifyingCode] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
+  const [verificationCode, setVerificationCode] = useState('');
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [verificationSuccessMsg, setVerificationSuccessMsg] = useState<string | null>(null);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  // 60-second cooldown timer for code resend
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [resendCooldown]);
+
+  const handleSendVerificationCode = async () => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setEmailTouched(true);
+      setInfoErrors(prev => ({ ...prev, email: 'Please enter your email address first.' }));
+      setVerificationError('Please enter an email address before requesting a code.');
+      return;
+    }
+
+    const emailCheck = validateWorkingEmail(cleanEmail);
+    if (!emailCheck.isValid) {
+      setEmailTouched(true);
+      setInfoErrors(prev => ({ ...prev, email: emailCheck.error || 'Please enter a valid Google email address.' }));
+      setVerificationError(emailCheck.error || 'Please enter a valid Google email address.');
+      return;
+    }
+
+    setIsSendingCode(true);
+    setVerificationError(null);
+    setVerificationSuccessMsg(null);
+
+    try {
+      const res = await fetch('/api/email-verification/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailCheck.email })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setVerificationError(data.message || 'Unable to send the verification code. Please try again.');
+        if (data.cooldownSeconds) {
+          setResendCooldown(data.cooldownSeconds);
+        }
+        return;
+      }
+
+      setCodeSent(true);
+      setVerificationSuccessMsg('Verification code sent to your email.');
+      setResendCooldown(data.cooldownSeconds || 60);
+      setVerificationCode('');
+    } catch (err: any) {
+      setVerificationError('Unable to send the verification code. Please try again.');
+    } finally {
+      setIsSendingCode(false);
+    }
+  };
+
+  const handleVerifyEmail = async () => {
+    const cleanCode = verificationCode.replace(/\D/g, '').trim();
+    if (!cleanCode || cleanCode.length !== 6) {
+      setVerificationError('Please enter the 6-digit verification code.');
+      return;
+    }
+
+    setIsVerifyingCode(true);
+    setVerificationError(null);
+
+    try {
+      const res = await fetch('/api/email-verification/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          code: cleanCode
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setVerificationError(data.message || 'Invalid verification code. Please try again.');
+        return;
+      }
+
+      // Mark verified
+      setIsEmailVerified(true);
+      setVerifiedEmailAddress(email.trim().toLowerCase());
+      setVerificationToken(data.verificationToken || null);
+      setVerificationSuccessMsg('✓ Email verified successfully');
+      setVerificationError(null);
+      setCodeSent(false);
+    } catch (err: any) {
+      setVerificationError('An error occurred during verification. Please try again.');
+    } finally {
+      setIsVerifyingCode(false);
+    }
   };
   const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [countryCode, setCountryCode] = useState('+61');
@@ -1321,6 +1439,17 @@ export function BookNow() {
         return;
       }
 
+      // Enforce verified email before moving forward to Payment
+      const normalizedEmail = emailCheck.email.toLowerCase().trim();
+      if (!isEmailVerified || verifiedEmailAddress !== normalizedEmail || !verificationToken) {
+        setVerificationError('Please verify your email before completing your booking.');
+        const emailEl = document.getElementById('student-email-input');
+        if (emailEl) {
+          emailEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        return;
+      }
+
       // Authoritative database check right before proceeding to Payment
       try {
         const checkRes = await fetch('/api/check-slots', {
@@ -1478,6 +1607,19 @@ export function BookNow() {
       return;
     }
 
+    // Strict email verification guard before processing payment
+    const normalizedEmail = email.toLowerCase().trim();
+    if (!isEmailVerified || verifiedEmailAddress !== normalizedEmail || !verificationToken) {
+      setIsProcessing(false);
+      setVerificationError('Please verify your email before completing your booking.');
+      setActiveStepId('info');
+      const emailEl = document.getElementById('student-email-input');
+      if (emailEl) {
+        emailEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
+
     // 1. Authoritative real-time check against database immediately before charging or creating booking
     try {
       const checkRes = await fetch('/api/check-slots', {
@@ -1519,7 +1661,8 @@ export function BookNow() {
             instructorName: 'Certified Instructor',
             isPackage: Boolean(selectedPackage),
             packageHours: selectedPackage?.logbookHours || 1,
-            lessons: scheduledLessons
+            lessons: scheduledLessons,
+            verificationToken
           })
         });
 
@@ -1568,7 +1711,8 @@ export function BookNow() {
         time: targetTime,
         status: 'Pending',
         notes: `Pickup: ${address || 'Home pickup'}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}. Payment: ${simulateMock ? 'MOCK CARD (TEST)' : paymentMethod.toUpperCase()}`,
-        lessons: scheduledLessons
+        lessons: scheduledLessons,
+        verificationToken: verificationToken || undefined
       });
 
       setConfirmedBooking({
@@ -2802,6 +2946,15 @@ export function BookNow() {
                                 const val = e.target.value;
                                 setEmail(val);
                                 setEmailTouched(true);
+                                if (isEmailVerified || verifiedEmailAddress || codeSent) {
+                                  setIsEmailVerified(false);
+                                  setVerifiedEmailAddress(null);
+                                  setVerificationToken(null);
+                                  setCodeSent(false);
+                                  setVerificationCode('');
+                                  setVerificationSuccessMsg(null);
+                                  setVerificationError(null);
+                                }
                                 if (!val.trim()) {
                                   setEmailSuggestion(null);
                                   setIsGoogleVerified(false);
@@ -2855,14 +3008,20 @@ export function BookNow() {
                                 "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none transition-all pr-10",
                                 infoErrors.email 
                                   ? "border-brand-red bg-rose-50/50 ring-2 ring-brand-red/20 focus:border-brand-red" 
-                                  : email.trim() && !infoErrors.email
+                                  : isEmailVerified
                                     ? "border-emerald-500 bg-emerald-50/30 focus:border-emerald-600 ring-2 ring-emerald-500/20"
-                                    : "border-black/10 focus:border-brand-red focus:bg-white"
+                                    : email.trim() && !infoErrors.email
+                                      ? "border-neutral-300 focus:border-brand-red focus:bg-white"
+                                      : "border-black/10 focus:border-brand-red focus:bg-white"
                               )}
                             />
-                            {email.trim() && !infoErrors.email ? (
-                              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none flex items-center gap-1">
-                                <Check className="w-4 h-4 text-emerald-600" />
+                            {isEmailVerified ? (
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none flex items-center gap-1" title="Email verified">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                              </div>
+                            ) : email.trim() && !infoErrors.email ? (
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none flex items-center gap-1 opacity-60">
+                                <Check className="w-4 h-4 text-neutral-400" />
                               </div>
                             ) : (
                               <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none opacity-40">
@@ -2881,6 +3040,13 @@ export function BookNow() {
                                   setEmail(emailSuggestion);
                                   setEmailSuggestion(null);
                                   setIsGoogleVerified(true);
+                                  setIsEmailVerified(false);
+                                  setVerifiedEmailAddress(null);
+                                  setVerificationToken(null);
+                                  setCodeSent(false);
+                                  setVerificationCode('');
+                                  setVerificationSuccessMsg(null);
+                                  setVerificationError(null);
                                   setInfoErrors(prev => {
                                     const copy = { ...prev };
                                     delete copy.email;
@@ -2904,6 +3070,143 @@ export function BookNow() {
                               Only Google-registered accounts (@gmail.com) are accepted to ensure real delivery of lesson confirmations and calendar sync.
                             </span>
                           )}
+
+                          {/* Real Email Verification Section */}
+                          <div className="mt-2.5">
+                            {isEmailVerified ? (
+                              /* Verified State Badge */
+                              <div className="p-2.5 sm:p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-2 shadow-2xs">
+                                <div className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                  <span className="text-xs sm:text-sm font-bold text-emerald-900">
+                                    ✓ Email verified successfully
+                                  </span>
+                                </div>
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-md shrink-0">
+                                  Verified
+                                </span>
+                              </div>
+                            ) : !codeSent ? (
+                              /* Send Verification Code Button */
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-0.5">
+                                <button
+                                  type="button"
+                                  id="send-verification-code-btn"
+                                  onClick={handleSendVerificationCode}
+                                  disabled={isSendingCode || !email.trim()}
+                                  className={cn(
+                                    "inline-flex items-center justify-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold rounded-xl border transition-all cursor-pointer shadow-2xs",
+                                    "bg-white hover:bg-neutral-50 text-neutral-800 border-neutral-300 hover:border-neutral-400 active:scale-[0.98]",
+                                    (isSendingCode || !email.trim()) && "opacity-60 cursor-not-allowed active:scale-100"
+                                  )}
+                                >
+                                  {isSendingCode ? (
+                                    <>
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-red" />
+                                      <span>Sending Verification Code...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Mail className="w-3.5 h-3.5 text-brand-red" />
+                                      <span>Send Verification Code</span>
+                                    </>
+                                  )}
+                                </button>
+                                <span className="text-[11px] text-neutral-500">
+                                  We will send a 6-digit verification code to confirm access.
+                                </span>
+                              </div>
+                            ) : (
+                              /* Verification Code Input & Action Box */
+                              <div className="p-3.5 bg-neutral-50 border border-neutral-200 rounded-xl space-y-3 shadow-2xs">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                    <span>Verification code sent to your email.</span>
+                                  </div>
+                                  <span className="text-[10px] text-neutral-500 font-medium">Valid for 10 min</span>
+                                </div>
+
+                                <div>
+                                  <label htmlFor="otp-code-input" className="block text-[11px] font-bold text-neutral-700 uppercase tracking-wider mb-1.5">
+                                    Verification Code
+                                  </label>
+                                  <div className="flex flex-col sm:flex-row gap-2">
+                                    <input
+                                      id="otp-code-input"
+                                      name="verificationOtp"
+                                      type="text"
+                                      inputMode="numeric"
+                                      pattern="[0-9]*"
+                                      maxLength={6}
+                                      placeholder="123456"
+                                      value={verificationCode}
+                                      onChange={(e) => {
+                                        const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
+                                        setVerificationCode(digits);
+                                        if (verificationError) setVerificationError(null);
+                                      }}
+                                      onPaste={(e) => {
+                                        e.preventDefault();
+                                        const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+                                        setVerificationCode(pasted);
+                                        if (verificationError) setVerificationError(null);
+                                      }}
+                                      className="flex-1 tracking-[0.25em] font-mono text-base font-bold text-center sm:text-left px-3 py-2 bg-white border border-neutral-300 rounded-lg focus:outline-none focus:border-brand-red focus:ring-2 focus:ring-brand-red/15 transition-all"
+                                    />
+                                    <button
+                                      type="button"
+                                      id="verify-email-btn"
+                                      onClick={handleVerifyEmail}
+                                      disabled={isVerifyingCode || verificationCode.length !== 6}
+                                      className={cn(
+                                        "px-5 py-2 bg-brand-red hover:bg-[#c41a21] text-white text-xs sm:text-sm font-bold rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0 active:scale-[0.98]",
+                                        (isVerifyingCode || verificationCode.length !== 6) && "opacity-60 cursor-not-allowed active:scale-100"
+                                      )}
+                                    >
+                                      {isVerifyingCode ? (
+                                        <>
+                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                          <span>Verifying...</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Check className="w-3.5 h-3.5" />
+                                          <span>Verify Email</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between text-xs pt-1 border-t border-neutral-200/60">
+                                  <span className="text-neutral-500 text-[11px]">Didn't receive the code?</span>
+                                  {resendCooldown > 0 ? (
+                                    <span className="text-[11px] font-semibold text-neutral-400">
+                                      Resend code in {resendCooldown}s
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={handleSendVerificationCode}
+                                      disabled={isSendingCode}
+                                      className="text-[11px] font-bold text-brand-red hover:underline cursor-pointer transition-colors inline-flex items-center gap-1"
+                                    >
+                                      {isSendingCode ? 'Sending...' : 'Resend Code'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Verification error message */}
+                            {verificationError && (
+                              <div className="flex items-start gap-1.5 text-[11px] text-brand-red font-semibold mt-1.5 p-2 bg-rose-50 border border-rose-200 rounded-lg">
+                                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-brand-red" />
+                                <span>{verificationError}</span>
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {/* Phone with Country Code Selector */}
@@ -3135,7 +3438,8 @@ export function BookNow() {
                             notes: `Pickup: ${address}. Test Centre: ${selectedTestCentre || 'N/A'}. Test Time: ${testTime || 'Not set'}.`,
                             packageTitle: cartItems[0]?.title || selectedPackage?.name || selectedPackage?.title || 'Driving Lesson',
                             packagePrice: cartSubtotal > 0 ? cartSubtotal : (selectedPackage?.price || selectedPackage?.price || 65.00),
-                            lessons: scheduledLessons
+                            lessons: scheduledLessons,
+                            verificationToken: verificationToken || undefined
                           }}
                           onBack={() => setActiveStepId('info')}
                           onPaymentSuccess={(booking) => {

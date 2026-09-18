@@ -71,6 +71,11 @@ import {
   getResend,
   getFormattedSender
 } from "./src/server/email-reminder-service.ts";
+import {
+  sendVerificationOtp,
+  verifyVerificationOtp,
+  isEmailVerified
+} from "./src/server/email-verification-service.ts";
 
 dotenv.config();
 
@@ -490,6 +495,60 @@ function getStripe(): Stripe {
   return stripeClient;
 }
 
+// REAL EMAIL VERIFICATION ENDPOINTS FOR BOOKING SYSTEM
+app.post("/api/email-verification/send", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: "MISSING_EMAIL",
+        message: "Email address is required."
+      });
+    }
+
+    const result = await sendVerificationOtp(email);
+    if (!result.success) {
+      const statusCode = result.error === 'COOLDOWN' || result.error === 'RATE_LIMIT_EXCEEDED' ? 429 : 400;
+      return res.status(statusCode).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    console.error("[Email Verification API] Error sending OTP:", err);
+    return res.status(500).json({
+      success: false,
+      error: "SERVER_ERROR",
+      message: "Unable to send the verification code. Please try again."
+    });
+  }
+});
+
+app.post("/api/email-verification/verify", async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    if (!email || !code) {
+      return res.status(400).json({
+        success: false,
+        error: "MISSING_FIELDS",
+        message: "Both email and verification code are required."
+      });
+    }
+
+    const result = verifyVerificationOtp(email, code);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    console.error("[Email Verification API] Error verifying OTP:", err);
+    return res.status(500).json({
+      success: false,
+      error: "SERVER_ERROR",
+      message: "An error occurred during verification. Please try again."
+    });
+  }
+});
+
 // Check Stripe configuration status
 app.get("/api/stripe/status", (req, res) => {
   const secretKey = (process.env.STRIPE_SECRET_KEY || "").trim();
@@ -583,6 +642,15 @@ app.post("/api/create-checkout-session", async (req, res) => {
       return res.status(400).json({
         error: "INVALID_EMAIL",
         message: emailCheck.error || "A genuine, working email address is required to complete your booking and receive receipts."
+      });
+    }
+
+    // Strictly enforce real email verification before allowing checkout session creation
+    const verificationToken = (req.body.verificationToken || req.headers['x-email-verification-token']) as string | undefined;
+    if (!isEmailVerified(studentEmail, verificationToken)) {
+      return res.status(403).json({
+        error: "EMAIL_NOT_VERIFIED",
+        message: "Please verify your email before completing your booking."
       });
     }
 
@@ -975,6 +1043,15 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
       return res.status(400).json({
         error: "INVALID_EMAIL",
         message: emailCheck.error || "A genuine, working email address is required to complete your booking."
+      });
+    }
+
+    // Strictly enforce real email verification before creating payment intent
+    const verificationToken = (customerInfo?.verificationToken || req.body?.verificationToken || req.headers['x-email-verification-token']) as string | undefined;
+    if (!isEmailVerified(customerEmail, verificationToken)) {
+      return res.status(403).json({
+        error: "EMAIL_NOT_VERIFIED",
+        message: "Please verify your email before completing your booking."
       });
     }
 
@@ -2540,6 +2617,15 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
     const emailCheck = validateWorkingEmail(email);
     if (!emailCheck.isValid) {
       return res.status(400).json({ error: emailCheck.error || "A valid working email is required" });
+    }
+
+    // Strictly enforce real email verification on public booking creation
+    const verificationToken = (req.body.verificationToken || req.headers['x-email-verification-token']) as string | undefined;
+    if (!isInstructor && !isEmailVerified(email, verificationToken)) {
+      return res.status(403).json({
+        error: "EMAIL_NOT_VERIFIED",
+        message: "Please verify your email before completing your booking."
+      });
     }
 
     const countryCode = req.body.countryCode || (phone.startsWith('+') ? phone.split(' ')[0] : '+61');
