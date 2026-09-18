@@ -2,18 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Check, 
-  CheckCircle2, 
   X, 
   Mail, 
-  User, 
-  Phone, 
   ShieldCheck, 
-  Sparkles, 
   ArrowRight, 
   AlertCircle, 
-  Calendar,
-  Clock,
-  ExternalLink
+  Plus,
+  Trash2,
+  Sparkles
 } from 'lucide-react';
 import { validateWorkingEmail } from '../../lib/validation';
 
@@ -42,8 +38,10 @@ interface GoogleAutofillModalProps {
   initialFirstName?: string;
   initialLastName?: string;
   initialPhone?: string;
-  onSignInOAuth?: () => Promise<void>;
 }
+
+const STORAGE_KEY_SINGLE = 'wallys_verified_google_account';
+const STORAGE_KEY_LIST = 'wallys_saved_google_accounts_list';
 
 export const GoogleAutofillModal: React.FC<GoogleAutofillModalProps> = ({
   isOpen,
@@ -53,288 +51,356 @@ export const GoogleAutofillModal: React.FC<GoogleAutofillModalProps> = ({
   initialFirstName = '',
   initialLastName = '',
   initialPhone = '',
-  onSignInOAuth
 }) => {
-  const [emailInput, setEmailInput] = useState(initialEmail);
-  const [firstNameInput, setFirstNameInput] = useState(initialFirstName);
-  const [lastNameInput, setLastNameInput] = useState(initialLastName);
-  const [phoneInput, setPhoneInput] = useState(initialPhone);
   const [savedAccounts, setSavedAccounts] = useState<SavedGoogleAccount[]>([]);
+  const [manualEmail, setManualEmail] = useState('');
+  const [showAddForm, setShowAddForm] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [suggestion, setSuggestion] = useState<string | null>(null);
-  const [isOAuthLoading, setIsOAuthLoading] = useState(false);
-  const [oAuthNotice, setOAuthNotice] = useState<string | null>(null);
 
-  // Discover remembered Google accounts from localStorage
+  // Discover all Google accounts associated with this device/browser
   useEffect(() => {
     if (!isOpen) return;
 
-    setEmailInput(initialEmail);
-    setFirstNameInput(initialFirstName);
-    setLastNameInput(initialLastName);
-    setPhoneInput(initialPhone);
+    setManualEmail('');
     setValidationError(null);
-    setSuggestion(null);
-    setOAuthNotice(null);
 
-    const accounts: SavedGoogleAccount[] = [];
+    const accountsMap = new Map<string, SavedGoogleAccount>();
 
-    // 1. Primary saved Google profile
+    const addAccount = (acc: SavedGoogleAccount) => {
+      const emailLower = acc.email.trim().toLowerCase();
+      if (!validateWorkingEmail(emailLower).isValid) return;
+      if (!accountsMap.has(emailLower)) {
+        accountsMap.set(emailLower, { ...acc, email: emailLower });
+      }
+    };
+
+    // 1. Saved Google accounts list from localStorage
     try {
-      const storedProfile = localStorage.getItem('wallys_verified_google_account');
-      if (storedProfile) {
-        const parsed = JSON.parse(storedProfile);
-        if (parsed?.email && validateWorkingEmail(parsed.email).isValid) {
-          accounts.push({
-            email: parsed.email,
-            firstName: parsed.firstName || '',
-            lastName: parsed.lastName || '',
-            phone: parsed.phone || '',
-            source: 'Saved Profile'
+      const storedList = localStorage.getItem(STORAGE_KEY_LIST);
+      if (storedList) {
+        const parsed = JSON.parse(storedList);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((item) => {
+            if (item?.email) addAccount(item);
           });
         }
       }
     } catch {}
 
-    // 2. Scan past bookings for previous verified emails
+    // 2. Primary saved Google profile
     try {
-      const rawBookings = localStorage.getItem('wallys_bookings_v3');
-      if (rawBookings) {
-        const list = JSON.parse(rawBookings);
-        if (Array.isArray(list)) {
-          for (const b of list) {
-            if (b.email && validateWorkingEmail(b.email).isValid) {
-              if (!accounts.some(a => a.email.toLowerCase() === b.email.toLowerCase())) {
-                const nameParts = (b.studentName || '').trim().split(' ');
-                accounts.push({
-                  email: b.email,
-                  firstName: nameParts[0] || '',
-                  lastName: nameParts.slice(1).join(' ') || '',
-                  phone: b.phone || '',
-                  source: 'Recent Booking'
-                });
-              }
+      const storedProfile = localStorage.getItem(STORAGE_KEY_SINGLE);
+      if (storedProfile) {
+        const parsed = JSON.parse(storedProfile);
+        if (parsed?.email) {
+          addAccount({
+            email: parsed.email,
+            firstName: parsed.firstName || initialFirstName || '',
+            lastName: parsed.lastName || initialLastName || '',
+            phone: parsed.phone || initialPhone || '',
+            source: 'Verified Google Profile'
+          });
+        }
+      }
+    } catch {}
+
+    // 3. Discover from Supabase Auth storage if present
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const sbUser = parsed?.user;
+            if (sbUser?.email) {
+              const fullName = sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || '';
+              const parts = fullName.trim().split(' ');
+              addAccount({
+                email: sbUser.email,
+                firstName: parts[0] || '',
+                lastName: parts.slice(1).join(' ') || '',
+                phone: sbUser.user_metadata?.phone || '',
+                source: 'Connected User Account'
+              });
             }
           }
         }
       }
     } catch {}
 
-    setSavedAccounts(accounts);
+    // 4. Scan recent bookings for previous confirmed Google accounts
+    try {
+      const rawBookings = localStorage.getItem('wallys_bookings_v3');
+      if (rawBookings) {
+        const list = JSON.parse(rawBookings);
+        if (Array.isArray(list)) {
+          for (const b of list) {
+            if (b.email) {
+              const nameParts = (b.studentName || '').trim().split(' ');
+              addAccount({
+                email: b.email,
+                firstName: nameParts[0] || '',
+                lastName: nameParts.slice(1).join(' ') || '',
+                phone: b.phone || '',
+                source: 'Previous Booking'
+              });
+            }
+          }
+        }
+      }
+    } catch {}
 
-    // If initial email is empty and we have a saved account, pre-populate with the first one
-    if (!initialEmail && accounts.length > 0) {
-      setEmailInput(accounts[0].email);
-      if (!initialFirstName && accounts[0].firstName) setFirstNameInput(accounts[0].firstName);
-      if (!initialLastName && accounts[0].lastName) setLastNameInput(accounts[0].lastName);
-      if (!initialPhone && accounts[0].phone) setPhoneInput(accounts[0].phone);
+    // 5. If an initial email was provided in the input field, include it too
+    if (initialEmail && validateWorkingEmail(initialEmail).isValid) {
+      addAccount({
+        email: initialEmail,
+        firstName: initialFirstName,
+        lastName: initialLastName,
+        phone: initialPhone,
+        source: 'Current Form Entry'
+      });
     }
+
+    const all = Array.from(accountsMap.values());
+    setSavedAccounts(all);
+
+    // If no accounts exist yet, show the direct input form
+    setShowAddForm(all.length === 0);
   }, [isOpen, initialEmail, initialFirstName, initialLastName, initialPhone]);
-
-  // Live validate email
-  useEffect(() => {
-    if (!emailInput.trim()) {
-      setValidationError(null);
-      setSuggestion(null);
-      return;
-    }
-
-    const res = validateWorkingEmail(emailInput);
-    if (!res.isValid) {
-      setValidationError(res.error || 'A valid Google email address (@gmail.com) is required.');
-      setSuggestion(res.suggestion || null);
-    } else {
-      setValidationError(null);
-      setSuggestion(null);
-    }
-  }, [emailInput]);
 
   if (!isOpen) return null;
 
+  // Single click: Instantly saves and applies email and details, zero complications!
   const handleSelectAccount = (acc: SavedGoogleAccount) => {
-    setEmailInput(acc.email);
-    if (acc.firstName) setFirstNameInput(acc.firstName);
-    if (acc.lastName) setLastNameInput(acc.lastName);
-    if (acc.phone) setPhoneInput(acc.phone);
-    
-    // Auto apply immediately
+    saveAccountToStorage(acc);
     onApply({
       email: acc.email,
-      firstName: acc.firstName || firstNameInput,
-      lastName: acc.lastName || lastNameInput,
-      phone: acc.phone || phoneInput
+      firstName: acc.firstName || initialFirstName,
+      lastName: acc.lastName || initialLastName,
+      phone: acc.phone || initialPhone
     });
     onClose();
   };
 
-  const handleApplyCurrent = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanEmail = emailInput.trim();
-    if (!cleanEmail) {
-      setValidationError('Please enter your personal Google email address (@gmail.com).');
-      return;
-    }
-
-    const res = validateWorkingEmail(cleanEmail);
-    if (!res.isValid) {
-      setValidationError(res.error || 'A valid Google email address (@gmail.com) is required.');
-      setSuggestion(res.suggestion || null);
-      return;
-    }
-
-    // Save to localStorage for future 1-click visits
+  const saveAccountToStorage = (acc: SavedGoogleAccount) => {
     try {
-      localStorage.setItem('wallys_verified_google_account', JSON.stringify({
-        email: res.email,
-        firstName: firstNameInput.trim(),
-        lastName: lastNameInput.trim(),
-        phone: phoneInput.trim(),
+      // 1. Save as current active profile
+      localStorage.setItem(STORAGE_KEY_SINGLE, JSON.stringify({
+        email: acc.email,
+        firstName: acc.firstName || initialFirstName,
+        lastName: acc.lastName || initialLastName,
+        phone: acc.phone || initialPhone,
         verifiedAt: new Date().toISOString()
       }));
+
+      // 2. Add to saved accounts list
+      let currentList: SavedGoogleAccount[] = [];
+      const stored = localStorage.getItem(STORAGE_KEY_LIST);
+      if (stored) {
+        try {
+          currentList = JSON.parse(stored);
+        } catch {}
+      }
+      if (!Array.isArray(currentList)) currentList = [];
+
+      // Avoid duplicates
+      const filtered = currentList.filter(item => item.email.toLowerCase() !== acc.email.toLowerCase());
+      filtered.unshift({
+        email: acc.email,
+        firstName: acc.firstName || initialFirstName,
+        lastName: acc.lastName || initialLastName,
+        phone: acc.phone || initialPhone,
+        source: 'Saved Google Account'
+      });
+      localStorage.setItem(STORAGE_KEY_LIST, JSON.stringify(filtered.slice(0, 10)));
     } catch {}
+  };
+
+  const handleRemoveAccount = (e: React.MouseEvent, emailToRemove: string) => {
+    e.stopPropagation();
+    try {
+      const updated = savedAccounts.filter(a => a.email.toLowerCase() !== emailToRemove.toLowerCase());
+      setSavedAccounts(updated);
+
+      // Update storage
+      localStorage.setItem(STORAGE_KEY_LIST, JSON.stringify(updated));
+      const single = localStorage.getItem(STORAGE_KEY_SINGLE);
+      if (single) {
+        const parsed = JSON.parse(single);
+        if (parsed.email?.toLowerCase() === emailToRemove.toLowerCase()) {
+          localStorage.removeItem(STORAGE_KEY_SINGLE);
+        }
+      }
+
+      if (updated.length === 0) {
+        setShowAddForm(true);
+      }
+    } catch {}
+  };
+
+  const handleApplyManual = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const clean = manualEmail.trim();
+    if (!clean) {
+      setValidationError('Please select or enter your Google email address (@gmail.com).');
+      return;
+    }
+
+    const res = validateWorkingEmail(clean);
+    if (!res.isValid) {
+      setValidationError(res.error || 'A valid Google email (@gmail.com) is required.');
+      return;
+    }
+
+    const newAcc: SavedGoogleAccount = {
+      email: res.email,
+      firstName: initialFirstName,
+      lastName: initialLastName,
+      phone: initialPhone,
+      source: 'Google Account'
+    };
+
+    saveAccountToStorage(newAcc);
 
     onApply({
       email: res.email,
-      firstName: firstNameInput.trim(),
-      lastName: lastNameInput.trim(),
-      phone: phoneInput.trim()
+      firstName: initialFirstName,
+      lastName: initialLastName,
+      phone: initialPhone
     });
     onClose();
   };
 
-  const handleAppendGmail = () => {
-    const raw = emailInput.trim();
-    if (!raw) return;
-    if (!raw.includes('@')) {
-      setEmailInput(`${raw}@gmail.com`);
-    } else {
-      const user = raw.split('@')[0];
-      setEmailInput(`${user}@gmail.com`);
-    }
-  };
-
-  const handleOAuthClick = async () => {
-    if (!onSignInOAuth) {
-      setOAuthNotice('Direct Google Sign-in is available below. Enter your Google account for instant autofill.');
+  const handleAppendDomain = (domain: string) => {
+    const raw = manualEmail.trim();
+    if (!raw) {
+      setManualEmail(`yourname${domain}`);
       return;
     }
-    setIsOAuthLoading(true);
-    setOAuthNotice(null);
-    try {
-      await onSignInOAuth();
-    } catch (err: any) {
-      console.warn('[Google OAuth notice]:', err);
-      setOAuthNotice('Google OAuth is not configured on this domain yet. Please enter your Google email (@gmail.com) below for instant 1-click autofill & calendar sync.');
-    } finally {
-      setIsOAuthLoading(false);
+    if (!raw.includes('@')) {
+      setManualEmail(`${raw}${domain}`);
+    } else {
+      const user = raw.split('@')[0];
+      setManualEmail(`${user}${domain}`);
     }
+    setValidationError(null);
   };
-
-  const isEmailValid = emailInput.trim().length > 0 && !validationError;
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
+      <div 
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
+        onClick={onClose}
+      >
         <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 10 }}
-          transition={{ duration: 0.2, ease: "easeOut" }}
-          className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-neutral-200 overflow-hidden my-8"
+          transition={{ duration: 0.15, ease: "easeOut" }}
+          className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-neutral-200 overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
-          <div className="relative bg-gradient-to-r from-neutral-900 via-neutral-900 to-neutral-800 text-white p-5 sm:p-6 border-b border-white/10">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shadow-md shrink-0">
-                  <GoogleGIcon className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                      Auto-fill with Google
-                    </h3>
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                      <ShieldCheck className="w-3 h-3" /> Verified
-                    </span>
-                  </div>
-                  <p className="text-xs text-neutral-300 mt-0.5">
-                    1-Click booking autofill & Google Calendar synchronization
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={onClose}
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-neutral-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                aria-label="Close modal"
-              >
-                <X className="w-4 h-4" />
-              </button>
+          <div className="p-5 pb-4 text-center relative border-b border-neutral-100 bg-linear-to-b from-neutral-50/70 to-white">
+            <button
+              type="button"
+              onClick={onClose}
+              className="absolute right-4 top-4 w-8 h-8 rounded-full hover:bg-neutral-100 text-neutral-400 hover:text-neutral-700 flex items-center justify-center transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="w-12 h-12 rounded-2xl bg-white border border-neutral-200/80 flex items-center justify-center mx-auto mb-2.5 shadow-xs">
+              <GoogleGIcon className="w-6 h-6" />
             </div>
+
+            <h3 className="text-base sm:text-lg font-bold text-neutral-900 tracking-tight">
+              Auto-fill with Google
+            </h3>
+            <p className="text-xs text-neutral-500 mt-0.5 max-w-xs mx-auto">
+              Select your Google Account to automatically paste your details into the booking form.
+            </p>
           </div>
 
-          <div className="p-5 sm:p-6 max-h-[calc(85vh-120px)] overflow-y-auto space-y-5">
-            {/* Remembered Accounts Section (if any) */}
+          <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+            {/* List of Detected Google Accounts for 1-Click Selection */}
             {savedAccounts.length > 0 && (
               <div className="space-y-2">
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500">
-                  Select a Remembered Google Account
-                </label>
+                <div className="flex items-center justify-between text-xs px-1 text-neutral-500 font-medium">
+                  <span>Select an account:</span>
+                  <span>1-click auto-fill</span>
+                </div>
+
                 <div className="space-y-2">
-                  {savedAccounts.map((acc, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleSelectAccount(acc)}
-                      className="w-full text-left p-3 rounded-xl border border-neutral-200 hover:border-emerald-500 hover:bg-emerald-50/40 transition-all flex items-center justify-between group cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-8 h-8 rounded-full bg-neutral-100 group-hover:bg-emerald-100 text-neutral-700 group-hover:text-emerald-700 font-bold text-xs flex items-center justify-center shrink-0 transition-colors">
-                          {acc.firstName ? acc.firstName[0].toUpperCase() : 'G'}
+                  {savedAccounts.map((acc, idx) => {
+                    const initial = acc.firstName 
+                      ? acc.firstName[0].toUpperCase() 
+                      : acc.email[0].toUpperCase();
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => handleSelectAccount(acc)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            handleSelectAccount(acc);
+                          }
+                        }}
+                        className="w-full text-left p-3 rounded-xl border border-neutral-200 hover:border-emerald-500 bg-white hover:bg-emerald-50/40 transition-all flex items-center justify-between group cursor-pointer shadow-2xs hover:shadow-xs"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-full bg-blue-50 group-hover:bg-emerald-100 text-blue-600 group-hover:text-emerald-700 font-bold text-sm flex items-center justify-center shrink-0 transition-colors border border-blue-100 group-hover:border-emerald-200">
+                            {initial}
+                          </div>
+                          <div className="truncate">
+                            <p className="text-xs sm:text-sm font-bold text-neutral-900 group-hover:text-emerald-950 truncate">
+                              {acc.firstName || acc.lastName ? `${acc.firstName} ${acc.lastName}`.trim() : 'Google Account'}
+                            </p>
+                            <p className="text-xs text-neutral-600 group-hover:text-emerald-700 truncate font-mono">
+                              {acc.email}
+                            </p>
+                          </div>
                         </div>
-                        <div className="truncate">
-                          <p className="text-xs font-bold text-neutral-900 group-hover:text-emerald-900 truncate">
-                            {acc.firstName || acc.lastName ? `${acc.firstName} ${acc.lastName}`.trim() : 'Google User'}
-                          </p>
-                          <p className="text-[11px] text-neutral-500 group-hover:text-emerald-700 truncate font-mono">
-                            {acc.email}
-                          </p>
+
+                        <div className="flex items-center gap-2 shrink-0 ml-2">
+                          <span className="text-xs font-bold text-emerald-600 group-hover:text-emerald-700 flex items-center gap-1">
+                            Select
+                            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => handleRemoveAccount(e, acc.email)}
+                            title="Remove account from list"
+                            className="w-7 h-7 rounded-lg hover:bg-neutral-100 text-neutral-400 hover:text-brand-red flex items-center justify-center transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 group-hover:translate-x-0.5 transition-transform shrink-0 ml-2">
-                        <span>Auto-fill</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="relative my-4">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-neutral-200"></div>
-                  </div>
-                  <div className="relative flex justify-center text-xs">
-                    <span className="bg-white px-2 text-neutral-400 font-medium">or enter details</span>
-                  </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
-            {/* Manual Account Form */}
-            <form onSubmit={handleApplyCurrent} className="space-y-4">
-              {/* Google Email Input */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
-                  <label className="text-xs font-bold text-neutral-800 flex items-center gap-1.5">
-                    <GoogleGIcon className="w-3.5 h-3.5" />
-                    <span>Your Google Account Email <span className="text-brand-red">*</span></span>
-                  </label>
-                  {isEmailValid && (
-                    <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      Verified Google Account
-                    </span>
+            {/* Quick Add / Enter Google Email */}
+            {showAddForm ? (
+              <form onSubmit={handleApplyManual} className="pt-1 space-y-3">
+                <div className="flex items-center justify-between text-xs px-1">
+                  <span className="font-bold text-neutral-800">
+                    {savedAccounts.length > 0 ? 'Use another Google account:' : 'Enter your Google email:'}
+                  </span>
+                  {savedAccounts.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddForm(false)}
+                      className="text-xs text-blue-600 hover:underline cursor-pointer font-medium"
+                    >
+                      Cancel
+                    </button>
                   )}
                 </div>
 
@@ -344,163 +410,55 @@ export const GoogleAutofillModal: React.FC<GoogleAutofillModalProps> = ({
                   </div>
                   <input
                     type="email"
-                    required
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    placeholder="yourname@gmail.com"
+                    value={manualEmail}
+                    onChange={(e) => {
+                      setManualEmail(e.target.value);
+                      setValidationError(null);
+                    }}
+                    placeholder="e.g. yourname@gmail.com"
                     autoFocus
-                    className={`w-full bg-neutral-50 border rounded-xl pl-10 pr-24 py-2.5 text-xs sm:text-sm text-neutral-900 focus:outline-none transition-all ${
-                      validationError
-                        ? 'border-brand-red ring-2 ring-brand-red/20 bg-rose-50/40'
-                        : isEmailValid
-                          ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/20'
-                          : 'border-neutral-200 focus:border-brand-red focus:bg-white'
-                    }`}
+                    className="w-full bg-neutral-50 border border-neutral-200 rounded-xl pl-10 pr-24 py-2.5 text-xs sm:text-sm text-neutral-900 focus:outline-none focus:border-emerald-500 focus:bg-white transition-all shadow-inner"
                   />
-                  {!emailInput.includes('@') && emailInput.trim().length > 1 && (
-                    <button
-                      type="button"
-                      onClick={handleAppendGmail}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-white hover:bg-neutral-100 border border-neutral-300 rounded-md text-[11px] font-semibold text-neutral-700 transition-colors shadow-2xs cursor-pointer"
-                      title="Append @gmail.com"
-                    >
-                      + @gmail.com
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleAppendDomain('@gmail.com')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-white hover:bg-neutral-100 border border-neutral-300 rounded-md text-[11px] font-semibold text-neutral-700 transition-colors shadow-2xs cursor-pointer"
+                  >
+                    + @gmail.com
+                  </button>
                 </div>
 
                 {validationError && (
-                  <p className="text-[11px] text-brand-red mt-1.5 flex items-start gap-1 font-medium">
+                  <p className="text-[11px] text-brand-red flex items-start gap-1 font-medium bg-red-50 p-2 rounded-lg border border-red-100">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <span>{validationError}</span>
                   </p>
                 )}
 
-                {suggestion && (
-                  <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2">
-                    <span className="text-xs text-amber-900 font-medium">
-                      Did you mean <strong>{suggestion}</strong>?
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEmailInput(suggestion);
-                        setSuggestion(null);
-                        setValidationError(null);
-                      }}
-                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                    >
-                      Apply Fix
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Student Name Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-600 mb-1">
-                    First Name
-                  </label>
-                  <div className="relative">
-                    <User className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={firstNameInput}
-                      onChange={(e) => setFirstNameInput(e.target.value)}
-                      placeholder="e.g. Sana"
-                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl pl-9 pr-3 py-2 text-xs sm:text-sm text-neutral-900 focus:outline-none focus:border-brand-red focus:bg-white transition-all"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-600 mb-1">
-                    Last Name
-                  </label>
-                  <div className="relative">
-                    <User className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={lastNameInput}
-                      onChange={(e) => setLastNameInput(e.target.value)}
-                      placeholder="e.g. Sindhi"
-                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl pl-9 pr-3 py-2 text-xs sm:text-sm text-neutral-900 focus:outline-none focus:border-brand-red focus:bg-white transition-all"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Phone (Optional) */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-600 mb-1">
-                  Mobile Number (Optional)
-                </label>
-                <div className="relative">
-                  <Phone className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
-                  <input
-                    type="tel"
-                    value={phoneInput}
-                    onChange={(e) => setPhoneInput(e.target.value)}
-                    placeholder="0412 345 678"
-                    className="w-full bg-neutral-50 border border-neutral-200 rounded-xl pl-9 pr-3 py-2 text-xs sm:text-sm text-neutral-900 focus:outline-none focus:border-brand-red focus:bg-white transition-all"
-                  />
-                </div>
-              </div>
-
-              {/* Benefits highlight card */}
-              <div className="p-3 bg-neutral-50 rounded-xl border border-neutral-200 text-xs text-neutral-600 space-y-1.5">
-                <div className="flex items-center gap-2 text-neutral-900 font-semibold">
-                  <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                  <span>What Google Account sync gives you:</span>
-                </div>
-                <ul className="space-y-1 text-[11px] text-neutral-600 pl-5 list-disc">
-                  <li>Instant Google Calendar invitation with RMS test and lesson location</li>
-                  <li>Live booking receipts & tax invoice delivered to your primary inbox</li>
-                  <li>Guaranteed RMS instructor dispatch notifications without spam filter drops</li>
-                </ul>
-              </div>
-
-              {oAuthNotice && (
-                <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                  <span>{oAuthNotice}</span>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
                 <button
                   type="submit"
-                  disabled={!isEmailValid}
-                  className={`flex-1 py-3 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
-                    isEmailValid
-                      ? 'bg-brand-black hover:bg-brand-red text-white hover:shadow-brand-red/20 active:scale-[0.98]'
-                      : 'bg-neutral-200 text-neutral-400 cursor-not-allowed shadow-none'
-                  }`}
+                  className="w-full py-2.5 px-4 rounded-xl bg-neutral-900 hover:bg-neutral-800 active:scale-[0.99] text-white font-bold text-xs sm:text-sm transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <GoogleGIcon className="w-4 h-4" />
-                  <span>Apply & Auto-fill Booking</span>
-                  <Check className="w-4 h-4" />
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span>Auto-fill This Account</span>
                 </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowAddForm(true)}
+                className="w-full p-3 rounded-xl border border-dashed border-neutral-300 hover:border-neutral-400 hover:bg-neutral-50 transition-all flex items-center justify-center gap-2 text-xs font-semibold text-neutral-700 cursor-pointer"
+              >
+                <Plus className="w-4 h-4 text-neutral-500" />
+                <span>Use another Google account</span>
+              </button>
+            )}
 
-                {onSignInOAuth && (
-                  <button
-                    type="button"
-                    onClick={handleOAuthClick}
-                    disabled={isOAuthLoading}
-                    className="py-3 px-4 rounded-xl font-semibold text-xs sm:text-sm border border-neutral-300 hover:bg-neutral-50 text-neutral-700 flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                  >
-                    {isOAuthLoading ? (
-                      <div className="w-4 h-4 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    )}
-                    <span>Sign in with Google</span>
-                  </button>
-                )}
-              </div>
-            </form>
+            {/* Google Sync Assurance */}
+            <div className="pt-2 border-t border-neutral-100 flex items-center justify-center gap-1.5 text-[11px] text-neutral-400 text-center">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              <span>Instant auto-paste & Google Calendar synchronization</span>
+            </div>
           </div>
         </motion.div>
       </div>

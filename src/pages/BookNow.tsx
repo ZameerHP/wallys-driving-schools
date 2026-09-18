@@ -342,49 +342,8 @@ export function BookNow() {
     }
   }, [auth?.user]);
 
-  const handleAutofillWithGoogle = async () => {
-    // 1. If currently signed in via AuthContext
-    if (auth?.user?.email) {
-      const gEmail = auth.user.email;
-      setEmail(gEmail);
-      setEmailTouched(true);
-      setIsGoogleVerified(true);
-      const fullName = auth.user.user_metadata?.full_name || auth.user.user_metadata?.name || '';
-      if (fullName) {
-        const parts = fullName.trim().split(' ');
-        if (!firstName) setFirstName(parts[0] || '');
-        if (!lastName && parts.length > 1) setLastName(parts.slice(1).join(' ') || '');
-      }
-      setInfoErrors(prev => {
-        const copy = { ...prev };
-        delete copy.email;
-        return copy;
-      });
-      setAutofillSuccessNotice(`✓ Auto-filled with connected Google Account: ${gEmail}`);
-      setTimeout(() => setAutofillSuccessNotice(null), 5000);
-      return;
-    }
-
-    // 2. Check if a remembered account exists and form email is empty
-    const saved = getSavedGoogleAccount();
-    if (saved?.email && (!email || email !== saved.email)) {
-      setEmail(saved.email);
-      setEmailTouched(true);
-      setIsGoogleVerified(true);
-      if (saved.firstName && !firstName) setFirstName(saved.firstName);
-      if (saved.lastName && !lastName) setLastName(saved.lastName);
-      if (saved.phone && !phone) setPhone(saved.phone);
-      setInfoErrors(prev => {
-        const copy = { ...prev };
-        delete copy.email;
-        return copy;
-      });
-      setAutofillSuccessNotice(`✓ Auto-filled with remembered Google Account: ${saved.email}`);
-      setTimeout(() => setAutofillSuccessNotice(null), 5000);
-      return;
-    }
-
-    // 3. Open the interactive Google Autofill Modal
+  const handleAutofillWithGoogle = () => {
+    // Open the Google Account Selector modal for 1-click account selection & auto-paste
     setIsGoogleAutofillModalOpen(true);
   };
 
@@ -2757,29 +2716,7 @@ export function BookNow() {
                         </div>
                       )}
 
-                      {/* Google Quick Autofill Card */}
-                      {(!email || !isGoogleVerified) && (
-                        <div className="p-3 bg-gradient-to-r from-neutral-900 via-neutral-900 to-neutral-800 text-white rounded-xl shadow-xs flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-xs">
-                              <GoogleGIcon className="w-4 h-4" />
-                            </div>
-                            <div className="truncate">
-                              <p className="text-xs font-bold leading-tight text-white">Speed up booking with Google</p>
-                              <p className="text-[11px] text-neutral-300 truncate">1-click auto-fill for name, email & Google Calendar invites</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={handleAutofillWithGoogle}
-                            className="px-3 py-1.5 bg-white hover:bg-neutral-100 text-neutral-900 rounded-lg text-xs font-bold transition-all shrink-0 active:scale-95 cursor-pointer shadow-xs flex items-center gap-1.5"
-                          >
-                            <GoogleGIcon className="w-3.5 h-3.5" />
-                            <span>Auto-fill</span>
-                          </button>
-                        </div>
-                      )}
-
+                      {/* First Name & Last Name Form Inputs */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {/* First Name */}
                         <div>
@@ -2845,16 +2782,20 @@ export function BookNow() {
                               <button
                                 type="button"
                                 onClick={handleAutofillWithGoogle}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] font-semibold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 hover:border-neutral-400 rounded-lg shadow-xs transition-all active:scale-95 cursor-pointer"
-                                title="Auto-fill with your connected Google Account"
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 hover:border-neutral-400 rounded-lg shadow-2xs transition-all active:scale-95 cursor-pointer"
+                                title="Auto-fill with your Google Account"
                               >
                                 <GoogleGIcon className="w-3.5 h-3.5" />
-                                <span>{auth?.user?.email ? 'Use My Google Account' : 'Auto-fill with Google'}</span>
+                                <span>Auto-fill with Google</span>
                               </button>
                             )}
                           </div>
                           <div className="relative">
                             <input 
+                              id="student-email-input"
+                              name="email"
+                              autoComplete="email"
+                              inputMode="email"
                               type="email"
                               value={email}
                               onChange={(e) => {
@@ -3327,7 +3268,6 @@ export function BookNow() {
         initialFirstName={firstName}
         initialLastName={lastName}
         initialPhone={phone}
-        onSignInOAuth={typeof auth?.signInWithGoogle === 'function' ? auth.signInWithGoogle : undefined}
       />
     </div>
   );

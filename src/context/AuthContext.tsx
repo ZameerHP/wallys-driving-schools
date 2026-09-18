@@ -69,15 +69,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signInWithGoogle = async () => {
     const sb = getSupabase();
     if (!sb) throw new Error('Supabase is not configured');
-    const { error } = await sb.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: window.location.origin,
-      },
-    });
-    if (error) {
-      console.error('[Supabase Auth] Google sign in error:', error.message);
-      throw error;
+    try {
+      const { error } = await sb.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+        },
+      });
+      if (error) {
+        console.warn('[Supabase Auth] Google sign in provider is not enabled in Supabase:', error.message);
+        throw error;
+      }
+    } catch (err: any) {
+      console.warn('[Supabase Auth] Google sign in failed:', err?.message || err);
+      throw err;
     }
   };
 
