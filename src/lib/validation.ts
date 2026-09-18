@@ -338,24 +338,23 @@ export interface EmailValidationResult {
 }
 
 /**
- * Validates that an email address is a genuine, active Google registered email (@gmail.com or @googlemail.com),
- * non-disposable, non-dummy, and strictly adhering to Google's account registration standards.
+ * Validates that an email address is a genuine, standard email format.
  */
-export function validateWorkingEmail(rawEmail: string, options: { requireGoogle?: boolean } = { requireGoogle: true }): EmailValidationResult {
+export function validateWorkingEmail(rawEmail: string, options: { requireGoogle?: boolean } = { requireGoogle: false }): EmailValidationResult {
   const email = (rawEmail || '').trim().toLowerCase();
 
   if (!email) {
     return { 
       isValid: false, 
       email: '', 
-      error: 'Google email address is required to receive your booking confirmation, Google Calendar invite & tax receipt.' 
+      error: 'Email address is required to receive your booking confirmation & code.' 
     };
   }
 
   // Basic RFC 5322 structure
   const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
   if (!emailRegex.test(email)) {
-    return { isValid: false, email, error: 'Please enter a valid Google email address (e.g. yourname@gmail.com).' };
+    return { isValid: false, email, error: 'Please enter a valid email address (e.g. yourname@email.com).' };
   }
 
   // Prevent consecutive dots or trailing/leading dots
@@ -406,116 +405,12 @@ export function validateWorkingEmail(rawEmail: string, options: { requireGoogle?
     return { isValid: false, email, error: 'Test or dummy email domains are not allowed. Please enter your real Google account (@gmail.com).' };
   }
 
-  // Require Google Registered Email by default
+  // Verify basic username validity
+  if (!username || username.length < 1) {
+    return { isValid: false, email, error: 'Please enter a valid email address.' };
+  }
+
   const isGoogleDomain = domain === 'gmail.com' || domain === 'googlemail.com';
-  if (options.requireGoogle !== false && !isGoogleDomain) {
-    return {
-      isValid: false,
-      email,
-      isGoogle: false,
-      error: 'Only Google-registered emails (@gmail.com) are accepted to ensure real delivery of booking confirmations and Google Calendar invites.'
-    };
-  }
-
-  // Google Account username checks
-  const cleanUsername = username.replace(/\./g, '');
-  
-  if (cleanUsername.length < 6) {
-    return { 
-      isValid: false, 
-      email, 
-      isGoogle: isGoogleDomain,
-      error: 'Google requires Gmail usernames to be at least 6 characters (letters and numbers).' 
-    };
-  }
-  if (cleanUsername.length > 30) {
-    return { 
-      isValid: false, 
-      email, 
-      isGoogle: isGoogleDomain,
-      error: 'Google requires Gmail usernames to be 30 characters or fewer.' 
-    };
-  }
-
-  // Google only allows letters, numbers, and periods in email usernames
-  if (!/^[a-z0-9.]+$/.test(username)) {
-    return {
-      isValid: false,
-      email,
-      isGoogle: isGoogleDomain,
-      error: 'Google email usernames can only contain letters (a-z), numbers (0-9), and periods (.).'
-    };
-  }
-
-  // Google does not allow consecutive, leading, or trailing periods in usernames
-  if (username.startsWith('.') || username.endsWith('.') || username.includes('..')) {
-    return {
-      isValid: false,
-      email,
-      isGoogle: isGoogleDomain,
-      error: 'Google does not allow consecutive, leading, or trailing periods in Gmail usernames.'
-    };
-  }
-
-  // Google requires Gmail usernames to contain letters (cannot be all numbers)
-  if (!/[a-z]/.test(cleanUsername)) {
-    return {
-      isValid: false,
-      email,
-      isGoogle: isGoogleDomain,
-      error: 'Google requires Gmail usernames to contain letters (cannot be purely numeric).'
-    };
-  }
-
-  // Check exact dummy usernames
-  if (DUMMY_USERNAMES.has(cleanUsername) || DUMMY_USERNAMES.has(username)) {
-    return { 
-      isValid: false, 
-      email, 
-      isGoogle: isGoogleDomain,
-      error: `"${username}@gmail.com" is a placeholder/test username. Please enter your real personal Google account.` 
-    };
-  }
-
-  // Check pattern-based dummy usernames (e.g., test123, fake99, asdf88, user123)
-  if (/^(test|fake|dummy|asdf|sample|noemail|nomail|burner|trash|junk|temp|temporary|demo|trial|placeholder|example|random|user|guest|customer|nobody|someone|somebody|anyone|anybody|client|learner|student|driver|admin|testing|tester)[0-9_.-]*/i.test(cleanUsername)) {
-    return { 
-      isValid: false, 
-      email, 
-      isGoogle: isGoogleDomain,
-      error: 'Please enter your genuine personal Google email, not a test or placeholder address.' 
-    };
-  }
-
-  // Check sequential numbers pattern
-  if (/(01234|12345|23456|34567|45678|56789|98765|87654|76543|65432|54321)/.test(cleanUsername)) {
-    return {
-      isValid: false,
-      email,
-      isGoogle: isGoogleDomain,
-      error: 'Sequential numbers detected. Please enter your real Google account.'
-    };
-  }
-
-  // Check keyboard smash rows
-  if (/(qwerty|qwertz|azerty|asdfgh|zxcvbn|poiuyt|lkjhgf|mnbvcx)/.test(cleanUsername)) {
-    return {
-      isValid: false,
-      email,
-      isGoogle: isGoogleDomain,
-      error: 'Keyboard smash pattern detected. Please enter your real Google account.'
-    };
-  }
-
-  // Check single character repeated 4+ times (e.g. aaaaa@, 11111@) or repetitive patterns
-  if (/(.)\1{3,}/.test(cleanUsername) || /(..+)\1{2,}/.test(cleanUsername) || cleanUsername === 'asdfasdf' || cleanUsername === 'qweqwe' || cleanUsername === '121212' || cleanUsername === '123123' || cleanUsername === 'ababab' || cleanUsername === 'abcabc') {
-    return { 
-      isValid: false, 
-      email, 
-      isGoogle: isGoogleDomain,
-      error: 'Repetitive pattern detected. Please enter your real, active Google email address.' 
-    };
-  }
 
   return { 
     isValid: true, 

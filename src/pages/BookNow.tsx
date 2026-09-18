@@ -405,8 +405,8 @@ export function BookNow() {
     const emailCheck = validateWorkingEmail(cleanEmail);
     if (!emailCheck.isValid) {
       setEmailTouched(true);
-      setInfoErrors(prev => ({ ...prev, email: emailCheck.error || 'Please enter a valid Google email address.' }));
-      setVerificationError(emailCheck.error || 'Please enter a valid Google email address.');
+      setInfoErrors(prev => ({ ...prev, email: emailCheck.error || 'Please enter a valid email address.' }));
+      setVerificationError(emailCheck.error || 'Please enter a valid email address.');
       return;
     }
 
@@ -431,9 +431,9 @@ export function BookNow() {
       }
 
       setCodeSent(true);
+      setVerificationCode('');
       setVerificationSuccessMsg('Verification code sent to your email.');
       setResendCooldown(data.cooldownSeconds || 60);
-      setVerificationCode('');
     } catch (err: any) {
       setVerificationError('Unable to send the verification code. Please try again.');
     } finally {
@@ -1580,12 +1580,12 @@ export function BookNow() {
     const targetDate = primaryItem.date || selectedDate;
     const targetTime = primaryItem.time || selectedTimeSlot;
 
-    // Authoritative Google email validation before initiating any payment
+    // Email validation before initiating any payment
     const emailCheck = validateWorkingEmail(email);
     if (!emailCheck.isValid) {
       setIsProcessing(false);
       setEmailTouched(true);
-      setInfoErrors(prev => ({ ...prev, email: emailCheck.error || 'A valid Google email address (@gmail.com) is required.' }));
+      setInfoErrors(prev => ({ ...prev, email: emailCheck.error || 'A valid email address is required.' }));
       setEmailSuggestion(emailCheck.suggestion || null);
       setActiveStepId('info');
       return;
@@ -2904,23 +2904,15 @@ export function BookNow() {
                         <div>
                           <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
                             <label className="text-xs font-bold text-brand-black/80 uppercase tracking-wider flex items-center gap-1.5">
-                              <GoogleGIcon className="w-3.5 h-3.5 shrink-0" />
-                              <span>Google Account Email <span className="text-brand-red">*</span></span>
+                              <Mail className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+                              <span>Email Address <span className="text-brand-red">*</span></span>
                             </label>
-                            {email.trim() && !infoErrors.email ? (
+                            {isEmailVerified ? (
                               <div className="flex items-center gap-1.5">
                                 <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                  Google Account Verified
+                                  Verified
                                 </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setIsGoogleAutofillModalOpen(true)}
-                                  className="text-[11px] text-neutral-500 hover:text-brand-black font-semibold underline cursor-pointer"
-                                  title="Change or switch Google account"
-                                >
-                                  Switch
-                                </button>
                               </div>
                             ) : (
                               <button
@@ -2969,7 +2961,7 @@ export function BookNow() {
                                 if (!res.isValid) {
                                   setIsGoogleVerified(false);
                                   setEmailSuggestion(res.suggestion || null);
-                                  setInfoErrors(prev => ({ ...prev, email: res.error || 'Please enter a valid Google email address' }));
+                                  setInfoErrors(prev => ({ ...prev, email: res.error || 'Please enter a valid email address' }));
                                 } else {
                                   setIsGoogleVerified(true);
                                   setEmailSuggestion(null);
@@ -2984,14 +2976,14 @@ export function BookNow() {
                                 setEmailTouched(true);
                                 if (!email.trim()) {
                                   setIsGoogleVerified(false);
-                                  setInfoErrors(prev => ({ ...prev, email: 'Google email address is required to receive your booking confirmation & calendar invite.' }));
+                                  setInfoErrors(prev => ({ ...prev, email: 'Email address is required to receive your booking confirmation & code.' }));
                                   return;
                                 }
                                 const res = validateWorkingEmail(email);
                                 if (!res.isValid) {
                                   setIsGoogleVerified(false);
                                   setEmailSuggestion(res.suggestion || null);
-                                  setInfoErrors(prev => ({ ...prev, email: res.error || 'Please enter a valid Google email address' }));
+                                  setInfoErrors(prev => ({ ...prev, email: res.error || 'Please enter a valid email address' }));
                                 } else {
                                   setEmail(res.email);
                                   setIsGoogleVerified(true);
@@ -3003,7 +2995,7 @@ export function BookNow() {
                                   });
                                 }
                               }}
-                              placeholder="yourname@gmail.com"
+                              placeholder="name@example.com"
                               className={cn(
                                 "w-full bg-brand-offwhite border rounded-xl px-4 py-2.5 text-xs sm:text-sm focus:outline-none transition-all pr-10",
                                 infoErrors.email 
@@ -3025,7 +3017,7 @@ export function BookNow() {
                               </div>
                             ) : (
                               <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none opacity-40">
-                                <GoogleGIcon className="w-4 h-4" />
+                                <Mail className="w-4 h-4 text-neutral-400" />
                               </div>
                             )}
                           </div>
@@ -3065,12 +3057,6 @@ export function BookNow() {
                               <span>{infoErrors.email}</span>
                             </div>
                           )}
-                          {!infoErrors.email && (
-                            <span className="text-[10px] text-brand-black/50 block mt-1">
-                              Only Google-registered accounts (@gmail.com) are accepted to ensure real delivery of lesson confirmations and calendar sync.
-                            </span>
-                          )}
-
                           {/* Real Email Verification Section */}
                           <div className="mt-2.5">
                             {isEmailVerified ? (
@@ -3079,7 +3065,7 @@ export function BookNow() {
                                 <div className="flex items-center gap-2">
                                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                                   <span className="text-xs sm:text-sm font-bold text-emerald-900">
-                                    ✓ Email verified successfully
+                                    Email verified
                                   </span>
                                 </div>
                                 <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-md shrink-0">
@@ -3088,7 +3074,7 @@ export function BookNow() {
                               </div>
                             ) : !codeSent ? (
                               /* Send Verification Code Button */
-                              <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-0.5">
+                              <div className="pt-0.5">
                                 <button
                                   type="button"
                                   id="send-verification-code-btn"
@@ -3103,7 +3089,7 @@ export function BookNow() {
                                   {isSendingCode ? (
                                     <>
                                       <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-red" />
-                                      <span>Sending Verification Code...</span>
+                                      <span>Sending Code...</span>
                                     </>
                                   ) : (
                                     <>
@@ -3112,19 +3098,13 @@ export function BookNow() {
                                     </>
                                   )}
                                 </button>
-                                <span className="text-[11px] text-neutral-500">
-                                  We will send a 6-digit verification code to confirm access.
-                                </span>
                               </div>
                             ) : (
                               /* Verification Code Input & Action Box */
                               <div className="p-3.5 bg-neutral-50 border border-neutral-200 rounded-xl space-y-3 shadow-2xs">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800">
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                    <span>Verification code sent to your email.</span>
-                                  </div>
-                                  <span className="text-[10px] text-neutral-500 font-medium">Valid for 10 min</span>
+                                <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  <span>{verificationSuccessMsg || "Verification code sent to your email."}</span>
                                 </div>
 
                                 <div>
@@ -3139,7 +3119,7 @@ export function BookNow() {
                                       inputMode="numeric"
                                       pattern="[0-9]*"
                                       maxLength={6}
-                                      placeholder="123456"
+                                      placeholder="Enter 6-digit code"
                                       value={verificationCode}
                                       onChange={(e) => {
                                         const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
@@ -3152,7 +3132,7 @@ export function BookNow() {
                                         setVerificationCode(pasted);
                                         if (verificationError) setVerificationError(null);
                                       }}
-                                      className="flex-1 tracking-[0.25em] font-mono text-base font-bold text-center sm:text-left px-3 py-2 bg-white border border-neutral-300 rounded-lg focus:outline-none focus:border-brand-red focus:ring-2 focus:ring-brand-red/15 transition-all"
+                                      className="flex-1 tracking-[0.2em] font-mono text-sm sm:text-base font-bold text-center sm:text-left px-3 py-2 bg-white border border-neutral-300 rounded-lg focus:outline-none focus:border-brand-red focus:ring-2 focus:ring-brand-red/15 transition-all"
                                     />
                                     <button
                                       type="button"
@@ -3172,18 +3152,17 @@ export function BookNow() {
                                       ) : (
                                         <>
                                           <Check className="w-3.5 h-3.5" />
-                                          <span>Verify Email</span>
+                                          <span>Verify Code</span>
                                         </>
                                       )}
                                     </button>
                                   </div>
                                 </div>
 
-                                <div className="flex items-center justify-between text-xs pt-1 border-t border-neutral-200/60">
-                                  <span className="text-neutral-500 text-[11px]">Didn't receive the code?</span>
+                                <div className="flex items-center justify-end text-xs pt-1 border-t border-neutral-200/60">
                                   {resendCooldown > 0 ? (
                                     <span className="text-[11px] font-semibold text-neutral-400">
-                                      Resend code in {resendCooldown}s
+                                      Resend in {resendCooldown}s
                                     </span>
                                   ) : (
                                     <button
@@ -3192,7 +3171,7 @@ export function BookNow() {
                                       disabled={isSendingCode}
                                       className="text-[11px] font-bold text-brand-red hover:underline cursor-pointer transition-colors inline-flex items-center gap-1"
                                     >
-                                      {isSendingCode ? 'Sending...' : 'Resend Code'}
+                                      <span>Resend Code</span>
                                     </button>
                                   )}
                                 </div>
