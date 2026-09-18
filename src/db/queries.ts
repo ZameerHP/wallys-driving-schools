@@ -1454,6 +1454,28 @@ export async function deleteTimeOffBlock(id: number | string, fallbackDate?: str
   return true;
 }
 
+export async function clearAllTimeOffBlocks(instructorId?: string): Promise<boolean> {
+  await ensureTimeOffTable();
+  const supabase = getSupabaseServerClient();
+  if (supabase) {
+    try {
+      if (instructorId) {
+        await supabase.from('instructor_time_off').delete().eq('instructor_id', instructorId);
+      } else {
+        await supabase.from('instructor_time_off').delete().neq('id', 0);
+      }
+    } catch {}
+  }
+  if (db) {
+    try {
+      await db.delete(instructorTimeOff);
+    } catch {}
+  }
+  inMemoryTimeOff = [];
+  writeTimeOffFile([]);
+  return true;
+}
+
 // Authoritatively test if a date or time slot is blocked by instructor availability, operating hours, breaks, or external calendar
 export async function checkDateOrSlotBlockedByTimeOff(
   date: string,

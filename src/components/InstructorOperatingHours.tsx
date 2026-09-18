@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { broadcastAvailabilityChange } from '../lib/timeOff';
+import { apiUrl } from '../lib/api';
+import { clearAllAvailabilityData } from '../lib/operatingHours';
 
 export interface TimePeriod {
   start: string;
@@ -122,6 +124,7 @@ export function InstructorOperatingHours() {
   const [timezone, setTimezone] = useState<string>(initial.tz);
   const [isLoading, setIsLoading] = useState<boolean>(!initial.hasCache);
   const [isSaving, setIsSaving] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Synchronous references to eliminate stale closures and fast click race-conditions
@@ -147,7 +150,7 @@ export function InstructorOperatingHours() {
   const loadSettings = useCallback(async () => {
     try {
       const token = (typeof window !== 'undefined' && localStorage.getItem('instructor_token')) || 'wally_owner_session';
-      const res = await fetch(`/api/instructor/operating-hours?_t=${Date.now()}`, {
+      const res = await fetch(apiUrl(`/api/instructor/operating-hours?_t=${Date.now()}`), {
         headers: {
           'x-instructor-token': token,
           'Authorization': `Bearer ${token}`
@@ -249,7 +252,7 @@ export function InstructorOperatingHours() {
     // 2. Persist to server API
     try {
       const token = (typeof window !== 'undefined' && localStorage.getItem('instructor_token')) || 'wally_owner_session';
-      const res = await fetch('/api/instructor/operating-hours', {
+      const res = await fetch(apiUrl('/api/instructor/operating-hours'), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -436,6 +439,29 @@ export function InstructorOperatingHours() {
     }
   };
 
+  const handleClearAllData = async () => {
+    if (!window.confirm("Are you sure you want to clear all availability data and reset to pristine 7 days open? This will clear any blocked days and ensure all days are fully open.")) {
+      return;
+    }
+    setIsResetting(true);
+    setFeedback(null);
+    try {
+      const reset = await clearAllAvailabilityData();
+      setOperatingHours(reset.operatingHours);
+      operatingHoursRef.current = reset.operatingHours;
+      setBufferMinutes(reset.bufferMinutes);
+      bufferMinutesRef.current = reset.bufferMinutes;
+      setTimezone(reset.timezone);
+      timezoneRef.current = reset.timezone;
+      lastSavedTimestampRef.current = Date.now();
+      setFeedback({ type: 'success', message: 'All availability data cleared and reset to pristine 7 days open!' });
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: 'Failed to reset availability data: ' + (err.message || 'Unknown error') });
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="bg-white rounded-3xl p-12 text-center text-neutral-400 border border-neutral-200/80">
@@ -458,18 +484,31 @@ export function InstructorOperatingHours() {
           </p>
         </div>
 
-        <button
-          onClick={handleSaveHours}
-          disabled={isSaving}
-          className="px-6 py-2.5 rounded-xl bg-brand-red text-white font-bold text-sm hover:bg-neutral-900 transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-        >
-          {isSaving ? (
-            <RefreshCw className="w-4 h-4 animate-spin" />
-          ) : (
-            <Check className="w-4 h-4" />
-          )}
-          <span>{isSaving ? 'Saving...' : 'Save Changes'}</span>
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={handleClearAllData}
+            disabled={isResetting || isSaving}
+            className="px-4 py-2.5 rounded-xl border border-red-200 bg-red-50 text-red-700 font-bold text-xs sm:text-sm hover:bg-red-100 hover:border-red-300 transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            title="Clear all stale data & reset schedule to all 7 days open"
+          >
+            <RefreshCw className={cn("w-4 h-4", isResetting && "animate-spin")} />
+            <span>{isResetting ? 'Resetting...' : 'Clear All Data & Day-Offs'}</span>
+          </button>
+
+          <button
+            onClick={handleSaveHours}
+            disabled={isSaving || isResetting}
+            className="px-6 py-2.5 rounded-xl bg-brand-red text-white font-bold text-sm hover:bg-neutral-900 transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+          >
+            {isSaving ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Check className="w-4 h-4" />
+            )}
+            <span>{isSaving ? 'Saving...' : 'Save Changes'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Feedback Alert */}

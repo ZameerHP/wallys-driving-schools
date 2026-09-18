@@ -85,7 +85,7 @@ export interface AvailabilityPayload {
 }
 
 export function computeDisabledDays(hours?: WeeklyOperatingHours | Record<string, any>): number[] {
-  if (!hours) return [0];
+  if (!hours) return [];
   const daysMap: Record<string, number> = {
     sunday: 0,
     monday: 1,

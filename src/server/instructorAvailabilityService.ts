@@ -109,7 +109,7 @@ export function dayKeyToDayIndex(day: DayKey): number {
 }
 
 // Default initial schedule for Wally Driving School
-const DEFAULT_WEEKLY_HOURS: WeeklyOperatingHours = {
+export const DEFAULT_WEEKLY_HOURS: WeeklyOperatingHours = {
   monday: {
     day: 'monday',
     label: 'Monday',

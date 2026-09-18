@@ -3,6 +3,7 @@
 // Features an authoritative Tombstone Registry ensuring removed days NEVER resurrect on refresh.
 
 import { getSupabase } from './supabase';
+import { apiUrl } from './api';
 
 export interface TimeOffItem {
   id: string | number;
@@ -328,7 +329,7 @@ export async function fetchTimeOffBlocks(): Promise<TimeOffItem[]> {
 
   // 1. Try Backend API with cache-busting
   try {
-    const res = await fetch(`/api/availability/blocked-days?_t=${Date.now()}`, {
+    const res = await fetch(apiUrl(`/api/availability/blocked-days?_t=${Date.now()}`), {
       cache: 'no-store',
       headers: {
         'Accept': 'application/json',
@@ -440,7 +441,8 @@ export async function createClientTimeOffBlock(block: {
   // 2. Send to backend /api/instructor/time-off
   let savedItem: TimeOffItem = optimisticItem;
   try {
-    const url = block.id ? `/api/instructor/time-off/${encodeURIComponent(String(block.id))}` : '/api/instructor/time-off';
+    const rawPath = block.id ? `/api/instructor/time-off/${encodeURIComponent(String(block.id))}` : '/api/instructor/time-off';
+    const url = apiUrl(rawPath);
     const method = block.id ? 'PUT' : 'POST';
 
     const res = await fetch(url, {
@@ -557,7 +559,8 @@ export async function deleteClientTimeOffBlock(id: string | number, date: string
     const safeId = id ? String(id).trim() : '0';
     const deletePayload = JSON.stringify({ id, date, normDate });
 
-    let res = await fetch(`/api/instructor/time-off/${encodeURIComponent(safeId)}?date=${encodeURIComponent(date)}&normDate=${encodeURIComponent(normDate)}`, {
+    const rawDeleteUrl = `/api/instructor/time-off/${encodeURIComponent(safeId)}?date=${encodeURIComponent(date)}&normDate=${encodeURIComponent(normDate)}`;
+    let res = await fetch(apiUrl(rawDeleteUrl), {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
@@ -569,7 +572,7 @@ export async function deleteClientTimeOffBlock(id: string | number, date: string
 
     // Fallback POST endpoint if DELETE is blocked by host proxy
     if (!res || !res.ok) {
-      await fetch('/api/instructor/time-off/delete', {
+      await fetch(apiUrl('/api/instructor/time-off/delete'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

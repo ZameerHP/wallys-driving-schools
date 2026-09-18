@@ -32,7 +32,8 @@ import {
   timeStringToMinutes,
   minutesToTimeString,
   getInstructorSettingsDb,
-  saveInstructorSettingsDb
+  saveInstructorSettingsDb,
+  clearAllTimeOffBlocks
 } from "./src/db/queries.ts";
 import { STANDARD_START_TIMES } from "./src/lib/bookingSlots.ts";
 import {
@@ -49,7 +50,8 @@ import {
   deleteExternalEvent,
   syncIcalFeed,
   validateLessonSlot,
-  getWorkingPeriodsForDate
+  getWorkingPeriodsForDate,
+  DEFAULT_WEEKLY_HOURS
 } from "./src/server/instructorAvailabilityService.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { checkSupabaseConnection } from "./src/lib/supabase-server.ts";
@@ -116,7 +118,7 @@ const PORT = 3000;
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, stripe-signature");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, stripe-signature, x-instructor-token, X-Requested-With, Cache-Control, Pragma, Accept");
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -2030,7 +2032,7 @@ app.get("/api/availability", async (req, res) => {
 });
 
 // Public endpoint for Book Now page to get full operating hours, buffer, and disabled days
-app.get("/api/availability/operating-hours", async (req, res) => {
+app.get(["/api/availability/operating-hours", "/availability/operating-hours"], async (req, res) => {
   try {
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -2071,7 +2073,7 @@ app.get("/api/availability/operating-hours", async (req, res) => {
 });
 
 // Authenticated Instructor Operating Hours endpoints (Settings -> Operating Hours)
-app.get("/api/instructor/operating-hours", async (req, res) => {
+app.get(["/api/instructor/operating-hours", "/instructor/operating-hours"], async (req, res) => {
   try {
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -2107,7 +2109,7 @@ app.get("/api/instructor/operating-hours", async (req, res) => {
   }
 });
 
-app.put("/api/instructor/operating-hours", attachInstructorOrAuth, async (req, res) => {
+app.put(["/api/instructor/operating-hours", "/instructor/operating-hours"], attachInstructorOrAuth, async (req, res) => {
   try {
     const instructorId = (req as any).instructor?.instructorId || 'wally';
     const { operatingHours, bufferMinutes, timezone, minNoticeHours, maxAdvanceDays } = req.body;
@@ -2149,6 +2151,43 @@ app.put("/api/instructor/operating-hours", attachInstructorOrAuth, async (req, r
   } catch (err: any) {
     console.error("Error saving operating hours:", err);
     res.status(500).json({ error: "Failed to save operating hours" });
+  }
+});
+
+// Comprehensive Reset: Wipes all day-off blocks, resets operating hours to standard 7 days open
+app.post(["/api/instructor/reset-all-availability-data", "/instructor/reset-all-availability-data"], attachInstructorOrAuth, async (req, res) => {
+  try {
+    const instructorId = (req as any).instructor?.instructorId || 'wally';
+
+    const resetSettings = saveInstructorSettings({
+      instructorId,
+      operatingHours: DEFAULT_WEEKLY_HOURS,
+      bufferMinutes: 15,
+      timezone: 'Australia/Sydney',
+      minNoticeHours: 2,
+      maxAdvanceDays: 90
+    });
+
+    try {
+      await saveInstructorSettingsDb(instructorId, resetSettings);
+    } catch {}
+
+    try {
+      await clearAllTimeOffBlocks(instructorId);
+    } catch (err) {
+      console.warn('Error clearing time off blocks:', err);
+    }
+
+    res.json({
+      success: true,
+      message: "All operating hours and time-off data cleared and reset to pristine defaults (7 days open).",
+      settings: resetSettings,
+      operatingHours: resetSettings.operatingHours,
+      disabledDays: []
+    });
+  } catch (err: any) {
+    console.error("Error resetting availability data:", err);
+    res.status(500).json({ error: "Failed to reset availability data" });
   }
 });
 
@@ -2335,7 +2374,7 @@ app.delete("/api/instructor/date-overrides/:id", attachInstructorOrAuth, (req, r
 });
 
 // Lightweight public endpoint returning upcoming time off blocks (no PII) for calendar indicators
-app.get(["/api/availability/time-off", "/api/availability/blocked-days"], async (req, res) => {
+app.get(["/api/availability/time-off", "/api/availability/blocked-days", "/availability/time-off", "/availability/blocked-days"], async (req, res) => {
   try {
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -2366,7 +2405,7 @@ app.get(["/api/availability/time-off", "/api/availability/blocked-days"], async 
 });
 
 // Fast real-time check for a single date & time slot
-app.get("/api/check-slot", async (req, res) => {
+app.get(["/api/check-slot", "/check-slot"], async (req, res) => {
   try {
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -2404,7 +2443,7 @@ app.get("/api/check-slot", async (req, res) => {
 });
 
 // Fast real-time check for multiple date & time slots (multi-lesson packages)
-app.post("/api/check-slots", async (req, res) => {
+app.post(["/api/check-slots", "/check-slots"], async (req, res) => {
   try {
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -2951,7 +2990,7 @@ app.delete("/api/bookings/ref/:ref", requireInstructorOrAuth, async (req, res) =
 // ----------------------------------------------------------------------------
 
 // List all time off blocks
-app.get("/api/instructor/time-off", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+app.get(["/api/instructor/time-off", "/instructor/time-off"], requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
     const instructorId = (req.query.instructorId as string) || (req as any).instructor?.id || undefined;
     const blocks = await getTimeOffBlocks(instructorId);
@@ -2963,7 +3002,7 @@ app.get("/api/instructor/time-off", requireInstructorOrAuth, async (req: express
 });
 
 // Real-time conflict checker before saving time off
-app.post("/api/instructor/time-off/check-conflicts", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+app.post(["/api/instructor/time-off/check-conflicts", "/instructor/time-off/check-conflicts"], requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
     const { date, isFullDay, startTime, endTime, instructorId, excludeBlockId } = req.body || {};
     if (!date) {
@@ -3001,7 +3040,7 @@ app.post("/api/instructor/time-off/check-conflicts", requireInstructorOrAuth, as
 });
 
 // Create time off block
-app.post("/api/instructor/time-off", requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+app.post(["/api/instructor/time-off", "/instructor/time-off"], requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
     const { date, isFullDay, startTime, endTime, reason, instructorId, instructorName } = req.body || {};
     if (!date) {
@@ -3046,7 +3085,7 @@ app.post("/api/instructor/time-off", requireInstructorOrAuth, async (req: expres
 });
 
 // Update time off block
-app.put(["/api/instructor/time-off", "/api/instructor/time-off/:id"], requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
+app.put(["/api/instructor/time-off", "/api/instructor/time-off/:id", "/instructor/time-off", "/instructor/time-off/:id"], requireInstructorOrAuth, async (req: express.Request, res: express.Response) => {
   try {
     const rawId = req.params.id || req.body?.id || req.query?.id;
     const fallbackDate = req.body?.date || req.query?.date;
@@ -3139,8 +3178,8 @@ const handleDeleteTimeOff = async (req: express.Request, res: express.Response) 
   }
 };
 
-app.delete(["/api/instructor/time-off", "/api/instructor/time-off/:id"], requireInstructorOrAuth, handleDeleteTimeOff);
-app.post("/api/instructor/time-off/delete", requireInstructorOrAuth, handleDeleteTimeOff);
+app.delete(["/api/instructor/time-off", "/api/instructor/time-off/:id", "/instructor/time-off", "/instructor/time-off/:id"], requireInstructorOrAuth, handleDeleteTimeOff);
+app.post(["/api/instructor/time-off/delete", "/instructor/time-off/delete"], requireInstructorOrAuth, handleDeleteTimeOff);
 
 // Submit contact form inquiry to Cloud SQL with rate limiting & sanitization
 app.post("/api/contact", contactLimiter, async (req, res) => {
