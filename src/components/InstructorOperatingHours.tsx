@@ -72,7 +72,7 @@ const DEFAULT_INITIAL_HOURS: WeeklyOperatingHours = {
   thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }] },
   friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }] },
   saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM', startMinutes: 480, endMinutes: 1020 }] },
-  sunday: { enabled: false, label: 'Sunday', periods: [] }
+  sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM', startMinutes: 480, endMinutes: 1020 }] }
 };
 
 function parseTimeToMinutes(timeStr: string): number {

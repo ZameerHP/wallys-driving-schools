@@ -498,9 +498,9 @@ export function BookNow() {
         thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
         saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
-        sunday: { enabled: false, label: 'Sunday', periods: [] }
+        sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
       },
-      disabledDays: [0],
+      disabledDays: [],
       bufferMinutes: 15,
       timezone: 'Australia/Sydney'
     };
