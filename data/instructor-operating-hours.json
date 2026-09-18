@@ -85,16 +85,9 @@
     "sunday": {
       "day": "sunday",
       "label": "Sunday",
-      "enabled": true,
-      "periods": [
-        {
-          "start": "08:00 AM",
-          "end": "05:00 PM",
-          "startMinutes": 480,
-          "endMinutes": 1020
-        }
-      ]
+      "enabled": false,
+      "periods": []
     }
   },
-  "updatedAt": "2026-09-16T15:52:41.000Z"
+  "updatedAt": "2026-09-18T06:08:19.794Z"
 }

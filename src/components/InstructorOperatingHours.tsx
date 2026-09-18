@@ -128,7 +128,8 @@ export function InstructorOperatingHours() {
   const operatingHoursRef = useRef<WeeklyOperatingHours>(initial.hours);
   const bufferMinutesRef = useRef<number>(initial.buffer);
   const timezoneRef = useRef<string>(initial.tz);
-  const lastSavedTimestampRef = useRef<number>(Date.now());
+  // 0 means no edits made in this component instance yet, allowing server data to load on refresh
+  const lastSavedTimestampRef = useRef<number>(0);
 
   useEffect(() => {
     operatingHoursRef.current = operatingHours;
@@ -159,7 +160,7 @@ export function InstructorOperatingHours() {
         const settings = data.settings || data;
         if (settings && settings.operatingHours) {
           const serverTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-          if (serverTime >= lastSavedTimestampRef.current) {
+          if (lastSavedTimestampRef.current === 0 || serverTime >= lastSavedTimestampRef.current) {
             setOperatingHours(settings.operatingHours);
             operatingHoursRef.current = settings.operatingHours;
             if (typeof settings.bufferMinutes === 'number') {
@@ -173,10 +174,16 @@ export function InstructorOperatingHours() {
 
             try {
               const disabledDays = data.disabledDays || computeDisabledDays(settings.operatingHours);
-              localStorage.setItem('wallys_operating_settings', JSON.stringify({
+              const syncedCache = {
                 ...settings,
-                disabledDays
-              }));
+                disabledDays,
+                operatingSettings: {
+                  ...settings,
+                  disabledDays
+                }
+              };
+              localStorage.setItem('wallys_operating_settings', JSON.stringify(syncedCache));
+              window.dispatchEvent(new CustomEvent('wallys-operating-hours-updated', { detail: syncedCache }));
             } catch {}
           }
         }
@@ -212,7 +219,13 @@ export function InstructorOperatingHours() {
       disabledDays,
       bufferMinutes: bufferToSave,
       timezone: tzToSave,
-      updatedAt: new Date(nowTs).toISOString()
+      updatedAt: new Date(nowTs).toISOString(),
+      operatingSettings: {
+        operatingHours: hoursToSave,
+        disabledDays,
+        bufferMinutes: bufferToSave,
+        timezone: tzToSave
+      }
     };
 
     try {
@@ -221,7 +234,12 @@ export function InstructorOperatingHours() {
       window.dispatchEvent(new CustomEvent('wallys-operating-hours-updated', { detail: cacheObj }));
     } catch {}
 
-    broadcastAvailabilityChange({ action: 'updated', operatingSettings: cacheObj });
+    broadcastAvailabilityChange({ 
+      action: 'updated', 
+      operatingSettings: cacheObj,
+      operatingHours: hoursToSave,
+      disabledDays
+    });
 
     if (successMsg) {
       setFeedback({ type: 'success', message: successMsg });

@@ -2046,7 +2046,7 @@ app.get("/api/availability/operating-hours", async (req, res) => {
       if (dbSettings && dbSettings.operatingHours) {
         const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
         const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime > localTime) {
+        if (dbTime >= localTime || !settings.operatingHours) {
           settings = saveInstructorSettings(dbSettings);
         }
       }
@@ -2086,7 +2086,7 @@ app.get("/api/instructor/operating-hours", async (req, res) => {
       if (dbSettings && dbSettings.operatingHours) {
         const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
         const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime > localTime) {
+        if (dbTime >= localTime || !settings.operatingHours) {
           settings = saveInstructorSettings(dbSettings);
         }
       }

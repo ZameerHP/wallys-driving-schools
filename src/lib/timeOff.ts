@@ -283,6 +283,8 @@ export function broadcastAvailabilityChange(detail?: {
   normDate?: string;
   block?: any;
   operatingSettings?: any;
+  operatingHours?: any;
+  disabledDays?: number[];
 }): void {
   if (typeof window === 'undefined') return;
 
@@ -294,7 +296,9 @@ export function broadcastAvailabilityChange(detail?: {
     date: detail?.date,
     normDate: detail?.normDate || (detail?.date ? normalizeDateKey(detail.date) : undefined),
     block: detail?.block,
-    operatingSettings: detail?.operatingSettings
+    operatingSettings: detail?.operatingSettings,
+    operatingHours: detail?.operatingHours || detail?.operatingSettings?.operatingHours,
+    disabledDays: detail?.disabledDays || detail?.operatingSettings?.disabledDays
   };
 
   // 1. Dispatch custom DOM event

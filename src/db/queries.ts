@@ -1558,9 +1558,22 @@ export async function checkDateOrSlotBlockedByTimeOff(
   // 3. Check Weekly Operating Hours & Breaks
   let bufferMinutes = 15;
   try {
-    const hoursFile = path.join(process.cwd(), 'data', 'instructor-operating-hours.json');
-    if (fs.existsSync(hoursFile)) {
-      const settings = JSON.parse(fs.readFileSync(hoursFile, 'utf-8'));
+    let settings: any = null;
+    try {
+      const dbSettings = await getInstructorSettingsDb(instructorId || 'wally');
+      if (dbSettings && dbSettings.operatingHours) {
+        settings = dbSettings;
+      }
+    } catch {}
+
+    if (!settings) {
+      const hoursFile = path.join(process.cwd(), 'data', 'instructor-operating-hours.json');
+      if (fs.existsSync(hoursFile)) {
+        settings = JSON.parse(fs.readFileSync(hoursFile, 'utf-8'));
+      }
+    }
+
+    if (settings) {
       if (typeof settings.bufferMinutes === 'number') {
         bufferMinutes = settings.bufferMinutes;
       }
@@ -1571,6 +1584,15 @@ export async function checkDateOrSlotBlockedByTimeOff(
         const mapping = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const dayKey = mapping[dayIdx];
         const daySchedule = settings.operatingHours?.[dayKey];
+
+        // Explicit disabled days of week check
+        if (Array.isArray(settings.disabledDays) && settings.disabledDays.includes(dayIdx)) {
+          return {
+            blocked: true,
+            isFullDay: true,
+            reason: `Instructor does not operate on ${daySchedule?.label || dayKey}s.`
+          };
+        }
 
         if (daySchedule) {
           if (!daySchedule.enabled || !daySchedule.periods || daySchedule.periods.length === 0) {
@@ -1595,6 +1617,13 @@ export async function checkDateOrSlotBlockedByTimeOff(
               };
             }
           }
+        } else {
+          // If no schedule configured for this day at all, default to closed
+          return {
+            blocked: true,
+            isFullDay: true,
+            reason: `Instructor does not operate on ${dayKey}s.`
+          };
         }
       }
     }

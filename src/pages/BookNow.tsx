@@ -894,13 +894,31 @@ export function BookNow() {
       }
 
       // 1. Instantly update operating hours state for zero-latency calendar day fading
-      if (detail?.operatingSettings?.operatingHours) {
-        const op = detail.operatingSettings;
+      const incomingHours = detail?.operatingHours 
+        || detail?.operatingSettings?.operatingHours 
+        || detail?.settings?.operatingHours;
+
+      if (incomingHours) {
+        const op = detail.operatingSettings || detail.settings || detail;
+        const compDisabled = Array.isArray(op.disabledDays) 
+          ? op.disabledDays 
+          : (Array.isArray(detail.disabledDays) ? detail.disabledDays : computeDisabledDays(incomingHours));
+        
         setOperatingSettings(prev => ({
           ...prev,
           ...op,
-          disabledDays: Array.isArray(op.disabledDays) ? op.disabledDays : computeDisabledDays(op.operatingHours)
+          operatingHours: incomingHours,
+          disabledDays: compDisabled,
+          bufferMinutes: typeof op.bufferMinutes === 'number' ? op.bufferMinutes : prev.bufferMinutes
         }));
+
+        try {
+          localStorage.setItem('wallys_operating_settings', JSON.stringify({
+            ...op,
+            operatingHours: incomingHours,
+            disabledDays: compDisabled
+          }));
+        } catch {}
       } else {
         try {
           const cached = localStorage.getItem('wallys_operating_settings');
@@ -908,11 +926,12 @@ export function BookNow() {
             const parsed = JSON.parse(cached);
             const s = parsed.operatingHours ? parsed : parsed.settings;
             if (s?.operatingHours) {
+              const compDisabled = Array.isArray(s.disabledDays) ? s.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(s.operatingHours));
               setOperatingSettings(prev => ({
                 ...prev,
                 ...s,
                 operatingHours: s.operatingHours,
-                disabledDays: Array.isArray(s.disabledDays) ? s.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(s.operatingHours)),
+                disabledDays: compDisabled,
                 bufferMinutes: typeof s.bufferMinutes === 'number' ? s.bufferMinutes : prev.bufferMinutes
               }));
             }
@@ -1120,6 +1139,12 @@ export function BookNow() {
 
   // Update time for the currently active lesson
   const handleSelectTimeSlot = (slotStr: string) => {
+    const dayInfo = getDayOperatingInfo(selectedDate);
+    if (dayInfo.isClosed) {
+      setSlotConflictError(`Cannot select time: Instructor is unavailable on ${selectedDate} (${dayInfo.reason || 'Closed'}). Please choose an open date.`);
+      return;
+    }
+
     const status = getSlotAvailabilityStatus(slotStr);
     if (!status.available) {
       if (status.reason === 'time_off') {
@@ -1249,14 +1274,16 @@ export function BookNow() {
         return;
       }
 
-      // Check if any scheduled lesson is on a day blocked off by the owner
+      // Check if any scheduled lesson is on a day blocked off by the owner or closed
       const blockedLesson = scheduledLessons.find(l => {
         const norm = normalizeDateStr(l.date);
-        return blockedOffDays.has(norm);
+        const dayInfo = getDayOperatingInfo(l.date);
+        return dayInfo.isClosed || (norm ? blockedOffDays.has(norm) : false);
       });
       if (blockedLesson) {
-        const reason = blockedOffDays.get(normalizeDateStr(blockedLesson.date))?.reason || 'Owner Day Off';
-        setSlotConflictError(`Lesson ${blockedLesson.lessonNumber} is scheduled on ${blockedLesson.date}, which has been blocked off by the instructor (${reason}). Please select an available date on the calendar.`);
+        const dayInfo = getDayOperatingInfo(blockedLesson.date);
+        const reason = dayInfo.reason || blockedOffDays.get(normalizeDateStr(blockedLesson.date))?.reason || 'Instructor Day Off / Closed';
+        setSlotConflictError(`Lesson ${blockedLesson.lessonNumber} is scheduled on ${blockedLesson.date}, which is unavailable (${reason}). Please select an open date on the calendar.`);
         setActiveLessonIndex(blockedLesson.lessonNumber - 1);
         return;
       }
@@ -1476,15 +1503,17 @@ export function BookNow() {
       return;
     }
 
-    // Check if target date or any lesson date is blocked by the owner
+    // Check if target date or any lesson date is blocked by the owner or closed
     const blockedLesson = scheduledLessons.find(l => {
       const norm = normalizeDateStr(l.date);
-      return blockedOffDays.has(norm);
+      const dayInfo = getDayOperatingInfo(l.date);
+      return dayInfo.isClosed || (norm ? blockedOffDays.has(norm) : false);
     });
     if (blockedLesson) {
       setIsProcessing(false);
-      const reason = blockedOffDays.get(normalizeDateStr(blockedLesson.date))?.reason || 'Owner Day Off';
-      setSlotConflictError(`Cannot complete booking: Date ${blockedLesson.date} has been blocked off by the instructor (${reason}). Please choose an available date.`);
+      const dayInfo = getDayOperatingInfo(blockedLesson.date);
+      const reason = dayInfo.reason || blockedOffDays.get(normalizeDateStr(blockedLesson.date))?.reason || 'Instructor Day Off / Closed';
+      setSlotConflictError(`Cannot complete booking: Date ${blockedLesson.date} is unavailable (${reason}). Please choose an available date.`);
       setActiveStepId('datetime');
       setActiveLessonIndex(blockedLesson.lessonNumber - 1);
       return;
