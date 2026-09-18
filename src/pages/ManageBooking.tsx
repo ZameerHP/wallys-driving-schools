@@ -149,9 +149,8 @@ export function ManageBooking() {
       const res = await fetch(`/api/availability?date=${encodeURIComponent(targetDate)}&_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data)) {
-          setRescheduleBookedSlots(data);
-        }
+        const slots = Array.isArray(data) ? data : (data.bookedSlots || []);
+        setRescheduleBookedSlots(slots);
       }
     } catch (err) {
       console.warn('Failed to load reschedule availability:', err);

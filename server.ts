@@ -51,6 +51,8 @@ import {
   syncIcalFeed,
   validateLessonSlot,
   getWorkingPeriodsForDate,
+  getAvailability,
+  getMonthAvailability,
   DEFAULT_WEEKLY_HOURS
 } from "./src/server/instructorAvailabilityService.ts";
 import { requireAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.ts";
@@ -1949,7 +1951,32 @@ app.get("/api/availability", async (req, res) => {
     });
 
     const targetDate = req.query.date ? normalizeDate(String(req.query.date)) : undefined;
-    const instructorId = req.query.instructorId ? String(req.query.instructorId) : 'wally';
+    const instructorId = (req.query.instructorId as string) || 'wally';
+    const requestedTime = req.query.time ? String(req.query.time) : undefined;
+    const durationMinutes = req.query.duration ? parseInt(String(req.query.duration), 10) : 60;
+
+    if (targetDate) {
+      const dayAvail = await getAvailability({
+        date: targetDate,
+        instructorId,
+        requestedTime,
+        durationMinutes
+      });
+
+      const bookedSlots = dayAvail.availableSlots.filter(s => !s.available).map(s => ({
+        date: targetDate,
+        time: s.slot,
+        status: 'Blocked',
+        isFullDay: dayAvail.isDayOff,
+        reason: s.reason || dayAvail.reasonIfUnavailable
+      }));
+
+      return res.json({
+        ...dayAvail,
+        bookedSlots
+      });
+    }
+
     const list = await getBookings({ includeUnpaid: true });
     const now = Date.now();
     const PENDING_TIMEOUT_MS = 20 * 60 * 1000;
@@ -1971,9 +1998,6 @@ app.get("/api/availability", async (req, res) => {
             return false;
           }
         }
-        if (targetDate) {
-          return normalizeDate(b.date) === targetDate;
-        }
         return true;
       })
       .map(b => ({
@@ -1987,7 +2011,6 @@ app.get("/api/availability", async (req, res) => {
     for (const block of timeOffBlocks) {
       const normBlockDate = normalizeDate(block.date);
       if (!normBlockDate) continue;
-      if (targetDate && normBlockDate !== targetDate) continue;
 
       if (block.isFullDay) {
         bookedSlots.push({
@@ -2043,7 +2066,6 @@ app.get("/api/availability", async (req, res) => {
     for (const ov of overrides) {
       const normOvDate = normalizeDate(ov.date);
       if (!normOvDate) continue;
-      if (targetDate && normOvDate !== targetDate) continue;
 
       if (ov.type === 'unavailable' || ov.isFullDay) {
         bookedSlots.push({
@@ -2068,11 +2090,10 @@ app.get("/api/availability", async (req, res) => {
     // 3. Incorporate External Calendar Events (+ buffer)
     const settings = getInstructorSettings(instructorId);
     const buffer = settings.bufferMinutes || 15;
-    const extEvents = getExternalEvents(targetDate, instructorId);
+    const extEvents = getExternalEvents(undefined, instructorId);
     for (const ev of extEvents) {
       const normEvDate = normalizeDate(ev.date);
       if (!normEvDate) continue;
-      if (targetDate && normEvDate !== targetDate) continue;
 
       // Mark the formatted window as blocked
       bookedSlots.push({
@@ -2105,6 +2126,84 @@ app.get("/api/availability", async (req, res) => {
   } catch (error: any) {
     console.error("Error fetching availability:", error);
     res.status(500).json({ error: "Failed to fetch availability" });
+  }
+});
+
+// SINGLE SOURCE OF TRUTH: Direct Endpoint for getAvailability
+app.get(["/api/availability/check", "/availability/check"], async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    const date = req.query.date as string;
+    const instructorId = (req.query.instructorId as string) || 'wally';
+    const requestedTime = req.query.requestedTime ? String(req.query.requestedTime) : (req.query.time ? String(req.query.time) : undefined);
+    const durationMinutes = req.query.durationMinutes ? parseInt(String(req.query.durationMinutes), 10) : 60;
+    const customerEmail = req.query.customerEmail ? String(req.query.customerEmail) : (req.query.email ? String(req.query.email) : undefined);
+    const customerPhone = req.query.customerPhone ? String(req.query.customerPhone) : (req.query.phone ? String(req.query.phone) : undefined);
+    const excludeRef = req.query.excludeRef ? String(req.query.excludeRef) : undefined;
+
+    if (!date) {
+      return res.status(400).json({ error: "Missing required query parameter: date (YYYY-MM-DD)" });
+    }
+
+    const avail = await getAvailability({
+      date,
+      instructorId,
+      requestedTime,
+      durationMinutes,
+      customerEmail,
+      customerPhone,
+      excludeRef
+    });
+
+    res.json({
+      isOpen: avail.isOpen,
+      isDayOff: avail.isDayOff,
+      availableSlots: avail.availableSlots,
+      reasonIfUnavailable: avail.reasonIfUnavailable,
+      isSlotAvailable: avail.isSlotAvailable,
+      slotReason: avail.slotReason,
+      date: avail.date,
+      instructorId: avail.instructorId
+    });
+  } catch (error: any) {
+    console.error("Error checking availability:", error);
+    res.status(500).json({ error: "Failed to check availability" });
+  }
+});
+
+// Month-by-month calendar overview endpoint
+app.get(["/api/availability/month", "/availability/month"], async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    const year = parseInt(String(req.query.year || new Date().getFullYear()), 10);
+    const month = parseInt(String(req.query.month || (new Date().getMonth() + 1)), 10);
+    const instructorId = (req.query.instructorId as string) || 'wally';
+
+    if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
+      return res.status(400).json({ error: "Invalid year or month parameters" });
+    }
+
+    const days = await getMonthAvailability({ year, month, instructorId });
+    res.json({
+      success: true,
+      year,
+      month,
+      instructorId,
+      days
+    });
+  } catch (error: any) {
+    console.error("Error fetching month availability:", error);
+    res.status(500).json({ error: "Failed to fetch month availability" });
   }
 });
 
@@ -2501,7 +2600,15 @@ app.get(["/api/check-slot", "/check-slot"], async (req, res) => {
       return res.status(400).json({ error: "Missing date or time parameter" });
     }
 
-    const check = await checkSlotDetailed(date, time, excludeRef, email, phone, instructorId);
+    const check = await validateLessonSlot({
+      date,
+      time,
+      excludeRef,
+      customerEmail: email,
+      customerPhone: phone,
+      instructorId
+    });
+
     res.json({
       available: check.available,
       isTimeOff: Boolean(check.isTimeOff),
@@ -2528,19 +2635,40 @@ app.post(["/api/check-slots", "/check-slots"], async (req, res) => {
       'Expires': '0',
     });
 
-    const { lessons, excludeRef, email, phone } = req.body;
+    const { lessons, excludeRef, email, phone, instructorId } = req.body;
     if (!Array.isArray(lessons) || lessons.length === 0) {
       return res.status(400).json({ error: "Missing or invalid lessons array" });
     }
 
-    const check = await checkMultipleSlotsBooked(lessons, excludeRef, email, phone);
-    if (!check.available) {
+    const conflicts: string[] = [];
+    let hasTimeOff = false;
+    let failureCode = "SLOT_ALREADY_BOOKED";
+
+    for (let i = 0; i < lessons.length; i++) {
+      const l = lessons[i];
+      const check = await validateLessonSlot({
+        date: l.date,
+        time: l.time,
+        excludeRef,
+        customerEmail: email,
+        customerPhone: phone,
+        instructorId: l.instructorId || instructorId
+      });
+
+      if (!check.available) {
+        if (check.isTimeOff) hasTimeOff = true;
+        if (check.code) failureCode = check.code;
+        conflicts.push(`Lesson ${l.lessonNumber || (i + 1)} (${l.date} ${l.time}): ${check.reason || 'Unavailable'}`);
+      }
+    }
+
+    if (conflicts.length > 0) {
       return res.status(409).json({
         available: false,
-        isTimeOff: Boolean(check.hasTimeOff),
-        code: check.code || (check.hasTimeOff ? "INSTRUCTOR_TIME_OFF" : "SLOT_ALREADY_BOOKED"),
-        conflicts: check.conflicts,
-        message: check.conflicts[0] || "One or more selected lessons are no longer available"
+        isTimeOff: hasTimeOff,
+        code: failureCode,
+        conflicts,
+        message: conflicts[0] || "One or more selected lessons are no longer available"
       });
     }
 
@@ -2636,16 +2764,33 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
 
     // Double booking & availability verification: multi-lesson batch or single slot
     const canOverrideSlot = Boolean(allowOverride && isInstructor);
+    const targetInstructorId = req.body.instructorId || 'wally';
+
     if (hasMultipleLessons) {
-      const batchCheck = await checkMultipleSlotsBooked(lessons, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
-      if (!batchCheck.available && !canOverrideSlot) {
-        return res.status(409).json({
-          error: batchCheck.code || "SLOT_ALREADY_BOOKED",
-          message: batchCheck.conflicts[0] || "One or more selected lesson slots are no longer available. Please select another time."
+      for (let i = 0; i < lessons.length; i++) {
+        const l = lessons[i];
+        const lCheck = await validateLessonSlot({
+          date: l.date,
+          time: l.time,
+          customerEmail: sanitizeText(email).toLowerCase(),
+          customerPhone: sanitizeText(phone),
+          instructorId: l.instructorId || targetInstructorId
         });
+        if (!lCheck.available && !canOverrideSlot) {
+          return res.status(409).json({
+            error: lCheck.code || "SLOT_ALREADY_BOOKED",
+            message: `Lesson ${l.lessonNumber || (i + 1)} (${l.date} ${l.time}): ${lCheck.reason || "This time slot is no longer available. Please select another time."}`
+          });
+        }
       }
     } else {
-      const slotCheck = await checkSlotDetailed(primaryDate, primaryTime, undefined, sanitizeText(email).toLowerCase(), sanitizeText(phone));
+      const slotCheck = await validateLessonSlot({
+        date: primaryDate,
+        time: primaryTime,
+        customerEmail: sanitizeText(email).toLowerCase(),
+        customerPhone: sanitizeText(phone),
+        instructorId: targetInstructorId
+      });
       if (!slotCheck.available && !canOverrideSlot) {
         return res.status(409).json({
           error: slotCheck.code || "SLOT_ALREADY_BOOKED",

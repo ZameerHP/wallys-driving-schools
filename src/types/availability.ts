@@ -84,6 +84,47 @@ export interface AvailabilityPayload {
   calendarConnection: CalendarConnectionConfig;
 }
 
+export interface AvailabilitySlotItem {
+  slot: string; // e.g. "08:00 AM – 09:00 AM"
+  time: string; // alias for slot
+  start: string; // "08:00 AM"
+  end: string;   // "09:00 AM"
+  startMinutes: number;
+  endMinutes: number;
+  available: boolean;
+  reason?: string;
+}
+
+export interface DayAvailabilityResponse {
+  date: string; // YYYY-MM-DD
+  instructorId: string;
+  isOpen: boolean;
+  isDayOff: boolean;
+  availableSlots: AvailabilitySlotItem[];
+  reasonIfUnavailable: string;
+  isSlotAvailable?: boolean;
+  slotReason?: string;
+  bookedSlots?: Array<{ date: string; time: string; status?: string; isFullDay?: boolean; reason?: string }>;
+}
+
+export interface MonthAvailabilityDay {
+  date: string; // YYYY-MM-DD
+  isOpen: boolean;
+  isDayOff: boolean;
+  reasonIfUnavailable: string;
+  availableSlotsCount: number;
+}
+
+export interface GetAvailabilityParams {
+  date: string;
+  instructorId?: string;
+  requestedTime?: string;
+  durationMinutes?: number;
+  customerEmail?: string;
+  customerPhone?: string;
+  excludeRef?: string;
+}
+
 export function computeDisabledDays(hours?: WeeklyOperatingHours | Record<string, any>): number[] {
   if (!hours) return [];
   const daysMap: Record<string, number> = {

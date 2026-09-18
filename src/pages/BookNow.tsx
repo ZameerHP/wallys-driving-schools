@@ -52,7 +52,7 @@ import {
   formatDurationDisplay,
   SlotPeriod
 } from '../lib/bookingSlots';
-import { computeDisabledDays } from '../types/availability';
+import { computeDisabledDays, DayAvailabilityResponse, MonthAvailabilityDay, AvailabilitySlotItem } from '../types/availability';
 import { fetchTimeOffBlocks, isTimeOffBlockDeleted, getLocalTimeOffBlocks, normalizeDateKey } from '../lib/timeOff';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
@@ -584,6 +584,9 @@ export function BookNow() {
   });
   const [isRefreshingSlots, setIsRefreshingSlots] = useState(false);
   const [slotConflictError, setSlotConflictError] = useState<string | null>(null);
+  const [monthAvailability, setMonthAvailability] = useState<Record<string, MonthAvailabilityDay>>({});
+  const [selectedDayAvailability, setSelectedDayAvailability] = useState<DayAvailabilityResponse | null>(null);
+  const [isLoadingMonthAvail, setIsLoadingMonthAvail] = useState(false);
 
   // Determine if Car Hire package is selected
   const isCarHire = Boolean(selectedPackage?.id?.includes('test') || selectedPackage?.label?.toLowerCase().includes('car hire') || selectedPackage?.title?.toLowerCase().includes('car hire'));
@@ -766,55 +769,65 @@ export function BookNow() {
     }
   }, []);
 
-  // Real-time availability loader with zero cache
-  const refreshAvailability = useCallback(async (targetDate?: string) => {
+  // Authoritative month availability fetcher (Single Source of Truth)
+  const fetchMonthAvailability = useCallback(async (year: number, month: number) => {
     try {
-      setIsRefreshingSlots(true);
-      const url = targetDate 
-        ? `/api/availability?date=${encodeURIComponent(targetDate)}&_t=${Date.now()}`
-        : `/api/availability?_t=${Date.now()}`;
-      const res = await fetch(url, { cache: 'no-store' });
+      setIsLoadingMonthAvail(true);
+      const res = await fetch(`/api/availability/month?year=${year}&month=${month}&_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data)) {
-          // Filter out any slots for dates that are in deleted tombstones
-          const sanitized = data.filter(s => {
-            const sNorm = normalizeDateStr(s.date);
-            if (isTimeOffBlockDeleted(undefined, s.date) || (sNorm && isTimeOffBlockDeleted(undefined, sNorm))) {
-              if (s.status === 'Blocked' || Boolean(s.isFullDay)) {
-                return false;
-              }
-            }
-            return true;
-          });
-
-          const dedupedSanitized = sanitized.filter((s, idx, arr) => {
-            const sNorm = normalizeDateStr(s.date);
-            return arr.findIndex(other => normalizeDateStr(other.date) === sNorm && other.time === s.time) === idx;
-          });
-
-          if (targetDate) {
-            const normTarget = normalizeDateStr(targetDate);
-            setBookedSlots(prev => {
-              const others = prev.filter(b => normalizeDateStr(b.date) !== normTarget);
-              const combined = [...others, ...dedupedSanitized];
-              return combined.filter((s, idx, arr) => {
-                const sNorm = normalizeDateStr(s.date);
-                return arr.findIndex(other => normalizeDateStr(other.date) === sNorm && other.time === s.time) === idx;
-              });
-            });
-          } else {
-            setBookedSlots(dedupedSanitized);
-          }
+        if (data && data.days) {
+          setMonthAvailability(data.days);
         }
       }
-      refreshBlockedDays();
     } catch (err) {
-      console.warn('Failed to refresh availability:', err);
+      console.warn('Failed to load month availability:', err);
+    } finally {
+      setIsLoadingMonthAvail(false);
+    }
+  }, []);
+
+  // Authoritative day availability fetcher
+  const fetchDayAvailability = useCallback(async (targetDate: string, duration: number = 60) => {
+    if (!targetDate) return;
+    try {
+      setIsRefreshingSlots(true);
+      const norm = normalizeDateStr(targetDate);
+      const res = await fetch(`/api/availability?date=${encodeURIComponent(norm)}&duration=${duration}&_t=${Date.now()}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data: DayAvailabilityResponse = await res.json();
+        setSelectedDayAvailability(data);
+        if (Array.isArray(data.bookedSlots)) {
+          setBookedSlots(data.bookedSlots);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load day availability:', err);
     } finally {
       setIsRefreshingSlots(false);
     }
-  }, [refreshBlockedDays]);
+  }, []);
+
+  // Fetch month availability when selected month/year changes
+  useEffect(() => {
+    fetchMonthAvailability(selectedYear, selectedMonth + 1);
+  }, [selectedYear, selectedMonth, fetchMonthAvailability]);
+
+  // Fetch day availability when selected date or package duration changes
+  useEffect(() => {
+    if (selectedDate) {
+      fetchDayAvailability(selectedDate, packageSpecs.durationMinutes);
+    }
+  }, [selectedDate, packageSpecs.durationMinutes, fetchDayAvailability]);
+
+  // Real-time availability loader with zero cache
+  const refreshAvailability = useCallback(async (targetDate?: string) => {
+    fetchMonthAvailability(selectedYear, selectedMonth + 1);
+    if (targetDate || selectedDate) {
+      fetchDayAvailability(targetDate || selectedDate, packageSpecs.durationMinutes);
+    }
+    refreshBlockedDays();
+  }, [fetchMonthAvailability, selectedYear, selectedMonth, selectedDate, packageSpecs.durationMinutes, fetchDayAvailability, refreshBlockedDays]);
 
   // Fetch instructor weekly operating hours and overrides
   const refreshOperatingHours = useCallback(async () => {
@@ -857,21 +870,33 @@ export function BookNow() {
   }, []);
 
   // Compute exact operating status and active periods for any calendar date
-  const getDayOperatingInfo = useCallback((dateStr: string): { isClosed: boolean; periods: SlotPeriod[]; reason?: string } => {
-    if (!dateStr) return { isClosed: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
+  const getDayOperatingInfo = useCallback((dateStr: string): { isClosed: boolean; isDayOff: boolean; periods: SlotPeriod[]; reason?: string } => {
+    if (!dateStr) return { isClosed: false, isDayOff: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
 
     const norm = normalizeDateStr(dateStr);
 
-    // 1. Check explicit Time Off / Blocked Days
+    // 1. Authoritative check from centralized backend month availability
+    const monthDay = monthAvailability[norm];
+    if (monthDay) {
+      return {
+        isClosed: !monthDay.isOpen,
+        isDayOff: Boolean(monthDay.isDayOff),
+        periods: monthDay.isOpen ? [{ start: '08:00 AM', end: '06:00 PM' }] : [],
+        reason: monthDay.reasonIfUnavailable
+      };
+    }
+
+    // 2. Check explicit Time Off / Blocked Days
     if (norm && blockedOffDays.has(norm)) {
       return { 
         isClosed: true, 
+        isDayOff: true,
         periods: [], 
         reason: blockedOffDays.get(norm)?.reason || 'Instructor Day Off' 
       };
     }
 
-    // 2. Check full-day blocks in bookedSlots
+    // 3. Check full-day blocks in bookedSlots
     const hasFullDayBooking = bookedSlots.some(b => {
       if (b.status === 'Cancelled') return false;
       if (normalizeDateStr(b.date) !== norm) return false;
@@ -879,22 +904,22 @@ export function BookNow() {
       return Boolean((b as any).isFullDay) || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day' || cleanTime === 'full_day' || cleanTime === 'full';
     });
     if (hasFullDayBooking) {
-      return { isClosed: true, periods: [], reason: 'Instructor Day Off' };
+      return { isClosed: true, isDayOff: true, periods: [], reason: 'Instructor Day Off' };
     }
 
-    // 3. Check custom Date Overrides
+    // 4. Check custom Date Overrides
     const overrides = operatingSettings.dateOverrides || [];
     const override = overrides.find(o => normalizeDateStr(o.date) === norm);
     if (override) {
       if (override.type === 'unavailable' || override.isFullDay) {
-        return { isClosed: true, periods: [], reason: override.reason || 'Instructor unavailable' };
+        return { isClosed: true, isDayOff: true, periods: [], reason: override.reason || 'Instructor unavailable' };
       }
       if (override.periods && override.periods.length > 0) {
-        return { isClosed: false, periods: override.periods, reason: override.reason };
+        return { isClosed: false, isDayOff: false, periods: override.periods, reason: override.reason };
       }
     }
 
-    // 4. Check weekly Operating Hours
+    // 5. Check weekly Operating Hours
     const parts = norm.split('-').map(Number);
     if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
       const dayIdx = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
@@ -903,19 +928,19 @@ export function BookNow() {
       const dayConfig = operatingSettings.operatingHours?.[dayKey];
 
       if (operatingSettings.disabledDays && operatingSettings.disabledDays.includes(dayIdx)) {
-        return { isClosed: true, periods: [], reason: `Closed on ${dayConfig?.label || dayKey}s` };
+        return { isClosed: true, isDayOff: false, periods: [], reason: `Closed on ${dayConfig?.label || dayKey}s` };
       }
 
       if (dayConfig) {
         if (!dayConfig.enabled || !dayConfig.periods || dayConfig.periods.length === 0) {
-          return { isClosed: true, periods: [], reason: `Closed on ${dayConfig.label || dayKey}s` };
+          return { isClosed: true, isDayOff: false, periods: [], reason: `Closed on ${dayConfig.label || dayKey}s` };
         }
-        return { isClosed: false, periods: dayConfig.periods };
+        return { isClosed: false, isDayOff: false, periods: dayConfig.periods };
       }
     }
 
-    return { isClosed: false, periods: [{ start: '08:00 AM', end: '05:00 PM' }] };
-  }, [operatingSettings, blockedOffDays, bookedSlots]);
+    return { isClosed: false, isDayOff: false, periods: [{ start: '08:00 AM', end: '05:00 PM' }] };
+  }, [monthAvailability, operatingSettings, blockedOffDays, bookedSlots]);
 
   // Helper to find next non-blocked, upcoming available date
   const findNextAvailableDate = useCallback((startDateStr: string, blockedMap: Map<string, { isFullDay: boolean; reason?: string }>, offsetDays = 0) => {
@@ -1162,13 +1187,56 @@ export function BookNow() {
 
   // Generate dynamic slots based on package duration and instructor operating hours for the selected date
   const availableSlotsForPackage = useMemo(() => {
+    const norm = normalizeDateStr(selectedDate);
+    if (selectedDayAvailability && normalizeDateStr(selectedDayAvailability.date) === norm) {
+      if (!selectedDayAvailability.isOpen) return [];
+      return selectedDayAvailability.availableSlots;
+    }
     const dayInfo = getDayOperatingInfo(selectedDate);
     if (dayInfo.isClosed) return [];
     return generateSlotsForDuration(packageSpecs.durationMinutes, dayInfo.periods);
-  }, [packageSpecs.durationMinutes, selectedDate, getDayOperatingInfo]);
+  }, [selectedDayAvailability, selectedDate, getDayOperatingInfo, packageSpecs.durationMinutes]);
 
   // Check availability including self-conflict within the same multi-lesson package and instructor operating hours
   const getSlotAvailabilityStatus = useCallback((slotStr: string) => {
+    const norm = normalizeDateStr(selectedDate);
+
+    // 1. Check self-conflict within the same multi-lesson package
+    if (packageSpecs.lessonCount > 1) {
+      const conflictingLesson = scheduledLessons.find(
+        l => l.lessonNumber !== activeLesson.lessonNumber &&
+             normalizeDateStr(l.date) === norm &&
+             l.time === slotStr
+      );
+      if (conflictingLesson) {
+        return {
+          available: false,
+          reason: 'self_conflict',
+          conflictingLesson: conflictingLesson.lessonNumber,
+          conflictReason: `Already selected for Lesson ${conflictingLesson.lessonNumber}`
+        };
+      }
+    }
+
+    // 2. Authoritative slot status from single source of truth backend
+    if (selectedDayAvailability && normalizeDateStr(selectedDayAvailability.date) === norm) {
+      if (!selectedDayAvailability.isOpen) {
+        return {
+          available: false,
+          reason: selectedDayAvailability.isDayOff ? 'time_off' : 'closed',
+          conflictReason: selectedDayAvailability.reasonIfUnavailable || 'Instructor unavailable on this date'
+        };
+      }
+      const match = selectedDayAvailability.availableSlots.find(s => s.slot === slotStr || s.time === slotStr);
+      if (match) {
+        return {
+          available: match.available,
+          reason: match.available ? undefined : (match.reason?.toLowerCase().includes('instructor') || match.reason?.toLowerCase().includes('time off') ? 'time_off' : 'booked'),
+          conflictReason: match.reason
+        };
+      }
+    }
+
     const dayInfo = getDayOperatingInfo(selectedDate);
     return checkSlotAvailability(
       selectedDate,
@@ -1183,7 +1251,7 @@ export function BookNow() {
         reason: dayInfo.reason
       }
     );
-  }, [selectedDate, bookedSlots, packageSpecs.lessonCount, scheduledLessons, activeLesson.lessonNumber, getDayOperatingInfo, operatingSettings.bufferMinutes]);
+  }, [selectedDate, selectedDayAvailability, packageSpecs.lessonCount, scheduledLessons, activeLesson.lessonNumber, getDayOperatingInfo, bookedSlots, operatingSettings.bufferMinutes]);
 
   // Update date for the currently active lesson
   const handleSelectCalendarDate = (dateStr: string) => {
@@ -2530,31 +2598,36 @@ export function BookNow() {
                             </div>
                             
                             {(() => {
-                              // Check if selected date is marked as Full Day Off or closed
+                              // Check if selected date is closed or day off
                               const dayInfo = getDayOperatingInfo(selectedDate);
-                              const isSelectedDayFullDayOff = dayInfo.isClosed || blockedOffDays.has(normalizeDateStr(selectedDate)) || bookedSlots.some(b => {
-                                if (b.status === 'Cancelled') return false;
-                                if (normalizeDateStr(b.date) !== normalizeDateStr(selectedDate)) return false;
-                                const cleanTime = (b.time || '').trim().toLowerCase();
-                                return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
-                              });
+                              const isSelectedDayClosed = dayInfo.isClosed;
+                              const isSelectedDayFullDayOff = dayInfo.isDayOff || (dayInfo.isClosed && (dayInfo.reason?.toLowerCase().includes('day off') || dayInfo.reason?.toLowerCase().includes('time off')));
 
-                              const allSlots = availableSlotsForPackage;
-
-                              if (isSelectedDayFullDayOff) {
-                                const reason = (dayInfo.isClosed ? dayInfo.reason : null) || blockedOffDays.get(normalizeDateStr(selectedDate))?.reason || 'Instructor Day Off / Closed';
+                              if (isSelectedDayClosed) {
+                                const reason = dayInfo.reason || (isSelectedDayFullDayOff ? 'Instructor Day Off' : 'Driving School Closed');
                                 return (
                                   <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs my-2">
                                     <div className="flex items-center gap-2 font-bold mb-1 text-amber-800">
                                       <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                      <span>Instructor Unavailable</span>
+                                      <span>{isSelectedDayFullDayOff ? 'Instructor Day Off' : 'Driving School Closed'}</span>
                                     </div>
                                     <p className="text-[11px] text-amber-800/90 leading-relaxed">
-                                      Instructor is unavailable on this date ({selectedDate}) for &quot;{reason}&quot;. No lesson bookings are permitted on this day. Please select another date on the calendar.
+                                      {reason}. No lesson bookings are permitted on this date ({selectedDate}). Please select another date on the calendar.
                                     </p>
                                   </div>
                                 );
                               }
+
+                              if (isRefreshingSlots && !selectedDayAvailability) {
+                                return (
+                                  <div className="p-8 text-center text-xs text-brand-black/60 my-2">
+                                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-brand-red" />
+                                    <p className="font-bold">Checking slot availability...</p>
+                                  </div>
+                                );
+                              }
+
+                              const allSlots = availableSlotsForPackage;
 
                               if (allSlots.length === 0) {
                                 return (
@@ -3442,13 +3515,8 @@ export function BookNow() {
                   <div>
                     {(() => {
                       const isAnyScheduledDateBlocked = activeStepId === 'datetime' && scheduledLessons.some(l => {
-                        const norm = normalizeDateStr(l.date);
-                        return norm && (blockedOffDays.has(norm) || bookedSlots.some(b => {
-                          if (b.status === 'Cancelled') return false;
-                          if (normalizeDateStr(b.date) !== norm) return false;
-                          const cleanTime = (b.time || '').trim().toLowerCase();
-                          return (b as any).isFullDay || cleanTime === 'full day off' || cleanTime.includes('day off') || cleanTime === 'all day';
-                        }));
+                        const info = getDayOperatingInfo(l.date);
+                        return info.isClosed;
                       });
 
                       return (

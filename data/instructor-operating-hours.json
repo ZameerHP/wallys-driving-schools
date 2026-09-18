@@ -3,6 +3,8 @@
   "instructorName": "Wally",
   "timezone": "Australia/Sydney",
   "bufferMinutes": 15,
+  "minNoticeHours": 2,
+  "maxAdvanceDays": 60,
   "operatingHours": {
     "monday": {
       "day": "monday",
@@ -96,5 +98,5 @@
       ]
     }
   },
-  "updatedAt": "2026-09-18T06:08:19.794Z"
+  "updatedAt": "2026-09-18T16:46:05.242Z"
 }

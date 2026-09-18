@@ -8,10 +8,14 @@ import {
   TimePeriod, 
   DateOverride, 
   ExternalCalendarEvent, 
-  CalendarConnectionConfig 
+  CalendarConnectionConfig,
+  AvailabilitySlotItem,
+  DayAvailabilityResponse,
+  MonthAvailabilityDay,
+  GetAvailabilityParams
 } from '../types/availability';
-import { getBookings } from '../db/queries';
-import { getTimeOffBlocks, normalizeDate } from './instructorTimeOffService';
+import { getBookings, getTimeOffBlocks, normalizeDate } from '../db/queries';
+import { generateSlotsForDuration } from '../lib/bookingSlots';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const OPERATING_HOURS_FILE = path.join(DATA_DIR, 'instructor-operating-hours.json');
@@ -641,10 +645,16 @@ export async function getWorkingPeriodsForDate(
     return { isAvailable: false, periods: [], unavailableReason: 'Invalid date.' };
   }
 
-  // 1. Check Date Overrides
-  const override = cachedDateOverrides.find(o => o.date === normDate && (!o.instructorId || o.instructorId === instructorId));
+  const normInstructor = (instructorId || 'wally').trim().toLowerCase();
+
+  // 1. Check Date Overrides (school-wide or instructor-specific)
+  const override = cachedDateOverrides.find(o => 
+    o.date === normDate && 
+    (!o.instructorId || o.instructorId.toLowerCase() === 'all' || o.instructorId.toLowerCase() === normInstructor)
+  );
   if (override) {
-    if (override.type === 'unavailable' || override.isFullDay) {
+    const isFullDay = override.isFullDay || (override.type === 'unavailable' && (!override.periods || override.periods.length === 0));
+    if (isFullDay) {
       return {
         isAvailable: false,
         periods: [],
@@ -661,9 +671,14 @@ export async function getWorkingPeriodsForDate(
     }
   }
 
-  // 2. Check Time Off Blocks (legacy & current Full Day blocks)
+  // 2. Check Time Off Blocks (Full Day blocks)
   const timeOffBlocks = await getTimeOffBlocks(instructorId);
-  const matchingTimeOff = timeOffBlocks.find(b => normalizeDate(b.date) === normDate && b.isFullDay);
+  const matchingTimeOff = timeOffBlocks.find(b => {
+    if (normalizeDate(b.date) !== normDate) return false;
+    if (!b.isFullDay) return false;
+    const bInst = (b.instructorId || 'wally').trim().toLowerCase();
+    return bInst === normInstructor || bInst === 'all';
+  });
   if (matchingTimeOff) {
     return {
       isAvailable: false,
@@ -692,149 +707,392 @@ export async function getWorkingPeriodsForDate(
 }
 
 /**
- * Validates whether a specific lesson time slot can be booked.
- * Checks:
- * - Operating hours & active periods (must fit completely without crossing breaks)
- * - Existing confirmed/pending student bookings (+ buffer)
- * - External calendar events (+ buffer)
- * - Partial time off blocks
+ * SINGLE SOURCE OF TRUTH: Centralized Availability Calculation
+ * Calculates complete availability for a single date, instructor, and optional requested time.
+ * 
+ * Outputs:
+ * - isOpen (boolean) - whether school/instructor operates on this date (not weekly closed, not school-wide closed, not instructor day off)
+ * - isDayOff (boolean) - whether this specific date is an instructor day off or school-wide closure
+ * - availableSlots (array of time slots with availability and reasons)
+ * - reasonIfUnavailable (string) - reason if isOpen is false or date is unavailable
+ * - isSlotAvailable (boolean) - if requestedTime provided, whether requested time slot can be booked
+ * - slotReason (string) - reason if requestedTime is unavailable
  */
-export async function validateLessonSlot(params: {
-  date: string;
-  time: string;
-  durationMinutes?: number;
-  customerEmail?: string;
-  customerPhone?: string;
-  excludeRef?: string;
-  instructorId?: string;
-}): Promise<SlotAvailabilityValidation> {
+export async function getAvailability(params: GetAvailabilityParams): Promise<DayAvailabilityResponse> {
   initService();
-  const { date, time, durationMinutes = 60, customerEmail, customerPhone, excludeRef, instructorId = 'wally' } = params;
+  const { 
+    date, 
+    instructorId = 'wally', 
+    requestedTime, 
+    durationMinutes = 60,
+    customerEmail,
+    customerPhone,
+    excludeRef 
+  } = params;
 
   const normDate = normalizeDate(date);
   if (!normDate) {
-    return { available: false, code: 'INVALID_DATE', reason: 'Invalid or missing date.' };
-  }
-
-  // Parse candidate slot interval
-  const interval = parseTimeInterval(time, durationMinutes);
-  if (!interval) {
-    return { available: false, code: 'INVALID_TIME', reason: 'Invalid time format.' };
-  }
-
-  const slotStart = interval.start;
-  const slotEnd = interval.end;
-  const buffer = cachedSettings.bufferMinutes ?? 15;
-
-  // 1. Check Working Periods (Day Operating Hours / Overrides / Breaks)
-  const workingSchedule = await getWorkingPeriodsForDate(normDate, instructorId);
-  if (!workingSchedule.isAvailable || workingSchedule.periods.length === 0) {
     return {
-      available: false,
-      isTimeOff: true,
-      isFullDay: true,
-      code: 'DAY_UNAVAILABLE',
-      reason: workingSchedule.unavailableReason || 'Instructor is unavailable on this date.'
+      date: date || '',
+      instructorId,
+      isOpen: false,
+      isDayOff: false,
+      availableSlots: [],
+      reasonIfUnavailable: 'Invalid date format. Expected YYYY-MM-DD.',
+      isSlotAvailable: false,
+      slotReason: 'Invalid date format'
     };
   }
 
-  // Slot must fit completely inside at least one continuous working period
-  const fitsInPeriod = workingSchedule.periods.some(period => {
-    return slotStart >= period.startMinutes && slotEnd <= period.endMinutes;
+  const normInstructor = (instructorId || 'wally').trim().toLowerCase();
+
+  // 1. Check School-Wide Closures / Date Overrides for this specific date
+  const override = cachedDateOverrides.find(o => 
+    o.date === normDate && 
+    (!o.instructorId || o.instructorId.toLowerCase() === 'all' || o.instructorId.toLowerCase() === normInstructor)
+  );
+
+  const isOverrideFullDay = override && (
+    override.isFullDay || 
+    (override.type === 'unavailable' && (!override.periods || override.periods.length === 0))
+  );
+
+  if (isOverrideFullDay) {
+    const reason = override.reason || 'Driving school is closed on this date.';
+    return {
+      date: normDate,
+      instructorId,
+      isOpen: false,
+      isDayOff: true,
+      availableSlots: [],
+      reasonIfUnavailable: reason,
+      isSlotAvailable: false,
+      slotReason: reason
+    };
+  }
+
+  // 2. Check Instructor-Specific Days Off (One-off specific date blocks)
+  const timeOffBlocks = await getTimeOffBlocks(instructorId);
+  const fullDayOff = timeOffBlocks.find(b => {
+    if (normalizeDate(b.date) !== normDate) return false;
+    if (!b.isFullDay) return false;
+    const bInst = (b.instructorId || 'wally').trim().toLowerCase();
+    return bInst === normInstructor || bInst === 'all';
   });
 
-  if (!fitsInPeriod) {
-    const periodDescriptions = workingSchedule.periods.map(p => `${p.start} – ${p.end}`).join(', ');
+  if (fullDayOff) {
+    const reason = fullDayOff.reason || 'Instructor Day Off scheduled.';
     return {
-      available: false,
-      isOutsideHours: true,
-      code: 'OUTSIDE_OPERATING_HOURS',
-      reason: `This lesson time (${time}) falls outside instructor operating hours for this day (${periodDescriptions}).`
+      date: normDate,
+      instructorId,
+      isOpen: false,
+      isDayOff: true,
+      availableSlots: [],
+      reasonIfUnavailable: reason,
+      isSlotAvailable: false,
+      slotReason: reason
     };
   }
 
-  // 2. Check Partial Time-Off Blocks
-  const timeOffBlocks = await getTimeOffBlocks(instructorId);
-  const dayTimeOff = timeOffBlocks.filter(b => normalizeDate(b.date) === normDate && !b.isFullDay);
-  for (const block of dayTimeOff) {
-    const bStart = block.startTime ? parseTimeToMinutes(block.startTime) : null;
-    const bEnd = block.endTime ? parseTimeToMinutes(block.endTime) : null;
+  // 3. Weekly Operating Hours (Recurring weekly schedule)
+  const dayKey = getDayKeyFromDateStr(normDate);
+  const daySchedule = cachedSettings.operatingHours[dayKey];
+  const dayIndex = dayKeyToDayIndex(dayKey);
+  const disabledDays = getDisabledDaysOfWeek(instructorId);
 
-    if (bStart !== null && bEnd !== null) {
-      // Overlap: slotStart < bEnd && slotEnd > bStart
-      if (slotStart < bEnd && slotEnd > bStart) {
-        return {
-          available: false,
-          isTimeOff: true,
-          code: 'INSTRUCTOR_TIME_OFF',
-          reason: block.reason || `Blocked period by instructor (${block.startTime} – ${block.endTime}).`
-        };
-      }
+  if (!daySchedule || !daySchedule.enabled || daySchedule.periods.length === 0 || disabledDays.includes(dayIndex)) {
+    const reason = `Driving school does not operate on ${daySchedule?.label || dayKey}s.`;
+    return {
+      date: normDate,
+      instructorId,
+      isOpen: false,
+      isDayOff: false,
+      availableSlots: [],
+      reasonIfUnavailable: reason,
+      isSlotAvailable: false,
+      slotReason: reason
+    };
+  }
+
+  // 4. Determine Active Operating Periods for this day
+  let activePeriods: TimePeriod[] = daySchedule.periods;
+  if (override && override.type === 'custom_hours' && override.periods && override.periods.length > 0) {
+    activePeriods = override.periods;
+  }
+
+  // 5. Generate Candidate Slots for the Day
+  const candidateSlots = generateSlotsForDuration(durationMinutes, activePeriods);
+  const buffer = cachedSettings.bufferMinutes ?? 15;
+
+  // Fetch data for conflict checks
+  const partialTimeOff = timeOffBlocks.filter(b => {
+    if (normalizeDate(b.date) !== normDate) return false;
+    if (b.isFullDay) return false;
+    const bInst = (b.instructorId || 'wally').trim().toLowerCase();
+    return bInst === normInstructor || bInst === 'all';
+  });
+
+  interface PartialBlockItem {
+    startMinutes?: number | null;
+    endMinutes?: number | null;
+    startTime?: string;
+    endTime?: string;
+    reason?: string;
+  }
+  const allPartialBlocks: PartialBlockItem[] = [...partialTimeOff];
+  if (override && !isOverrideFullDay && override.periods && override.periods.length > 0) {
+    for (const p of override.periods) {
+      allPartialBlocks.push({
+        startTime: p.start,
+        endTime: p.end,
+        startMinutes: p.startMinutes,
+        endMinutes: p.endMinutes,
+        reason: override.reason || 'Instructor Scheduled Time Off'
+      });
     }
   }
 
-  // 3. Check External Calendar Events (+ buffer)
-  const dayExternalEvents = cachedExternalEvents.filter(e => e.date === normDate);
-  for (const event of dayExternalEvents) {
-    // Intersect check with buffer
-    const eventStartWithBuffer = Math.max(0, event.startMinutes - buffer);
-    const eventEndWithBuffer = event.endMinutes + buffer;
+  const dayExternalEvents = cachedExternalEvents.filter(e => 
+    e.date === normDate && 
+    (!e.instructorId || e.instructorId.toLowerCase() === normInstructor)
+  );
 
-    if (slotStart < eventEndWithBuffer && slotEnd > eventStartWithBuffer) {
-      return {
-        available: false,
-        isExternalConflict: true,
-        code: 'CALENDAR_EVENT_CONFLICT',
-        reason: `Conflicts with instructor's external calendar appointment (${event.startTime} – ${event.endTime}).`
-      };
-    }
-  }
-
-  // 4. Check Existing Student Bookings (+ buffer)
   const allBookings = await getBookings({ includeUnpaid: true });
   const cleanEmail = customerEmail?.trim().toLowerCase();
   const cleanPhone = customerPhone?.replace(/\D/g, '');
   const now = Date.now();
   const PENDING_TIMEOUT_MS = 20 * 60 * 1000;
 
-  for (const b of allBookings) {
-    if (b.status === 'Cancelled') continue;
-    if (excludeRef && b.bookingRef && b.bookingRef.toUpperCase() === excludeRef.toUpperCase()) continue;
-    if (normalizeDate(b.date) !== normDate) continue;
+  const availableSlots: AvailabilitySlotItem[] = [];
 
-    const bInterval = parseTimeInterval(b.time);
-    if (!bInterval) continue;
+  for (const candidate of candidateSlots) {
+    const slotStart = candidate.startMinutes;
+    const slotEnd = candidate.endMinutes;
+    let slotAvailable = true;
+    let slotConflictReason: string | undefined = undefined;
 
-    // Buffer-aware conflict
-    const bStartWithBuffer = Math.max(0, bInterval.start - buffer);
-    const bEndWithBuffer = bInterval.end + buffer;
-
-    const overlaps = slotStart < bEndWithBuffer && slotEnd > bStartWithBuffer;
-    if (!overlaps) continue;
-
-    // If booking is confirmed or paid, unconditionally block
-    if (b.status === 'Confirmed' || b.paymentStatus === 'paid') {
-      return {
-        available: false,
-        code: 'SLOT_ALREADY_BOOKED',
-        reason: 'Sorry, this time slot was just booked. Please choose another time.'
-      };
+    // Check partial time-off conflict
+    for (const block of allPartialBlocks) {
+      const bStart = block.startMinutes ?? (block.startTime ? parseTimeToMinutes(block.startTime) : null);
+      const bEnd = block.endMinutes ?? (block.endTime ? parseTimeToMinutes(block.endTime) : null);
+      if (bStart !== null && bEnd !== null) {
+        if (slotStart < bEnd && slotEnd > bStart) {
+          slotAvailable = false;
+          slotConflictReason = block.reason || `Blocked by instructor (${block.startTime} – ${block.endTime})`;
+          break;
+        }
+      }
     }
 
-    // If pending, allow only if same customer is resuming within timeout
-    if (b.status === 'Pending' || b.paymentStatus === 'unpaid') {
-      if (cleanEmail && b.email && b.email.toLowerCase() === cleanEmail) continue;
-      if (cleanPhone && b.phone && b.phone.replace(/\D/g, '') === cleanPhone) continue;
-
-      const createdMs = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      if (createdMs > 0 && (now - createdMs) > PENDING_TIMEOUT_MS) continue;
-
-      return {
-        available: false,
-        code: 'SLOT_ALREADY_BOOKED',
-        reason: 'Sorry, this time slot was just booked. Please choose another time.'
-      };
+    // Check external calendar events conflict (+ buffer)
+    if (slotAvailable) {
+      for (const event of dayExternalEvents) {
+        const evStart = Math.max(0, event.startMinutes - buffer);
+        const evEnd = event.endMinutes + buffer;
+        if (slotStart < evEnd && slotEnd > evStart) {
+          slotAvailable = false;
+          slotConflictReason = `Conflicts with instructor's calendar appointment (${event.startTime} – ${event.endTime})`;
+          break;
+        }
+      }
     }
+
+    // Check existing student bookings conflict (+ buffer)
+    if (slotAvailable) {
+      for (const b of allBookings) {
+        if (b.status === 'Cancelled') continue;
+        if (excludeRef && b.bookingRef && b.bookingRef.toUpperCase() === excludeRef.toUpperCase()) continue;
+        if (normalizeDate(b.date) !== normDate) continue;
+
+        // If booking is assigned to a different instructor, it does not block this instructor
+        if ((b as any).instructorId || (b as any).instructor_id) {
+          const bInst = String((b as any).instructorId || (b as any).instructor_id).trim().toLowerCase();
+          if (bInst && bInst !== normInstructor) continue;
+        }
+
+        const bInterval = parseTimeInterval(b.time, durationMinutes);
+        if (!bInterval) continue;
+
+        const bStartWithBuffer = Math.max(0, bInterval.start - buffer);
+        const bEndWithBuffer = bInterval.end + buffer;
+        const overlaps = slotStart < bEndWithBuffer && slotEnd > bStartWithBuffer;
+
+        if (!overlaps) continue;
+
+        // Confirmed or paid booking: unconditionally blocked
+        if (b.status === 'Confirmed' || b.paymentStatus === 'paid') {
+          slotAvailable = false;
+          slotConflictReason = 'Slot already booked';
+          break;
+        }
+
+        // Pending or unpaid booking: allow same customer within timeout
+        if (b.status === 'Pending' || b.paymentStatus === 'unpaid') {
+          if (cleanEmail && b.email && b.email.toLowerCase() === cleanEmail) continue;
+          if (cleanPhone && b.phone && b.phone.replace(/\D/g, '') === cleanPhone) continue;
+
+          const createdMs = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          if (createdMs > 0 && (now - createdMs) > PENDING_TIMEOUT_MS) continue;
+
+          slotAvailable = false;
+          slotConflictReason = 'Slot temporarily held in another checkout';
+          break;
+        }
+      }
+    }
+
+    availableSlots.push({
+      slot: candidate.slot,
+      time: candidate.slot,
+      start: formatMinutesToTimeStr(candidate.startMinutes),
+      end: formatMinutesToTimeStr(candidate.endMinutes),
+      startMinutes: candidate.startMinutes,
+      endMinutes: candidate.endMinutes,
+      available: slotAvailable,
+      reason: slotConflictReason
+    });
+  }
+
+  // 6. Evaluate requestedTime if provided
+  let isSlotAvailable: boolean | undefined = undefined;
+  let slotReason: string | undefined = undefined;
+
+  if (requestedTime) {
+    const cleanRequested = requestedTime.trim();
+    const matchedSlot = availableSlots.find(s => s.slot === cleanRequested || s.time === cleanRequested);
+    if (matchedSlot) {
+      isSlotAvailable = matchedSlot.available;
+      slotReason = matchedSlot.reason;
+    } else {
+      const reqInterval = parseTimeInterval(cleanRequested, durationMinutes);
+      if (!reqInterval) {
+        isSlotAvailable = false;
+        slotReason = 'Invalid time interval format';
+      } else {
+        const fitsInPeriod = activePeriods.some(p => 
+          reqInterval.start >= p.startMinutes && reqInterval.end <= p.endMinutes
+        );
+        if (!fitsInPeriod) {
+          isSlotAvailable = false;
+          slotReason = 'Requested time falls outside instructor operating hours for this day';
+        } else {
+          const conflict = availableSlots.find(s => 
+            s.startMinutes < reqInterval.end + buffer && s.endMinutes > reqInterval.start - buffer && !s.available
+          );
+          if (conflict) {
+            isSlotAvailable = false;
+            slotReason = conflict.reason || 'Requested time conflicts with existing booking or event';
+          } else {
+            isSlotAvailable = true;
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    date: normDate,
+    instructorId,
+    isOpen: true,
+    isDayOff: false,
+    availableSlots,
+    reasonIfUnavailable: '',
+    isSlotAvailable,
+    slotReason
+  };
+}
+
+/**
+ * Calculates availability for all dates in a given month.
+ * Correctly handles leap years and year boundaries.
+ * Returns a map of date string -> MonthAvailabilityDay.
+ */
+export async function getMonthAvailability(params: {
+  year: number;
+  month: number; // 1-12
+  instructorId?: string;
+}): Promise<Record<string, MonthAvailabilityDay>> {
+  const { year, month, instructorId = 'wally' } = params;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const result: Record<string, MonthAvailabilityDay> = {};
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayPadded = String(day).padStart(2, '0');
+    const monthPadded = String(month).padStart(2, '0');
+    const dateStr = `${year}-${monthPadded}-${dayPadded}`;
+
+    const dayAvail = await getAvailability({ date: dateStr, instructorId });
+    const availableCount = dayAvail.availableSlots.filter(s => s.available).length;
+
+    result[dateStr] = {
+      date: dateStr,
+      isOpen: dayAvail.isOpen,
+      isDayOff: dayAvail.isDayOff,
+      reasonIfUnavailable: dayAvail.reasonIfUnavailable,
+      availableSlotsCount: availableCount
+    };
+  }
+
+  return result;
+}
+
+/**
+ * Validates whether a specific lesson time slot can be booked.
+ * Checks:
+ * - Operating hours & active periods
+ * - Full day or partial time off blocks
+ * - Existing student bookings (+ buffer)
+ * - External calendar events (+ buffer)
+ */
+export async function validateLessonSlot(params: {
+  date: string;
+  time?: string;
+  slot?: string;
+  durationMinutes?: number;
+  customerEmail?: string;
+  customerPhone?: string;
+  excludeRef?: string;
+  instructorId?: string;
+}): Promise<SlotAvailabilityValidation> {
+  const { date, durationMinutes = 60, customerEmail, customerPhone, excludeRef, instructorId = 'wally' } = params;
+  const time = (params.time || params.slot || '').trim();
+  const avail = await getAvailability({
+    date,
+    instructorId,
+    requestedTime: time,
+    durationMinutes,
+    customerEmail,
+    customerPhone,
+    excludeRef
+  });
+
+  if (!avail.isOpen) {
+    return {
+      available: false,
+      isTimeOff: avail.isDayOff,
+      isFullDay: avail.isDayOff,
+      isOutsideHours: !avail.isDayOff,
+      code: avail.isDayOff ? 'DAY_UNAVAILABLE' : 'OUTSIDE_OPERATING_HOURS',
+      reason: avail.reasonIfUnavailable || 'Instructor unavailable on this date.'
+    };
+  }
+
+  if (!avail.isSlotAvailable) {
+    const reason = avail.slotReason || 'This time slot is unavailable.';
+    let code = 'SLOT_UNAVAILABLE';
+    if (reason.toLowerCase().includes('booked')) code = 'SLOT_ALREADY_BOOKED';
+    else if (reason.toLowerCase().includes('calendar')) code = 'CALENDAR_EVENT_CONFLICT';
+    else if (reason.toLowerCase().includes('blocked') || reason.toLowerCase().includes('unavailable')) code = 'INSTRUCTOR_TIME_OFF';
+    else if (reason.toLowerCase().includes('operating hours')) code = 'OUTSIDE_OPERATING_HOURS';
+
+    return {
+      available: false,
+      code,
+      reason,
+      isTimeOff: code === 'INSTRUCTOR_TIME_OFF',
+      isOutsideHours: code === 'OUTSIDE_OPERATING_HOURS',
+      isExternalConflict: code === 'CALENDAR_EVENT_CONFLICT'
+    };
   }
 
   return { available: true };
