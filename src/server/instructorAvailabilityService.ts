@@ -491,9 +491,21 @@ export function setInstructorWeekdayOff(
     }
   });
 
+  const updatedOperatingHours = { ...(current.operatingHours || DEFAULT_WEEKLY_HOURS) };
+  if (updatedOperatingHours[weekday]) {
+    updatedOperatingHours[weekday] = {
+      ...updatedOperatingHours[weekday],
+      enabled: Boolean(isAvailable),
+      periods: (updatedOperatingHours[weekday].periods && updatedOperatingHours[weekday].periods.length > 0)
+        ? updatedOperatingHours[weekday].periods
+        : DEFAULT_WEEKLY_HOURS[weekday].periods
+    };
+  }
+
   const updated: InstructorSettings = {
     ...current,
     instructorId: normId,
+    operatingHours: updatedOperatingHours,
     weeklyDaysOff,
     disabledDays,
     disabledWeekdays,
@@ -557,9 +569,24 @@ export function setInstructorWeeklyDaysOff(
     }
   });
 
+  const bulkOperatingHours = { ...(current.operatingHours || DEFAULT_WEEKLY_HOURS) };
+  (Object.keys(weeklyDaysOff) as WeekdayKey[]).forEach(day => {
+    if (bulkOperatingHours[day]) {
+      const isDayOn = weeklyDaysOff[day] !== false;
+      bulkOperatingHours[day] = {
+        ...bulkOperatingHours[day],
+        enabled: isDayOn,
+        periods: (bulkOperatingHours[day].periods && bulkOperatingHours[day].periods.length > 0)
+          ? bulkOperatingHours[day].periods
+          : DEFAULT_WEEKLY_HOURS[day].periods
+      };
+    }
+  });
+
   const updated: InstructorSettings = {
     ...current,
     instructorId: normId,
+    operatingHours: bulkOperatingHours,
     weeklyDaysOff,
     disabledDays,
     disabledWeekdays,
@@ -1265,21 +1292,31 @@ export async function getMonthAvailability(params: {
   const daysInMonth = new Date(year, month, 0).getDate();
   const result: Record<string, MonthAvailabilityDay> = {};
 
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dayPadded = String(day).padStart(2, '0');
-    const monthPadded = String(month).padStart(2, '0');
-    const dateStr = `${year}-${monthPadded}-${dayPadded}`;
+  const dayNumbers = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  const dayResults = await Promise.all(
+    dayNumbers.map(async (day) => {
+      const dayPadded = String(day).padStart(2, '0');
+      const monthPadded = String(month).padStart(2, '0');
+      const dateStr = `${year}-${monthPadded}-${dayPadded}`;
 
-    const dayAvail = await getAvailability({ date: dateStr, instructorId });
-    const availableCount = dayAvail.availableSlots.filter(s => s.available).length;
+      const dayAvail = await getAvailability({ date: dateStr, instructorId });
+      const availableCount = dayAvail.availableSlots.filter(s => s.available).length;
 
-    result[dateStr] = {
-      date: dateStr,
-      isOpen: dayAvail.isOpen,
-      isDayOff: dayAvail.isDayOff,
-      reasonIfUnavailable: dayAvail.reasonIfUnavailable,
-      availableSlotsCount: availableCount
-    };
+      return {
+        dateStr,
+        dayData: {
+          date: dateStr,
+          isOpen: dayAvail.isOpen,
+          isDayOff: dayAvail.isDayOff,
+          reasonIfUnavailable: dayAvail.reasonIfUnavailable,
+          availableSlotsCount: availableCount
+        }
+      };
+    })
+  );
+
+  for (const item of dayResults) {
+    result[item.dateStr] = item.dayData;
   }
 
   return result;

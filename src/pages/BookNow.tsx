@@ -249,6 +249,16 @@ export function BookNow() {
     selectedDateRef.current = selectedDate;
   }, [selectedDate]);
 
+  const selectedMonthRef = useRef(selectedMonth);
+  useEffect(() => {
+    selectedMonthRef.current = selectedMonth;
+  }, [selectedMonth]);
+
+  const selectedYearRef = useRef(selectedYear);
+  useEffect(() => {
+    selectedYearRef.current = selectedYear;
+  }, [selectedYear]);
+
   const packageDurationRef = useRef(packageSpecs.durationMinutes);
   useEffect(() => {
     packageDurationRef.current = packageSpecs.durationMinutes;
@@ -766,35 +776,16 @@ export function BookNow() {
 
   const refreshWeeklyDaysOff = useCallback(async () => {
     try {
-      let localDaysOff: any = null;
-      try {
-        const cached = localStorage.getItem('wallys_instructor_weekly_days_off');
-        if (cached) localDaysOff = JSON.parse(cached);
-      } catch {}
-
-      const clientParam = localDaysOff ? `&clientDaysOff=${encodeURIComponent(JSON.stringify(localDaysOff))}` : '';
-      const res = await fetch(`/api/instructor/day-off?instructorId=wally${clientParam}&_t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/instructor/day-off?instructorId=wally&_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (data && data.weeklyDaysOff) {
-          const serverHasOffDay = Object.values(data.weeklyDaysOff).some(v => v === false);
-          const localHasOffDay = localDaysOff && Object.values(localDaysOff).some(v => v === false);
+          setInstructorWeeklyDaysOff(data.weeklyDaysOff);
+          try {
+            localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(data.weeklyDaysOff));
+          } catch {}
 
-          if (serverHasOffDay || !localHasOffDay) {
-            setInstructorWeeklyDaysOff(data.weeklyDaysOff);
-            try {
-              localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(data.weeklyDaysOff));
-            } catch {}
-          } else if (localHasOffDay && localDaysOff) {
-            setInstructorWeeklyDaysOff(localDaysOff);
-            fetch('/api/instructor/day-off', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ instructorId: 'wally', weeklyDaysOff: localDaysOff })
-            }).catch(() => {});
-          }
-
-          if (data.disabledWeekdays && (serverHasOffDay || !localHasOffDay)) {
+          if (data.disabledWeekdays) {
             setDisabledWeekdays(data.disabledWeekdays);
             try {
               localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(data.disabledWeekdays));
@@ -1157,6 +1148,7 @@ export function BookNow() {
 
       refreshWeeklyDaysOff();
       refreshBlockedDays();
+      fetchMonthAvailability(selectedYearRef.current, selectedMonthRef.current + 1);
       if (selectedDateRef.current) {
         fetchDayAvailability(selectedDateRef.current, packageDurationRef.current);
       }
@@ -1187,7 +1179,7 @@ export function BookNow() {
         channel2?.close();
       } catch {}
     };
-  }, [refreshBlockedDays, refreshWeeklyDaysOff, fetchDayAvailability]);
+  }, [refreshBlockedDays, refreshWeeklyDaysOff, fetchDayAvailability, fetchMonthAvailability]);
 
   // Auto-advance away from blocked days or closed days if initial or selected date is off
   useEffect(() => {

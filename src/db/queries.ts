@@ -984,9 +984,20 @@ export async function saveInstructorWeeklyDaysOff(
     }
   });
 
+  const updatedOperatingHours = { ...(existing.operatingHours || {}) };
+  (Object.keys(weeklyDaysOff) as WeekdayKey[]).forEach(day => {
+    if (updatedOperatingHours[day]) {
+      updatedOperatingHours[day] = {
+        ...updatedOperatingHours[day],
+        enabled: weeklyDaysOff[day] !== false
+      };
+    }
+  });
+
   const updated = {
     ...existing,
     instructorId: normId,
+    operatingHours: updatedOperatingHours,
     weeklyDaysOff,
     disabledDays,
     disabledWeekdays,

@@ -109,23 +109,11 @@ export function InstructorDayOff({ currentInstructorId = 'wally' }: InstructorDa
     } catch {}
   }, [selectedInstructorId]);
 
-  // Load instructor settings from database with resilient self-healing
+  // Load instructor settings from database
   const loadDaysOff = useCallback(async (instructorId: string) => {
     setErrorMessage(null);
     try {
-      let clientDaysOffParam = '';
-      let localDaysOff: any = null;
-      try {
-        const cached = localStorage.getItem('wallys_instructor_weekly_days_off');
-        if (cached) {
-          localDaysOff = JSON.parse(cached);
-          if (localDaysOff && typeof localDaysOff === 'object') {
-            clientDaysOffParam = `&clientDaysOff=${encodeURIComponent(JSON.stringify(localDaysOff))}`;
-          }
-        }
-      } catch {}
-
-      const res = await fetch(`/api/instructor/day-off?instructorId=${encodeURIComponent(instructorId)}${clientDaysOffParam}&_t=${Date.now()}`, {
+      const res = await fetch(`/api/instructor/day-off?instructorId=${encodeURIComponent(instructorId)}&_t=${Date.now()}`, {
         cache: 'no-store'
       });
       if (!res.ok) {
@@ -133,33 +121,16 @@ export function InstructorDayOff({ currentInstructorId = 'wally' }: InstructorDa
       }
       const data = await res.json();
       if (data && data.weeklyDaysOff) {
-        const serverHasOffDay = Object.values(data.weeklyDaysOff).some(v => v === false);
-        const localHasOffDay = localDaysOff && Object.values(localDaysOff).some(v => v === false);
-
-        if (serverHasOffDay || !localHasOffDay) {
-          setWeeklyDaysOff({
-            ...DEFAULT_DAYS_OFF,
-            ...data.weeklyDaysOff
-          });
-          try {
-            localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(data.weeklyDaysOff));
-            const disabledWeekdays = (Object.keys(data.weeklyDaysOff) as WeekdayKey[]).filter(k => data.weeklyDaysOff[k] === false);
-            localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(disabledWeekdays));
-          } catch {}
-        } else if (localHasOffDay && localDaysOff) {
-          setWeeklyDaysOff({
-            ...DEFAULT_DAYS_OFF,
-            ...localDaysOff
-          });
-          fetch('/api/instructor/day-off', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              instructorId,
-              weeklyDaysOff: localDaysOff
-            })
-          }).catch(() => {});
-        }
+        const syncedDaysOff = {
+          ...DEFAULT_DAYS_OFF,
+          ...data.weeklyDaysOff
+        };
+        setWeeklyDaysOff(syncedDaysOff);
+        try {
+          localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(syncedDaysOff));
+          const disabledWeekdays = (Object.keys(syncedDaysOff) as WeekdayKey[]).filter(k => syncedDaysOff[k] === false);
+          localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(disabledWeekdays));
+        } catch {}
 
         if (data.updatedAt) {
           const date = new Date(data.updatedAt);
@@ -241,7 +212,8 @@ export function InstructorDayOff({ currentInstructorId = 'wally' }: InstructorDa
       setTimeout(() => setSuccessToast(null), 4000);
 
       // Instantly sync calendar
-      broadcastSync(nextDaysOff);
+      const finalDaysOff = result?.data?.weeklyDaysOff || nextDaysOff;
+      broadcastSync(finalDaysOff);
     } catch (err: any) {
       console.error('[InstructorDayOff] Toggle error:', err);
       // Revert optimistic update
