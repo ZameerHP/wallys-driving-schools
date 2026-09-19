@@ -200,21 +200,43 @@ export function BookNow() {
   // Package Specifications
   const packageSpecs = useMemo(() => getPackageSpecs(selectedPackage), [selectedPackage]);
 
+  // Helper to find initial non-off weekday
+  const getInitialAvailableDateStr = (offsetDays = 0): string => {
+    const d = new Date();
+    d.setDate(d.getDate() + 2 + offsetDays);
+    try {
+      const rawDaysOff = typeof window !== 'undefined' ? localStorage.getItem('wallys_instructor_weekly_days_off') : null;
+      const daysOff = rawDaysOff ? JSON.parse(rawDaysOff) : { monday: false };
+      const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      for (let i = 0; i < 30; i++) {
+        const testD = new Date(d);
+        testD.setDate(d.getDate() + i);
+        const dayOfWeek = testD.getDay();
+        const key = weekdayKeys[dayOfWeek];
+        if (daysOff[key] !== false) {
+          const y = testD.getFullYear();
+          const m = String(testD.getMonth() + 1).padStart(2, '0');
+          const day = String(testD.getDate()).padStart(2, '0');
+          return `${y}-${m}-${day}`;
+        }
+      }
+    } catch {}
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
   // Date & Time
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 2);
-    return d.toISOString().split('T')[0];
-  });
+  const [selectedDate, setSelectedDate] = useState<string>(() => getInitialAvailableDateStr(0));
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>('9:00 AM – 10:00 AM');
 
   // Multi-Lesson Package Scheduling State (each lesson has distinct Date + Time)
   const [scheduledLessons, setScheduledLessons] = useState<ScheduledLesson[]>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 2);
-    return [{ lessonNumber: 1, date: d.toISOString().split('T')[0], time: '9:00 AM – 10:00 AM' }];
+    const initialDate = getInitialAvailableDateStr(0);
+    return [{ lessonNumber: 1, date: initialDate, time: '9:00 AM – 10:00 AM' }];
   });
   const [activeLessonIndex, setActiveLessonIndex] = useState<number>(0);
 
@@ -683,14 +705,28 @@ export function BookNow() {
   };
 
   // Instructor recurring weekday day off settings (synced directly from database)
-  const [instructorWeeklyDaysOff, setInstructorWeeklyDaysOff] = useState<Record<string, boolean>>({
-    monday: true,
-    tuesday: true,
-    wednesday: true,
-    thursday: true,
-    friday: true,
-    saturday: true,
-    sunday: true
+  const [instructorWeeklyDaysOff, setInstructorWeeklyDaysOff] = useState<Record<string, boolean>>(() => {
+    try {
+      const cached = localStorage.getItem('wallys_instructor_weekly_days_off');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return {
+      monday: false,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: true,
+      saturday: true,
+      sunday: true
+    };
+  });
+
+  const [disabledWeekdays, setDisabledWeekdays] = useState<string[]>(() => {
+    try {
+      const cached = localStorage.getItem('wallys_instructor_disabled_weekdays');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return ['monday'];
   });
 
   // List of disabled/OFF weekdays dynamically synced from real database
@@ -698,12 +734,15 @@ export function BookNow() {
     const days: string[] = [];
     const weekdayOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     for (const key of weekdayOrder) {
-      if (instructorWeeklyDaysOff && instructorWeeklyDaysOff[key] === false) {
+      if (
+        (instructorWeeklyDaysOff && instructorWeeklyDaysOff[key] === false) ||
+        (disabledWeekdays && disabledWeekdays.includes(key))
+      ) {
         days.push(key.charAt(0).toUpperCase() + key.slice(1) + 's');
       }
     }
     return days;
-  }, [instructorWeeklyDaysOff]);
+  }, [instructorWeeklyDaysOff, disabledWeekdays]);
 
   const refreshWeeklyDaysOff = useCallback(async () => {
     try {
@@ -712,6 +751,15 @@ export function BookNow() {
         const data = await res.json();
         if (data && data.weeklyDaysOff) {
           setInstructorWeeklyDaysOff(data.weeklyDaysOff);
+          try {
+            localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(data.weeklyDaysOff));
+          } catch {}
+        }
+        if (data && data.disabledWeekdays) {
+          setDisabledWeekdays(data.disabledWeekdays);
+          try {
+            localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(data.disabledWeekdays));
+          } catch {}
         }
       }
     } catch (err) {
@@ -838,10 +886,12 @@ export function BookNow() {
     if (norm) {
       const [y, m, d] = norm.split('-').map(Number);
       if (y && m && d) {
-        const dayOfWeek = new Date(y, m - 1, d).getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+        const dayOfWeek = new Date(y, m - 1, d, 12, 0, 0).getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
         const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const dayKey = weekdayKeys[dayOfWeek];
-        if (instructorWeeklyDaysOff && instructorWeeklyDaysOff[dayKey] === false) {
+        const isWeekdayOff = (instructorWeeklyDaysOff && instructorWeeklyDaysOff[dayKey] === false) ||
+                             (disabledWeekdays && disabledWeekdays.includes(dayKey));
+        if (isWeekdayOff) {
           const dayLabel = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
           return {
             isClosed: true,
@@ -887,13 +937,15 @@ export function BookNow() {
 
     // Operating hours removed: all calendar days are open 08:00 AM to 06:00 PM
     return { isClosed: false, isDayOff: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
-  }, [monthAvailability, blockedOffDays, bookedSlots, instructorWeeklyDaysOff]);
+  }, [monthAvailability, blockedOffDays, bookedSlots, instructorWeeklyDaysOff, disabledWeekdays]);
 
   // Helper to find next non-blocked, upcoming available date
   const findNextAvailableDate = useCallback((startDateStr: string, blockedMap: Map<string, { isFullDay: boolean; reason?: string }>, offsetDays = 0) => {
     const base = new Date();
     base.setHours(0, 0, 0, 0);
     base.setDate(base.getDate() + 2 + offsetDays);
+
+    const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
     for (let i = 0; i < 90; i++) {
       const candidate = new Date(base);
@@ -902,13 +954,17 @@ export function BookNow() {
       const m = String(candidate.getMonth() + 1).padStart(2, '0');
       const d = String(candidate.getDate()).padStart(2, '0');
       const dateStr = `${y}-${m}-${d}`;
+      const dayOfWeek = candidate.getDay();
+      const dayKey = weekdayKeys[dayOfWeek];
+      const isWkOff = (instructorWeeklyDaysOff && instructorWeeklyDaysOff[dayKey] === false) ||
+                       (disabledWeekdays && disabledWeekdays.includes(dayKey));
       const dayInfo = getDayOperatingInfo(dateStr);
-      if (!blockedMap.has(dateStr) && !dayInfo.isClosed) {
+      if (!blockedMap.has(dateStr) && !dayInfo.isClosed && !dayInfo.isDayOff && !isWkOff) {
         return dateStr;
       }
     }
     return startDateStr;
-  }, [getDayOperatingInfo]);
+  }, [getDayOperatingInfo, instructorWeeklyDaysOff, disabledWeekdays]);
 
   // Immediately refresh availability when customer changes date
   useEffect(() => {
@@ -928,16 +984,57 @@ export function BookNow() {
 
     const handleSync = (e?: any) => {
       let detail = e?.detail || e?.data;
-      if (!detail && e?.key === 'wallys_availability_ping' && e?.newValue) {
+      if (!detail && (e?.key === 'wallys_availability_ping' || e?.key === 'wallys_instructor_day_off_ping') && e?.newValue) {
         try {
           detail = JSON.parse(e.newValue);
         } catch {}
       }
       if (!detail) {
         try {
-          const rawPing = localStorage.getItem('wallys_availability_ping');
+          const rawPing = localStorage.getItem('wallys_instructor_day_off_ping') || localStorage.getItem('wallys_availability_ping');
           if (rawPing) detail = JSON.parse(rawPing);
         } catch {}
+      }
+
+      // Storage event direct keys
+      if (e?.key === 'wallys_instructor_weekly_days_off' && e?.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setInstructorWeeklyDaysOff(parsed);
+        } catch {}
+      }
+      if (e?.key === 'wallys_instructor_disabled_weekdays' && e?.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setDisabledWeekdays(parsed);
+        } catch {}
+      }
+
+      // Apply instructor weekly days off immediately from broadcast detail
+      if (detail?.weeklyDaysOff) {
+        setInstructorWeeklyDaysOff(detail.weeklyDaysOff);
+        const disabledList = detail.disabledWeekdays || Object.keys(detail.weeklyDaysOff)
+          .filter(k => detail.weeklyDaysOff[k] === false);
+        setDisabledWeekdays(disabledList);
+        try {
+          localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(detail.weeklyDaysOff));
+          localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(disabledList));
+        } catch {}
+
+        // Check if selectedDate is now on an off day, or was previously on an off day that is now open
+        if (selectedDate) {
+          const norm = normalizeDateStr(selectedDate);
+          const [y, m, d] = norm ? norm.split('-').map(Number) : [0, 0, 0];
+          const dayOfWeek = (y && m && d) ? new Date(y, m - 1, d, 12, 0, 0).getDay() : -1;
+          const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+          const dayKey = dayOfWeek >= 0 ? weekdayKeys[dayOfWeek] : '';
+          const isNowOff = dayKey && (detail.weeklyDaysOff[dayKey] === false || disabledList.includes(dayKey));
+          if (isNowOff) {
+            setSlotConflictError("⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.");
+          } else {
+            setSlotConflictError(prev => (prev && prev.includes('instructor is unavailable') ? null : prev));
+          }
+        }
       }
 
       // Optimistically add newly blocked days if received in payload
@@ -950,6 +1047,9 @@ export function BookNow() {
             next.set(bNorm, { isFullDay: true, reason: b.reason || 'Instructor Day Off' });
             return next;
           });
+          if (selectedDate && normalizeDateStr(selectedDate) === bNorm) {
+            setSlotConflictError("⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.");
+          }
         }
       }
 
@@ -1018,7 +1118,7 @@ export function BookNow() {
         channel2?.close();
       } catch {}
     };
-  }, [refreshAvailability, refreshBlockedDays]);
+  }, [refreshAvailability, refreshBlockedDays, refreshWeeklyDaysOff, selectedDate]);
 
   // Auto-advance away from blocked days or closed days if initial or selected date is off
   useEffect(() => {
@@ -1159,15 +1259,20 @@ export function BookNow() {
   // Update date for the currently active lesson
   const handleSelectCalendarDate = (dateStr: string) => {
     const dayInfo = getDayOperatingInfo(dateStr);
-    if (dayInfo.isClosed) {
-      setSlotConflictError(`Cannot book on ${dateStr}: Instructor is unavailable (${dayInfo.reason || 'Closed'}). Please select an open date.`);
-      return;
-    }
-
     const norm = normalizeDateStr(dateStr);
-    if (blockedOffDays.has(norm)) {
-      const reason = blockedOffDays.get(norm)?.reason || 'Owner Day Off';
-      setSlotConflictError(`Cannot book on ${dateStr}: Blocked off by the instructor (${reason}). Please select an available date.`);
+    const [y, m, d] = norm ? norm.split('-').map(Number) : [0,0,0];
+    const dayOfWeek = (y && m && d) ? new Date(y, m - 1, d, 12, 0, 0).getDay() : -1;
+    const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const isWkOff = dayOfWeek >= 0 && (
+      (instructorWeeklyDaysOff && instructorWeeklyDaysOff[weekdayKeys[dayOfWeek]] === false) ||
+      (disabledWeekdays && disabledWeekdays.includes(weekdayKeys[dayOfWeek]))
+    );
+
+    if (dayInfo.isClosed || dayInfo.isDayOff || isWkOff || (norm && blockedOffDays.has(norm))) {
+      setSlotConflictError(`⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.`);
+      if (bookingScrollRef.current) {
+        bookingScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      }
       return;
     }
     setSelectedDate(dateStr);
@@ -1314,25 +1419,46 @@ export function BookNow() {
     if (activeStepId === 'service') {
       setActiveStepId('datetime');
     } else if (activeStepId === 'datetime') {
+      // Helper to determine if a date is unavailable or instructor day off
+      const isDateUnavailableFn = (dStr: string) => {
+        if (!dStr) return false;
+        const info = getDayOperatingInfo(dStr);
+        const norm = normalizeDateStr(dStr);
+        const [y, m, d] = norm ? norm.split('-').map(Number) : [0,0,0];
+        const dayOfWeek = (y && m && d) ? new Date(y, m - 1, d, 12, 0, 0).getDay() : -1;
+        const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const isWkOff = dayOfWeek >= 0 && (
+          (instructorWeeklyDaysOff && instructorWeeklyDaysOff[weekdayKeys[dayOfWeek]] === false) ||
+          (disabledWeekdays && disabledWeekdays.includes(weekdayKeys[dayOfWeek]))
+        );
+        return info.isClosed || info.isDayOff || isWkOff || (norm ? blockedOffDays.has(norm) : false);
+      };
+
+      // Check if current selected date is on an instructor day off or closed
+      if (isDateUnavailableFn(selectedDate)) {
+        setSlotConflictError("⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.");
+        if (bookingScrollRef.current) {
+          bookingScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        return;
+      }
+
+      // Check if any scheduled lesson is on a day blocked off by the owner or closed
+      const blockedLesson = scheduledLessons.find(l => isDateUnavailableFn(l.date));
+      if (blockedLesson) {
+        setSlotConflictError("⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.");
+        setActiveLessonIndex(blockedLesson.lessonNumber - 1);
+        if (bookingScrollRef.current) {
+          bookingScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        return;
+      }
+
       // Validate that every lesson in multi-lesson package has a selected date and time
       const incomplete = scheduledLessons.find(l => !l.date || !l.time);
       if (incomplete) {
         setSlotConflictError(`Please select a date and time for Lesson ${incomplete.lessonNumber} of ${packageSpecs.lessonCount}.`);
         setActiveLessonIndex(incomplete.lessonNumber - 1);
-        return;
-      }
-
-      // Check if any scheduled lesson is on a day blocked off by the owner or closed
-      const blockedLesson = scheduledLessons.find(l => {
-        const norm = normalizeDateStr(l.date);
-        const dayInfo = getDayOperatingInfo(l.date);
-        return dayInfo.isClosed || (norm ? blockedOffDays.has(norm) : false);
-      });
-      if (blockedLesson) {
-        const dayInfo = getDayOperatingInfo(blockedLesson.date);
-        const reason = dayInfo.reason || blockedOffDays.get(normalizeDateStr(blockedLesson.date))?.reason || 'Instructor Day Off / Closed';
-        setSlotConflictError(`Lesson ${blockedLesson.lessonNumber} is scheduled on ${blockedLesson.date}, which is unavailable (${reason}). Please select an open date on the calendar.`);
-        setActiveLessonIndex(blockedLesson.lessonNumber - 1);
         return;
       }
 
@@ -2030,8 +2156,8 @@ export function BookNow() {
                   scrollBehavior: 'smooth' 
                 }}
               >
-                {/* Real-time Time Slot Conflict Alert */}
-                {slotConflictError && (
+                {/* Real-time Time Slot Conflict Alert (for non-datetime steps) */}
+                {slotConflictError && activeStepId !== 'datetime' && (
                   <div className="mb-3 p-3.5 bg-rose-50 border border-rose-300 rounded-2xl flex items-start gap-3 text-rose-900 shadow-sm animate-shake">
                     <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
                     <div className="flex-1 text-xs">
@@ -2352,23 +2478,29 @@ export function BookNow() {
                         
                         {/* Interactive Calendar (Mon-Sun) */}
                         <div className="lg:col-span-7 bg-brand-offwhite rounded-2xl p-3 sm:p-4 border border-black/10">
-                          {/* Clean, highly visible bold availability notice directly above the calendar */}
-                          <div 
-                            id="instructor-availability-notice"
-                            role="status"
-                            className="mb-3 px-3.5 py-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs"
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="font-bold text-xs sm:text-sm text-amber-950 leading-snug">
-                                ⚠️ Instructor is unavailable on selected days. Please choose an available day.
-                              </span>
+                          {/* Error notice shown ONLY when user selects or clicks an unavailable/off day */}
+                          {slotConflictError && (
+                            <div 
+                              id="instructor-calendar-error-notice"
+                              role="alert"
+                              className="mb-3 px-3.5 py-2.5 bg-rose-500/15 border-2 border-rose-500/40 rounded-xl text-rose-950 flex items-center justify-between gap-2 shadow-sm animate-shake"
+                            >
+                              <div className="flex items-center gap-2">
+                                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                                <span className="font-bold text-xs sm:text-sm text-rose-950 leading-snug">
+                                  {slotConflictError}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setSlotConflictError(null)}
+                                className="text-rose-600 hover:text-rose-900 p-0.5 cursor-pointer"
+                                aria-label="Dismiss error"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
                             </div>
-                            {offWeekdaysList.length > 0 && (
-                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-200/70 text-amber-900 border border-amber-300/80">
-                                Off: {offWeekdaysList.join(', ')}
-                              </span>
-                            )}
-                          </div>
+                          )}
 
                           {/* Month / Year header with arrows */}
                           <div className="flex items-center justify-between mb-3">
@@ -2392,7 +2524,6 @@ export function BookNow() {
                                 ))}
                               </select>
                             </div>
-
                             <div className="flex items-center gap-1">
                               <button 
                                 onClick={() => {
@@ -2441,8 +2572,19 @@ export function BookNow() {
 
                               // Check if date is marked as instructor/owner Full Day Off or closed via operating hours
                               const dayInfo = getDayOperatingInfo(item.dateStr);
-                              const isDayOff = dayInfo.isClosed;
-                              const dayOffReason = dayInfo.reason || 'Instructor Closed / Unavailable';
+
+                              // Double check weekday off directly for absolute reliability
+                              const itemDateNorm = normalizeDateStr(item.dateStr);
+                              const [iy, im, id] = itemDateNorm ? itemDateNorm.split('-').map(Number) : [0, 0, 0];
+                              const itemDayOfWeek = (iy && im && id) ? new Date(iy, im - 1, id, 12, 0, 0).getDay() : -1;
+                              const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                              const isWeekdayOff = itemDayOfWeek >= 0 && (
+                                (instructorWeeklyDaysOff && instructorWeeklyDaysOff[weekdayKeys[itemDayOfWeek]] === false) ||
+                                (disabledWeekdays && disabledWeekdays.includes(weekdayKeys[itemDayOfWeek]))
+                              );
+
+                              const isDayOff = dayInfo.isClosed || dayInfo.isDayOff || isWeekdayOff;
+                              const dayOffReason = dayInfo.reason || (isWeekdayOff ? 'Instructor Weekly Day Off' : 'Instructor Closed / Unavailable');
 
                               // Check if any other lesson is booked on this date
                               const otherLessonsOnDate = packageSpecs.lessonCount > 1 
@@ -2453,10 +2595,22 @@ export function BookNow() {
                                 <button
                                   key={idx}
                                   type="button"
-                                  disabled={isUnavailable || isDayOff}
                                   aria-disabled={isUnavailable || isDayOff}
                                   onClick={() => {
-                                    if (isUnavailable || isDayOff) return;
+                                    if (isDayOff) {
+                                      setSlotConflictError("⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.");
+                                      if (bookingScrollRef.current) {
+                                        bookingScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                                      }
+                                      return;
+                                    }
+                                    if (isUnavailable) {
+                                      setSlotConflictError("⚠️ This date is in the past. Please choose an upcoming available day.");
+                                      if (bookingScrollRef.current) {
+                                        bookingScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                                      }
+                                      return;
+                                    }
                                     if (item.dateStr) {
                                       handleSelectCalendarDate(item.dateStr);
                                     }
@@ -2473,7 +2627,7 @@ export function BookNow() {
                                   className={cn(
                                     "relative h-8 rounded-lg flex items-center justify-center transition-all duration-200 text-xs select-none",
                                     isDayOff
-                                      ? "opacity-25 text-neutral-400 cursor-not-allowed line-through select-none bg-neutral-200/30 hover:bg-neutral-200/30"
+                                      ? "opacity-25 text-neutral-400 cursor-not-allowed line-through select-none bg-neutral-200/40 hover:bg-neutral-200/60"
                                       : isUnavailable 
                                       ? "text-black/20 cursor-not-allowed line-through"
                                       : isSelected 
@@ -3435,21 +3589,40 @@ export function BookNow() {
 
                   <div>
                     {(() => {
-                      const isAnyScheduledDateBlocked = activeStepId === 'datetime' && scheduledLessons.some(l => {
-                        const info = getDayOperatingInfo(l.date);
-                        return info.isClosed;
-                      });
+                      const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                      const isDateBlockedFn = (dStr: string) => {
+                        if (!dStr) return false;
+                        const info = getDayOperatingInfo(dStr);
+                        const norm = normalizeDateStr(dStr);
+                        const [y, m, d] = norm ? norm.split('-').map(Number) : [0, 0, 0];
+                        const dayOfWeek = (y && m && d) ? new Date(y, m - 1, d, 12, 0, 0).getDay() : -1;
+                        const isWkOff = dayOfWeek >= 0 && (
+                          (instructorWeeklyDaysOff && instructorWeeklyDaysOff[weekdayKeys[dayOfWeek]] === false) ||
+                          (disabledWeekdays && disabledWeekdays.includes(weekdayKeys[dayOfWeek]))
+                        );
+                        return info.isClosed || info.isDayOff || isWkOff || (norm ? blockedOffDays.has(norm) : false);
+                      };
+
+                      const isAnyScheduledDateBlocked = activeStepId === 'datetime' && (
+                        isDateBlockedFn(selectedDate) ||
+                        scheduledLessons.some(l => isDateBlockedFn(l.date))
+                      );
 
                       return (
                         <button
                           type="button"
-                          disabled={isAnyScheduledDateBlocked}
-                          onClick={goToNextStep}
-                          title={isAnyScheduledDateBlocked ? "Please select a date that is not blocked off by the instructor" : undefined}
-                          className={cn(
-                            "bg-brand-red hover:bg-[#c41a21] text-white font-bold px-7 py-2.5 rounded-xl shadow-md shadow-brand-red/25 transition-all text-xs sm:text-sm flex items-center gap-2 cursor-pointer",
-                            isAnyScheduledDateBlocked && "opacity-50 cursor-not-allowed hover:bg-brand-red shadow-none pointer-events-none"
-                          )}
+                          id="continue-step-button"
+                          onClick={() => {
+                            if (activeStepId === 'datetime' && isAnyScheduledDateBlocked) {
+                              setSlotConflictError("⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.");
+                              if (bookingScrollRef.current) {
+                                bookingScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                              }
+                              return;
+                            }
+                            goToNextStep();
+                          }}
+                          className="bg-brand-red hover:bg-[#c41a21] text-white font-bold px-7 py-2.5 rounded-xl shadow-md shadow-brand-red/25 transition-all text-xs sm:text-sm flex items-center gap-2 cursor-pointer active:scale-98"
                         >
                           <span>Continue</span>
                           <ChevronRight className="w-4 h-4" />

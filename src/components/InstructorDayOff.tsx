@@ -66,9 +66,11 @@ export function InstructorDayOff({ currentInstructorId = 'wally' }: InstructorDa
 
   // Broadcast sync events so customer calendar updates immediately
   const broadcastSync = useCallback((updatedDaysOff: InstructorWeeklyDaysOff) => {
+    const disabledWeekdays = (Object.keys(updatedDaysOff) as WeekdayKey[]).filter(k => updatedDaysOff[k] === false);
     const detail = {
       instructorId: selectedInstructorId,
       weeklyDaysOff: updatedDaysOff,
+      disabledWeekdays,
       timestamp: Date.now()
     };
 
@@ -80,13 +82,18 @@ export function InstructorDayOff({ currentInstructorId = 'wally' }: InstructorDa
     try {
       localStorage.setItem('wallys_instructor_day_off_ping', JSON.stringify(detail));
       localStorage.setItem('wallys_availability_ping', JSON.stringify(detail));
+      localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(updatedDaysOff));
+      localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(disabledWeekdays));
     } catch {}
 
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const bc = new BroadcastChannel('wallys_availability_channel');
-        bc.postMessage({ type: 'INSTRUCTOR_DAY_OFF_UPDATE', ...detail });
-        bc.close();
+        const bc1 = new BroadcastChannel('wallys_availability_channel');
+        bc1.postMessage({ type: 'INSTRUCTOR_DAY_OFF_UPDATE', ...detail });
+        bc1.close();
+        const bc2 = new BroadcastChannel('wallys-availability-channel');
+        bc2.postMessage({ type: 'INSTRUCTOR_DAY_OFF_UPDATE', ...detail });
+        bc2.close();
       }
     } catch {}
   }, [selectedInstructorId]);
