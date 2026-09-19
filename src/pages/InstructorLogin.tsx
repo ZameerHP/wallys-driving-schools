@@ -429,9 +429,15 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     try {
       const blocks = await fetchTimeOffBlocks();
       if (Array.isArray(blocks)) {
-        setBlockedDaysList(blocks);
+        setBlockedDaysList(prev => {
+          if (prev.length === blocks.length && prev.every((b, i) => b.id === blocks[i]?.id && b.date === blocks[i]?.date && b.isFullDay === blocks[i]?.isFullDay && b.startTime === blocks[i]?.startTime && b.endTime === blocks[i]?.endTime)) {
+            return prev;
+          }
+          return blocks;
+        });
       } else {
-        setBlockedDaysList(getLocalTimeOffBlocks());
+        const local = getLocalTimeOffBlocks();
+        setBlockedDaysList(prev => (prev.length === local.length ? prev : local));
       }
     } catch (err) {
       console.warn('Failed to load blocked days list:', err);
@@ -459,7 +465,12 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     loadData();
 
-    const handleAvailabilitySync = () => {
+    const handleAvailabilitySync = (e?: any) => {
+      // If event was purely a recurring weekly days-off toggle, do not reload blocked days to prevent stutter
+      const detail = e?.detail || e?.data;
+      if (detail && detail.weeklyDaysOff && !detail.block && !detail.date) {
+        return;
+      }
       loadBlockedDays();
     };
 
@@ -470,7 +481,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     try {
       if ('BroadcastChannel' in window) {
         channel = new BroadcastChannel('wallys-availability-channel');
-        channel.onmessage = () => handleAvailabilitySync();
+        channel.onmessage = (msg) => handleAvailabilitySync(msg);
       }
     } catch {}
 

@@ -243,6 +243,17 @@ export function BookNow() {
   });
   const [activeLessonIndex, setActiveLessonIndex] = useState<number>(0);
 
+  // Stable refs to prevent effect tearing and unnecessary re-renders
+  const selectedDateRef = useRef(selectedDate);
+  useEffect(() => {
+    selectedDateRef.current = selectedDate;
+  }, [selectedDate]);
+
+  const packageDurationRef = useRef(packageSpecs.durationMinutes);
+  useEffect(() => {
+    packageDurationRef.current = packageSpecs.durationMinutes;
+  }, [packageSpecs.durationMinutes]);
+
   // Sync scheduled lessons whenever the selected package changes
   useEffect(() => {
     const specs = getPackageSpecs(selectedPackage);
@@ -828,16 +839,36 @@ export function BookNow() {
           }
         }
       }
-      setBlockedOffDays(map);
+
+      // Memoized equality check: only update Map reference if entries actually changed
+      // This prevents unnecessary re-rendering of all 42 calendar day cells
+      setBlockedOffDays(prev => {
+        if (prev.size === map.size) {
+          let identical = true;
+          for (const [k, v] of map.entries()) {
+            const existing = prev.get(k);
+            if (!existing || existing.isFullDay !== v.isFullDay || existing.reason !== v.reason) {
+              identical = false;
+              break;
+            }
+          }
+          if (identical) return prev;
+        }
+        return map;
+      });
 
       // If partial blocks exist, integrate them into bookedSlots to block overlapping slots without doubling
       if (partialBlockSlots.length > 0) {
         setBookedSlots(prev => {
           const combined = [...prev, ...partialBlockSlots];
-          return combined.filter((s, idx, arr) => {
+          const deduplicated = combined.filter((s, idx, arr) => {
             const sNorm = normalizeDateStr(s.date);
             return arr.findIndex(other => normalizeDateStr(other.date) === sNorm && other.time === s.time) === idx;
           });
+          if (deduplicated.length === prev.length && deduplicated.every((item, i) => item.date === prev[i]?.date && item.time === prev[i]?.time && item.status === prev[i]?.status)) {
+            return prev;
+          }
+          return deduplicated;
         });
       }
     } catch (err) {
@@ -874,7 +905,12 @@ export function BookNow() {
         const data: DayAvailabilityResponse = await res.json();
         setSelectedDayAvailability(data);
         if (Array.isArray(data.bookedSlots)) {
-          setBookedSlots(data.bookedSlots);
+          setBookedSlots(prev => {
+            if (prev.length === data.bookedSlots.length && prev.every((b, i) => b.time === data.bookedSlots[i]?.time && b.status === data.bookedSlots[i]?.status && b.date === data.bookedSlots[i]?.date)) {
+              return prev;
+            }
+            return data.bookedSlots;
+          });
         }
       }
     } catch (err) {
@@ -898,12 +934,12 @@ export function BookNow() {
 
   // Real-time availability loader with zero cache
   const refreshAvailability = useCallback(async (targetDate?: string) => {
-    fetchMonthAvailability(selectedYear, selectedMonth + 1);
-    if (targetDate || selectedDate) {
-      fetchDayAvailability(targetDate || selectedDate, packageSpecs.durationMinutes);
+    const target = targetDate || selectedDateRef.current;
+    if (target) {
+      fetchDayAvailability(target, packageDurationRef.current);
     }
     refreshBlockedDays();
-  }, [fetchMonthAvailability, selectedYear, selectedMonth, selectedDate, packageSpecs.durationMinutes, fetchDayAvailability, refreshBlockedDays]);
+  }, [fetchDayAvailability, refreshBlockedDays]);
 
   // Compute exact day status and active periods for any calendar date (operating hours system removed)
   const getDayOperatingInfo = useCallback((dateStr: string): { isClosed: boolean; isDayOff: boolean; periods: SlotPeriod[]; reason?: string } => {
@@ -995,21 +1031,20 @@ export function BookNow() {
     return startDateStr;
   }, [getDayOperatingInfo, instructorWeeklyDaysOff, disabledWeekdays]);
 
-  // Immediately refresh availability when customer changes date
-  useEffect(() => {
-    if (selectedDate) {
-      refreshAvailability(selectedDate);
-    }
-  }, [selectedDate, refreshAvailability]);
-
   // Initial load and continuous sync of blocked days and availability
   useEffect(() => {
     refreshBlockedDays();
-    refreshAvailability();
+    if (selectedDateRef.current) {
+      fetchDayAvailability(selectedDateRef.current, packageDurationRef.current);
+    }
     const timer = setInterval(() => {
-      refreshAvailability();
+      // Avoid firing background polling when tab/browser is inactive to save performance
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       refreshBlockedDays();
-    }, 8000);
+      if (selectedDateRef.current) {
+        fetchDayAvailability(selectedDateRef.current, packageDurationRef.current);
+      }
+    }, 20000);
 
     const handleSync = (e?: any) => {
       let detail = e?.detail || e?.data;
@@ -1050,9 +1085,10 @@ export function BookNow() {
           localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(disabledList));
         } catch {}
 
-        // Check if selectedDate is now on an off day, or was previously on an off day that is now open
-        if (selectedDate) {
-          const norm = normalizeDateStr(selectedDate);
+        // Check if currently selected date is now on an off day, or was previously on an off day that is now open
+        const currDate = selectedDateRef.current;
+        if (currDate) {
+          const norm = normalizeDateStr(currDate);
           const [y, m, d] = norm ? norm.split('-').map(Number) : [0, 0, 0];
           const dayOfWeek = (y && m && d) ? new Date(y, m - 1, d, 12, 0, 0).getDay() : -1;
           const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -1076,7 +1112,8 @@ export function BookNow() {
             next.set(bNorm, { isFullDay: true, reason: b.reason || 'Instructor Day Off' });
             return next;
           });
-          if (selectedDate && normalizeDateStr(selectedDate) === bNorm) {
+          const currDate = selectedDateRef.current;
+          if (currDate && normalizeDateStr(currDate) === bNorm) {
             setSlotConflictError("⚠️ Booking is not available on this day because the instructor is unavailable. Please choose an available day.");
           }
         }
@@ -1113,13 +1150,16 @@ export function BookNow() {
       }));
 
       // Clear any conflict banner if selected date was the removed date
-      if (selectedDate && (normalizeDateStr(selectedDate) === removedNorm || selectedDate === removedDate || isTimeOffBlockDeleted(undefined, selectedDate))) {
+      const currDate = selectedDateRef.current;
+      if (currDate && (normalizeDateStr(currDate) === removedNorm || currDate === removedDate || isTimeOffBlockDeleted(undefined, currDate))) {
         setSlotConflictError(null);
       }
 
       refreshWeeklyDaysOff();
       refreshBlockedDays();
-      refreshAvailability();
+      if (selectedDateRef.current) {
+        fetchDayAvailability(selectedDateRef.current, packageDurationRef.current);
+      }
     };
 
     window.addEventListener('wallys-availability-updated', handleSync);
@@ -1147,7 +1187,7 @@ export function BookNow() {
         channel2?.close();
       } catch {}
     };
-  }, [refreshAvailability, refreshBlockedDays, refreshWeeklyDaysOff, selectedDate]);
+  }, [refreshBlockedDays, refreshWeeklyDaysOff, fetchDayAvailability]);
 
   // Auto-advance away from blocked days or closed days if initial or selected date is off
   useEffect(() => {
@@ -1305,7 +1345,6 @@ export function BookNow() {
       return;
     }
     setSelectedDate(dateStr);
-    refreshAvailability(dateStr);
     setSlotConflictError(null);
     setScheduledLessons(prev => {
       const next = [...prev];
@@ -2693,8 +2732,9 @@ export function BookNow() {
                         <div className="lg:col-span-5 flex flex-col justify-between">
                           <div>
                             <div className="flex items-center justify-between mb-1.5">
-                              <span className="text-xs font-bold uppercase tracking-wider text-brand-black/60 block">
-                                {packageSpecs.lessonCount > 1 ? `Lesson ${activeLesson.lessonNumber} Slots` : 'Available Slots'} ({selectedDate})
+                              <span className="text-xs font-bold uppercase tracking-wider text-brand-black/60 flex items-center gap-1.5">
+                                <span>{packageSpecs.lessonCount > 1 ? `Lesson ${activeLesson.lessonNumber} Slots` : 'Available Slots'} ({selectedDate})</span>
+                                {isRefreshingSlots && <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-red inline-block" />}
                               </span>
                               <span className="text-[10px] text-brand-black/50 font-semibold">
                                 {formatDurationDisplay(packageSpecs.durationMinutes)} each
@@ -2705,7 +2745,6 @@ export function BookNow() {
                               // Check if selected date is closed or day off
                               const dayInfo = getDayOperatingInfo(selectedDate);
                               const isSelectedDayClosed = dayInfo.isClosed;
-                              const isSelectedDayFullDayOff = dayInfo.isDayOff || (dayInfo.isClosed && (dayInfo.reason?.toLowerCase().includes('day off') || dayInfo.reason?.toLowerCase().includes('time off')));
 
                               if (isSelectedDayClosed) {
                                 const reason = dayInfo.reason || 'Instructor Scheduled Day Off';
@@ -2722,18 +2761,17 @@ export function BookNow() {
                                 );
                               }
 
-                              if (isRefreshingSlots && !selectedDayAvailability) {
-                                return (
-                                  <div className="p-8 text-center text-xs text-brand-black/60 my-2">
-                                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-brand-red" />
-                                    <p className="font-bold">Checking slot availability...</p>
-                                  </div>
-                                );
-                              }
-
                               const allSlots = availableSlotsForPackage;
 
                               if (allSlots.length === 0) {
+                                if (isRefreshingSlots) {
+                                  return (
+                                    <div className="p-8 text-center text-xs text-brand-black/60 my-2">
+                                      <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-brand-red" />
+                                      <p className="font-bold">Checking slot availability...</p>
+                                    </div>
+                                  );
+                                }
                                 return (
                                   <div className="p-5 bg-black/[0.02] rounded-2xl border border-black/5 text-center text-xs text-brand-black/60 my-2">
                                     <CalendarOff className="w-5 h-5 mx-auto mb-1.5 text-black/40" />
