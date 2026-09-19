@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, isSqlConfigured } from './index.ts';
-import { users, bookings, contactMessages, bookingAuditLogs, emailLogs, webhookEvents, instructorTimeOff } from './schema.ts';
+import { users, bookings, contactMessages, bookingAuditLogs, emailLogs, webhookEvents, instructorTimeOff, instructorSettings } from './schema.ts';
 import { eq, desc, or, and, ne } from 'drizzle-orm';
 import { getSupabaseServerClient } from '../lib/supabase-server.ts';
+import { InstructorWeeklyDaysOff, InstructorDayOffSettings, WeekdayKey } from '../types/availability.ts';
 
 // In-memory fallback stores for offline/sandbox environments
+const inMemoryInstructorSettings: Map<string, any> = new Map();
 const inMemoryUsers: Map<string, any> = new Map();
 const inMemoryContactMessages: any[] = [];
 const inMemoryAuditLogs: any[] = [];
@@ -752,16 +754,20 @@ async function ensureInstructorSettingsTable() {
 }
 
 export async function getInstructorSettingsDb(instructorId = 'wally'): Promise<any | null> {
+  const normId = (instructorId || 'wally').trim().toLowerCase();
+
   const supabase = getSupabaseServerClient();
   if (supabase) {
     try {
       const { data, error } = await supabase
         .from('instructor_settings')
         .select('settings_json')
-        .eq('instructor_id', instructorId)
+        .eq('instructor_id', normId)
         .maybeSingle();
       if (!error && data?.settings_json) {
-        return typeof data.settings_json === 'string' ? JSON.parse(data.settings_json) : data.settings_json;
+        const parsed = typeof data.settings_json === 'string' ? JSON.parse(data.settings_json) : data.settings_json;
+        inMemoryInstructorSettings.set(normId, parsed);
+        return parsed;
       }
     } catch {}
   }
@@ -770,21 +776,51 @@ export async function getInstructorSettingsDb(instructorId = 'wally'): Promise<a
     try {
       await ensureInstructorSettingsTable();
       const res: any = await db.execute(`
-        SELECT settings_json FROM instructor_settings WHERE instructor_id = '${instructorId.replace(/'/g, "''")}' LIMIT 1;
+        SELECT settings_json FROM instructor_settings WHERE instructor_id = '${normId.replace(/'/g, "''")}' LIMIT 1;
       `);
       const row = res?.rows?.[0] || res?.[0];
       if (row?.settings_json) {
-        return typeof row.settings_json === 'string' ? JSON.parse(row.settings_json) : row.settings_json;
+        const parsed = typeof row.settings_json === 'string' ? JSON.parse(row.settings_json) : row.settings_json;
+        inMemoryInstructorSettings.set(normId, parsed);
+        return parsed;
       }
     } catch {}
   }
+
+  // Check in-memory store
+  if (inMemoryInstructorSettings.has(normId)) {
+    return inMemoryInstructorSettings.get(normId);
+  }
+
+  // Check file-system fallback
+  try {
+    const settingsFile = path.join(process.cwd(), 'data', `instructor-settings-${normId}.json`);
+    if (fs.existsSync(settingsFile)) {
+      const raw = fs.readFileSync(settingsFile, 'utf-8');
+      const parsed = JSON.parse(raw);
+      inMemoryInstructorSettings.set(normId, parsed);
+      return parsed;
+    }
+  } catch {}
 
   return null;
 }
 
 export async function saveInstructorSettingsDb(instructorId = 'wally', settings: any): Promise<boolean> {
+  const normId = (instructorId || 'wally').trim().toLowerCase();
   const jsonStr = JSON.stringify(settings);
   let saved = false;
+
+  // Save to in-memory fallback
+  inMemoryInstructorSettings.set(normId, settings);
+
+  // Save to file system
+  try {
+    const dataDir = path.join(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(path.join(dataDir, `instructor-settings-${normId}.json`), jsonStr, 'utf-8');
+    saved = true;
+  } catch {}
 
   const supabase = getSupabaseServerClient();
   if (supabase) {
@@ -792,7 +828,7 @@ export async function saveInstructorSettingsDb(instructorId = 'wally', settings:
       const { error } = await supabase
         .from('instructor_settings')
         .upsert({
-          instructor_id: instructorId,
+          instructor_id: normId,
           settings_json: jsonStr,
           updated_at: new Date().toISOString()
         }, { onConflict: 'instructor_id' });
@@ -804,7 +840,7 @@ export async function saveInstructorSettingsDb(instructorId = 'wally', settings:
     try {
       await ensureInstructorSettingsTable();
       const safeJson = jsonStr.replace(/'/g, "''");
-      const safeId = instructorId.replace(/'/g, "''");
+      const safeId = normId.replace(/'/g, "''");
       await db.execute(`
         INSERT INTO instructor_settings (instructor_id, settings_json, updated_at)
         VALUES ('${safeId}', '${safeJson}', CURRENT_TIMESTAMP)
@@ -817,6 +853,100 @@ export async function saveInstructorSettingsDb(instructorId = 'wally', settings:
   }
 
   return saved;
+}
+
+export const DEFAULT_WEEKLY_DAYS_OFF: InstructorWeeklyDaysOff = {
+  monday: true,    // true = ON (Available), false = OFF (Day Off)
+  tuesday: true,
+  wednesday: true,
+  thursday: true,
+  friday: true,
+  saturday: true,
+  sunday: true,
+};
+
+const DAY_INDEX_MAP: Record<WeekdayKey, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+export async function getInstructorWeeklyDaysOff(instructorId = 'wally'): Promise<InstructorDayOffSettings> {
+  const normId = (instructorId || 'wally').trim().toLowerCase();
+  const settings = await getInstructorSettingsDb(normId);
+
+  const weeklyDaysOff: InstructorWeeklyDaysOff = {
+    ...DEFAULT_WEEKLY_DAYS_OFF,
+    ...(settings?.weeklyDaysOff || {})
+  };
+
+  // If weeklyDaysOff was not explicitly stored but disabledDays was:
+  if (!settings?.weeklyDaysOff && Array.isArray(settings?.disabledDays)) {
+    const dayNames: WeekdayKey[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    settings.disabledDays.forEach((dayNum: number) => {
+      const k = dayNames[dayNum];
+      if (k) weeklyDaysOff[k] = false;
+    });
+  }
+
+  const disabledDays: number[] = [];
+  const disabledWeekdays: WeekdayKey[] = [];
+
+  (Object.keys(weeklyDaysOff) as WeekdayKey[]).forEach(day => {
+    if (weeklyDaysOff[day] === false) {
+      disabledDays.push(DAY_INDEX_MAP[day]);
+      disabledWeekdays.push(day);
+    }
+  });
+
+  return {
+    instructorId: normId,
+    weeklyDaysOff,
+    disabledDays,
+    disabledWeekdays,
+    updatedAt: settings?.updatedAt || new Date().toISOString()
+  };
+}
+
+export async function saveInstructorWeeklyDaysOff(
+  instructorId = 'wally', 
+  weeklyDaysOff: InstructorWeeklyDaysOff
+): Promise<InstructorDayOffSettings> {
+  const normId = (instructorId || 'wally').trim().toLowerCase();
+  const existing = (await getInstructorSettingsDb(normId)) || {};
+
+  const disabledDays: number[] = [];
+  const disabledWeekdays: WeekdayKey[] = [];
+
+  (Object.keys(weeklyDaysOff) as WeekdayKey[]).forEach(day => {
+    if (weeklyDaysOff[day] === false) {
+      disabledDays.push(DAY_INDEX_MAP[day]);
+      disabledWeekdays.push(day);
+    }
+  });
+
+  const updated = {
+    ...existing,
+    instructorId: normId,
+    weeklyDaysOff,
+    disabledDays,
+    disabledWeekdays,
+    updatedAt: new Date().toISOString()
+  };
+
+  await saveInstructorSettingsDb(normId, updated);
+
+  return {
+    instructorId: normId,
+    weeklyDaysOff,
+    disabledDays,
+    disabledWeekdays,
+    updatedAt: updated.updatedAt
+  };
 }
 
 // Retrieve time-off blocks, filtered by instructorId if provided
@@ -1480,6 +1610,33 @@ export async function clearAllTimeOffBlocks(instructorId?: string): Promise<bool
 export async function checkDateOrSlotBlockedByTimeOff(
   date: string,
   time: string,
+  instructorId = 'wally'
+): Promise<{ blocked: boolean; reason?: string; isFullDay?: boolean }> {
+  try {
+    const { getAvailability } = await import('../server/centralAvailabilityService.ts');
+    const res = await getAvailability({
+      date,
+      requestedTime: time,
+      instructorId
+    });
+
+    if (!res.available && (res.reason === 'INSTRUCTOR_DAY_OFF' || res.reason === 'SCHOOL_CLOSED' || res.reason === 'OUTSIDE_OPERATING_HOURS')) {
+      return {
+        blocked: true,
+        isFullDay: Boolean(res.isDayOff || res.isClosed),
+        reason: res.message
+      };
+    }
+    return { blocked: false };
+  } catch (err) {
+    console.warn('[checkDateOrSlotBlockedByTimeOff] Falling back on error:', err);
+    return { blocked: false };
+  }
+}
+
+async function _legacyCheckDateOrSlotBlockedByTimeOff(
+  date: string,
+  time: string,
   instructorId?: string
 ): Promise<{ blocked: boolean; reason?: string; isFullDay?: boolean }> {
   const normDate = normalizeDate(date);
@@ -1607,12 +1764,18 @@ export async function checkDateOrSlotBlockedByTimeOff(
         const dayKey = mapping[dayIdx];
         const daySchedule = settings.operatingHours?.[dayKey];
 
-        // Explicit disabled days of week check
-        if (Array.isArray(settings.disabledDays) && settings.disabledDays.includes(dayIdx)) {
+        // Explicit instructor day off / disabled days of week check
+        const isDayOff = 
+          (Array.isArray(settings.disabledDays) && settings.disabledDays.includes(dayIdx)) ||
+          (settings.weeklyDaysOff && settings.weeklyDaysOff[dayKey] === false) ||
+          (Array.isArray(settings.disabledWeekdays) && settings.disabledWeekdays.includes(dayKey));
+
+        if (isDayOff) {
+          const dayLabel = daySchedule?.label || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1));
           return {
             blocked: true,
             isFullDay: true,
-            reason: `Instructor does not operate on ${daySchedule?.label || dayKey}s.`
+            reason: `Instructor Day Off: Instructor does not take bookings on ${dayLabel}s.`
           };
         }
 
@@ -1692,99 +1855,34 @@ export async function checkSlotDetailed(
   excludeRef?: string,
   customerEmail?: string,
   customerPhone?: string,
-  instructorId?: string
+  instructorId = 'wally'
 ): Promise<{ available: boolean; isTimeOff?: boolean; code?: string; reason?: string; isFullDay?: boolean }> {
-  const normTargetDate = normalizeDate(date);
-  if (!normTargetDate) return { available: false, reason: "Invalid date" };
+  try {
+    const { getAvailability } = await import('../server/centralAvailabilityService.ts');
+    const res = await getAvailability({
+      date,
+      requestedTime: time,
+      excludeBookingRef: excludeRef,
+      customerEmail,
+      customerPhone,
+      instructorId
+    });
 
-  // 0. Authoritatively enforce Instructor Availability / Time Off blocks first
-  const timeOffResult = await checkDateOrSlotBlockedByTimeOff(normTargetDate, time, instructorId);
-  if (timeOffResult.blocked) {
+    if (res.available) {
+      return { available: true };
+    }
+
     return {
       available: false,
-      isTimeOff: true,
-      isFullDay: timeOffResult.isFullDay,
-      code: "INSTRUCTOR_TIME_OFF",
-      reason: timeOffResult.reason || "This time is unavailable because the instructor is off. Please choose another time."
+      isTimeOff: res.reason === 'INSTRUCTOR_DAY_OFF',
+      isFullDay: Boolean(res.isDayOff),
+      code: res.reason,
+      reason: res.message
     };
+  } catch (err) {
+    console.warn('[checkSlotDetailed] Fallback check error:', err);
+    return { available: true };
   }
-
-  const targetInterval = parseTimeInterval(time);
-  const cleanEmail = customerEmail?.trim().toLowerCase();
-  const cleanPhone = customerPhone?.replace(/\D/g, '');
-  const now = Date.now();
-  const PENDING_TIMEOUT_MS = 20 * 60 * 1000;
-
-  // Authoritative check must examine ALL non-cancelled bookings including unpaid/pending
-  const currentBookings = await getBookings({ includeUnpaid: true });
-
-  for (const r of currentBookings) {
-    // 1. Exclude self if customer is updating their own booking reference
-    if (excludeRef && r.bookingRef && r.bookingRef.toUpperCase() === excludeRef.toUpperCase()) {
-      continue;
-    }
-
-    // 2. Ignore cancelled bookings
-    if (r.status === 'Cancelled') {
-      continue;
-    }
-
-    // 3. Match date using canonical date normalization
-    const bookingNormDate = normalizeDate(r.date);
-    if (!bookingNormDate || bookingNormDate !== normTargetDate) {
-      continue;
-    }
-
-    // 4. Overlap & 30-minute buffer calculation
-    const existingInterval = parseTimeInterval(r.time);
-    let timeConflicts = false;
-
-    if (targetInterval && existingInterval) {
-      timeConflicts = isTimeSlotConflicting(targetInterval, existingInterval, 30);
-    } else {
-      const cleanT1 = time.replace(/\s+/g, ' ').toLowerCase();
-      const cleanT2 = (r.time || '').replace(/\s+/g, ' ').toLowerCase();
-      timeConflicts = cleanT1 === cleanT2;
-    }
-
-    if (!timeConflicts) {
-      continue;
-    }
-
-    // 5. Confirmed or paid bookings unconditionally block the slot
-    if (r.status === 'Confirmed' || r.paymentStatus === 'paid') {
-      return {
-        available: false,
-        isTimeOff: false,
-        code: "SLOT_ALREADY_BOOKED",
-        reason: "This time slot is no longer available. Please select another time."
-      };
-    }
-
-    // 6. Pending bookings block the slot unless it is the same customer resuming checkout or timed out
-    if (r.status === 'Pending' || r.paymentStatus === 'unpaid') {
-      if (cleanEmail && r.email && r.email.toLowerCase() === cleanEmail) {
-        continue;
-      }
-      if (cleanPhone && r.phone && r.phone.replace(/\D/g, '') === cleanPhone) {
-        continue;
-      }
-
-      const createdAtMs = r.createdAt ? new Date(r.createdAt).getTime() : 0;
-      if (createdAtMs > 0 && (now - createdAtMs) > PENDING_TIMEOUT_MS) {
-        continue;
-      }
-
-      return {
-        available: false,
-        isTimeOff: false,
-        code: "SLOT_ALREADY_BOOKED",
-        reason: "This time slot is currently on hold by another checkout. Please choose another time or wait 15 minutes."
-      };
-    }
-  }
-
-  return { available: true };
 }
 
 // Check if a time slot on a specific date is already taken by an active booking or blocked by instructor time off

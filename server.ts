@@ -33,13 +33,18 @@ import {
   minutesToTimeString,
   getInstructorSettingsDb,
   saveInstructorSettingsDb,
-  clearAllTimeOffBlocks
+  clearAllTimeOffBlocks,
+  getInstructorWeeklyDaysOff,
+  saveInstructorWeeklyDaysOff
 } from "./src/db/queries.ts";
 import { STANDARD_START_TIMES } from "./src/lib/bookingSlots.ts";
 import {
   getInstructorSettings,
   saveInstructorSettings,
   getDisabledDaysOfWeek,
+  setInstructorWeekdayOff,
+  setInstructorWeeklyDaysOff,
+  isInstructorWeekdayOff,
   getDateOverrides,
   addDateOverride,
   deleteDateOverride,
@@ -2207,128 +2212,7 @@ app.get(["/api/availability/month", "/availability/month"], async (req, res) => 
   }
 });
 
-// Public endpoint for Book Now page to get full operating hours, buffer, and disabled days
-app.get(["/api/availability/operating-hours", "/availability/operating-hours"], async (req, res) => {
-  try {
-    res.set({
-      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0',
-    });
-    const instructorId = (req.query.instructorId as string) || 'wally';
-    let settings = getInstructorSettings(instructorId);
 
-    // If database has saved settings, keep memory synchronized
-    try {
-      const dbSettings = await getInstructorSettingsDb(instructorId);
-      if (dbSettings && dbSettings.operatingHours) {
-        const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
-        const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime >= localTime || !settings.operatingHours) {
-          settings = saveInstructorSettings(dbSettings);
-        }
-      }
-    } catch {}
-
-    const disabledDays = getDisabledDaysOfWeek(instructorId);
-    const overrides = getDateOverrides(instructorId);
-
-    res.json({
-      success: true,
-      settings,
-      operatingHours: settings.operatingHours,
-      disabledDays,
-      bufferMinutes: settings.bufferMinutes,
-      timezone: settings.timezone,
-      dateOverrides: overrides
-    });
-  } catch (err: any) {
-    console.error("Error fetching operating hours:", err);
-    res.status(500).json({ error: "Failed to fetch operating hours" });
-  }
-});
-
-// Authenticated Instructor Operating Hours endpoints (Settings -> Operating Hours)
-app.get(["/api/instructor/operating-hours", "/instructor/operating-hours"], async (req, res) => {
-  try {
-    res.set({
-      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0',
-    });
-    const instructorId = (req as any).instructor?.instructorId || 'wally';
-    let settings = getInstructorSettings(instructorId);
-
-    try {
-      const dbSettings = await getInstructorSettingsDb(instructorId);
-      if (dbSettings && dbSettings.operatingHours) {
-        const dbTime = dbSettings.updatedAt ? new Date(dbSettings.updatedAt).getTime() : 0;
-        const localTime = settings.updatedAt ? new Date(settings.updatedAt).getTime() : 0;
-        if (dbTime >= localTime || !settings.operatingHours) {
-          settings = saveInstructorSettings(dbSettings);
-        }
-      }
-    } catch {}
-
-    const disabledDays = getDisabledDaysOfWeek(instructorId);
-
-    res.json({
-      success: true,
-      settings,
-      operatingHours: settings.operatingHours,
-      disabledDays,
-      bufferMinutes: settings.bufferMinutes,
-      timezone: settings.timezone
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: "Failed to load instructor settings" });
-  }
-});
-
-app.put(["/api/instructor/operating-hours", "/instructor/operating-hours"], attachInstructorOrAuth, async (req, res) => {
-  try {
-    const instructorId = (req as any).instructor?.instructorId || 'wally';
-    const { operatingHours, bufferMinutes, timezone, minNoticeHours, maxAdvanceDays } = req.body;
-
-    if (!operatingHours || typeof operatingHours !== 'object') {
-      return res.status(400).json({ error: "Invalid operating hours payload" });
-    }
-
-    const updated = saveInstructorSettings({
-      instructorId,
-      operatingHours,
-      bufferMinutes: typeof bufferMinutes === 'number' ? bufferMinutes : undefined,
-      timezone: typeof timezone === 'string' ? timezone : undefined,
-      minNoticeHours: typeof minNoticeHours === 'number' ? minNoticeHours : undefined,
-      maxAdvanceDays: typeof maxAdvanceDays === 'number' ? maxAdvanceDays : undefined
-    });
-
-    // Synchronously/asynchronously persist to database with fallback timeout
-    try {
-      await Promise.race([
-        saveInstructorSettingsDb(instructorId, updated),
-        new Promise(resolve => setTimeout(resolve, 1500))
-      ]);
-    } catch (err) {
-      console.warn('[OperatingHours] Warning saving settings to database:', err);
-    }
-
-    const disabledDays = getDisabledDaysOfWeek(instructorId);
-
-    res.json({
-      success: true,
-      message: "Operating hours updated successfully",
-      settings: updated,
-      operatingHours: updated.operatingHours,
-      disabledDays,
-      bufferMinutes: updated.bufferMinutes,
-      timezone: updated.timezone
-    });
-  } catch (err: any) {
-    console.error("Error saving operating hours:", err);
-    res.status(500).json({ error: "Failed to save operating hours" });
-  }
-});
 
 // Comprehensive Reset: Wipes all day-off blocks, resets operating hours to standard 7 days open
 app.post(["/api/instructor/reset-all-availability-data", "/instructor/reset-all-availability-data"], attachInstructorOrAuth, async (req, res) => {
@@ -2546,6 +2430,146 @@ app.delete("/api/instructor/date-overrides/:id", attachInstructorOrAuth, (req, r
     res.json({ success: true, message: "Date override removed" });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to delete date override" });
+  }
+});
+
+// -------------------------------------------------------------
+// INSTRUCTOR DAY OFF (RECURRING WEEKDAY TOGGLE)
+// Allows each instructor to turn any weekday (Mon-Sun) ON or OFF permanently.
+// If OFF: blocks instructor booking slots across all future weeks, months, and years.
+// If ON: restores normal availability.
+// Syncs in real-time with customer booking calendar and saves to real database.
+// -------------------------------------------------------------
+
+// Get instructor weekly days off
+app.get([
+  "/api/instructor/day-off", 
+  "/instructor/day-off", 
+  "/api/availability/instructor-day-off", 
+  "/availability/instructor-day-off"
+], async (req, res) => {
+  try {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    const targetInstructor = String(
+      req.query.instructorId || 
+      (req as any).instructor?.instructorId || 
+      (req as any).user?.instructorId || 
+      'wally'
+    ).trim().toLowerCase();
+
+    // Fetch from real database, syncs with in-memory service
+    const daysOffSettings = await getInstructorWeeklyDaysOff(targetInstructor);
+
+    res.json({
+      success: true,
+      instructorId: targetInstructor,
+      weeklyDaysOff: daysOffSettings.weeklyDaysOff,
+      disabledDays: daysOffSettings.disabledDays,
+      disabledWeekdays: daysOffSettings.disabledWeekdays,
+      updatedAt: daysOffSettings.updatedAt
+    });
+  } catch (err: any) {
+    console.error('[InstructorDayOff] Error fetching days off:', err);
+    res.status(500).json({ success: false, error: 'Failed to retrieve instructor days off' });
+  }
+});
+
+// Update instructor weekday (ON/OFF)
+app.post(["/api/instructor/day-off", "/instructor/day-off"], attachInstructorOrAuth, async (req, res) => {
+  try {
+    const targetInstructor = String(
+      req.body.instructorId || 
+      req.query.instructorId || 
+      (req as any).instructor?.instructorId || 
+      (req as any).user?.instructorId || 
+      'wally'
+    ).trim().toLowerCase();
+
+    const { weekday, status, isAvailable, weeklyDaysOff } = req.body;
+
+    let result;
+
+    if (weeklyDaysOff && typeof weeklyDaysOff === 'object') {
+      // Bulk update
+      result = setInstructorWeeklyDaysOff(targetInstructor, weeklyDaysOff);
+      await saveInstructorWeeklyDaysOff(targetInstructor, weeklyDaysOff);
+    } else if (weekday) {
+      // Single weekday update
+      const validWeekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const normWeekday = String(weekday).trim().toLowerCase();
+      if (!validWeekdays.includes(normWeekday)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: `Invalid weekday '${weekday}'. Must be one of: ${validWeekdays.join(', ')}` 
+        });
+      }
+
+      const available = status !== undefined ? Boolean(status) : isAvailable !== undefined ? Boolean(isAvailable) : true;
+      result = setInstructorWeekdayOff(targetInstructor, normWeekday as any, available);
+      await saveInstructorWeeklyDaysOff(targetInstructor, result.weeklyDaysOff);
+    } else {
+      return res.status(400).json({ success: false, error: "Must specify 'weekday' and 'status', or 'weeklyDaysOff' object." });
+    }
+
+    // Broadcast update via stdout / timestamp so clients sync instantly
+    res.json({
+      success: true,
+      message: `Instructor ${targetInstructor} day off setting saved to database successfully.`,
+      data: result
+    });
+  } catch (err: any) {
+    console.error('[InstructorDayOff] Error updating day off:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to save instructor day off' });
+  }
+});
+
+app.put(["/api/instructor/day-off", "/instructor/day-off"], attachInstructorOrAuth, async (req, res) => {
+  try {
+    const targetInstructor = String(
+      req.body.instructorId || 
+      req.query.instructorId || 
+      (req as any).instructor?.instructorId || 
+      (req as any).user?.instructorId || 
+      'wally'
+    ).trim().toLowerCase();
+
+    const { weekday, status, isAvailable, weeklyDaysOff } = req.body;
+
+    let result;
+
+    if (weeklyDaysOff && typeof weeklyDaysOff === 'object') {
+      result = setInstructorWeeklyDaysOff(targetInstructor, weeklyDaysOff);
+      await saveInstructorWeeklyDaysOff(targetInstructor, weeklyDaysOff);
+    } else if (weekday) {
+      const validWeekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const normWeekday = String(weekday).trim().toLowerCase();
+      if (!validWeekdays.includes(normWeekday)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: `Invalid weekday '${weekday}'. Must be one of: ${validWeekdays.join(', ')}` 
+        });
+      }
+
+      const available = status !== undefined ? Boolean(status) : isAvailable !== undefined ? Boolean(isAvailable) : true;
+      result = setInstructorWeekdayOff(targetInstructor, normWeekday as any, available);
+      await saveInstructorWeeklyDaysOff(targetInstructor, result.weeklyDaysOff);
+    } else {
+      return res.status(400).json({ success: false, error: "Must specify 'weekday' and 'status', or 'weeklyDaysOff' object." });
+    }
+
+    res.json({
+      success: true,
+      message: `Instructor ${targetInstructor} day off setting updated in database successfully.`,
+      data: result
+    });
+  } catch (err: any) {
+    console.error('[InstructorDayOff] Error updating day off:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to save instructor day off' });
   }
 });
 

@@ -117,6 +117,16 @@ export const instructorTimeOff = pgTable('instructor_time_off', {
   timeOffInstructorIdx: index('time_off_instructor_idx').on(table.instructorId),
 }));
 
+// Instructor Settings (weekly days off, configuration)
+export const instructorSettings = pgTable('instructor_settings', {
+  id: serial('id').primaryKey(),
+  instructorId: text('instructor_id').notNull().unique().default('wally'),
+  settingsJson: text('settings_json').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  instructorSettingsIdx: index('instructor_settings_instructor_idx').on(table.instructorId),
+}));
+
 // Table relations
 export const usersRelations = relations(users, ({ many }) => ({
   bookings: many(bookings),

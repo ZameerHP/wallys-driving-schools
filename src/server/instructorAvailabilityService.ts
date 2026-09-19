@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { 
   DayKey, 
+  WeekdayKey,
   DaySchedule, 
   WeeklyOperatingHours, 
   InstructorSettings, 
+  InstructorWeeklyDaysOff,
+  InstructorDayOffSettings,
   TimePeriod, 
   DateOverride, 
   ExternalCalendarEvent, 
@@ -14,7 +17,13 @@ import {
   MonthAvailabilityDay,
   GetAvailabilityParams
 } from '../types/availability';
-import { getBookings, getTimeOffBlocks, normalizeDate } from '../db/queries';
+import { 
+  getBookings, 
+  getTimeOffBlocks, 
+  normalizeDate,
+  getInstructorWeeklyDaysOff as getInstructorWeeklyDaysOffDb,
+  saveInstructorWeeklyDaysOff as saveInstructorWeeklyDaysOffDb
+} from '../db/queries';
 import { generateSlotsForDuration } from '../lib/bookingSlots';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -171,6 +180,7 @@ const DEFAULT_SETTINGS: InstructorSettings = {
 
 // In-memory cache for high-throughput responses
 let cachedSettings: InstructorSettings = { ...DEFAULT_SETTINGS };
+const cachedInstructorSettings = new Map<string, InstructorSettings>();
 let cachedExternalEvents: ExternalCalendarEvent[] = [];
 let cachedCalendarConn: CalendarConnectionConfig = {
   instructorId: 'wally',
@@ -265,14 +275,66 @@ function initService() {
 
 export function getInstructorSettings(instructorId = 'wally'): InstructorSettings {
   initService();
-  return cachedSettings;
+  const normId = (instructorId || 'wally').trim().toLowerCase();
+
+  let settings = cachedInstructorSettings.get(normId);
+  if (!settings) {
+    // Check disk file for this specific instructor
+    try {
+      const specificFile = path.join(DATA_DIR, `instructor-settings-${normId}.json`);
+      if (fs.existsSync(specificFile)) {
+        settings = JSON.parse(fs.readFileSync(specificFile, 'utf-8'));
+      }
+    } catch {}
+
+    if (!settings && normId === 'wally' && cachedSettings) {
+      settings = cachedSettings;
+    }
+
+    if (!settings) {
+      settings = {
+        ...DEFAULT_SETTINGS,
+        instructorId: normId,
+        instructorName: normId === 'wally' ? 'Wally' : normId.charAt(0).toUpperCase() + normId.slice(1),
+        weeklyDaysOff: {
+          monday: true,
+          tuesday: true,
+          wednesday: true,
+          thursday: true,
+          friday: true,
+          saturday: true,
+          sunday: true
+        },
+        disabledDays: [],
+        disabledWeekdays: []
+      };
+    }
+    cachedInstructorSettings.set(normId, settings);
+  }
+
+  // Ensure weeklyDaysOff is defined
+  if (!settings.weeklyDaysOff) {
+    settings.weeklyDaysOff = {
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: true,
+      saturday: true,
+      sunday: true
+    };
+  }
+
+  return settings;
 }
 
-export function saveInstructorSettings(newSettings: Partial<InstructorSettings>): InstructorSettings {
+export function saveInstructorSettings(newSettings: Partial<InstructorSettings>, instructorId = 'wally'): InstructorSettings {
   initService();
+  const normId = (instructorId || newSettings.instructorId || 'wally').trim().toLowerCase();
+  const current = getInstructorSettings(normId);
 
   // Normalize operating hours periods to guarantee startMinutes and endMinutes exist
-  let updatedOperatingHours = { ...cachedSettings.operatingHours };
+  let updatedOperatingHours = { ...current.operatingHours };
   if (newSettings.operatingHours) {
     const keys: DayKey[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     for (const key of keys) {
@@ -305,37 +367,217 @@ export function saveInstructorSettings(newSettings: Partial<InstructorSettings>)
     }
   }
 
-  cachedSettings = {
-    ...cachedSettings,
+  const updated: InstructorSettings = {
+    ...current,
     ...newSettings,
-    bufferMinutes: typeof newSettings.bufferMinutes === 'number' ? newSettings.bufferMinutes : cachedSettings.bufferMinutes,
-    timezone: newSettings.timezone || cachedSettings.timezone || 'Australia/Sydney',
+    instructorId: normId,
+    bufferMinutes: typeof newSettings.bufferMinutes === 'number' ? newSettings.bufferMinutes : current.bufferMinutes,
+    timezone: newSettings.timezone || current.timezone || 'Australia/Sydney',
     operatingHours: updatedOperatingHours,
+    weeklyDaysOff: newSettings.weeklyDaysOff || current.weeklyDaysOff,
+    disabledDays: newSettings.disabledDays || current.disabledDays,
+    disabledWeekdays: newSettings.disabledWeekdays || current.disabledWeekdays,
     updatedAt: new Date().toISOString()
   };
 
+  cachedInstructorSettings.set(normId, updated);
+  if (normId === 'wally') {
+    cachedSettings = updated;
+  }
+
   try {
     ensureDataDir();
-    fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(cachedSettings, null, 2), 'utf-8');
+    fs.writeFileSync(path.join(DATA_DIR, `instructor-settings-${normId}.json`), JSON.stringify(updated, null, 2), 'utf-8');
+    if (normId === 'wally') {
+      fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    }
   } catch (err) {
     console.error('[AvailabilityService] Error saving settings to disk:', err);
   }
 
-  return cachedSettings;
+  return updated;
 }
 
-// Return list of day of week numbers (0-6) that are completely disabled
+// Return list of day of week numbers (0-6) that are turned OFF for this specific instructor
 export function getDisabledDaysOfWeek(instructorId = 'wally'): number[] {
-  initService();
+  const normId = (instructorId || 'wally').trim().toLowerCase();
+  const settings = getInstructorSettings(normId);
+
+  if (Array.isArray(settings.disabledDays) && settings.disabledDays.length > 0) {
+    return settings.disabledDays;
+  }
+
   const disabled: number[] = [];
-  const keys: DayKey[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  keys.forEach((key, idx) => {
-    const daySched = cachedSettings.operatingHours[key];
-    if (!daySched || !daySched.enabled || daySched.periods.length === 0) {
-      disabled.push(idx);
+  if (settings.weeklyDaysOff) {
+    const dayIndexMap: Record<WeekdayKey, number> = {
+      sunday: 0,
+      monday: 1,
+      tuesday: 2,
+      wednesday: 3,
+      thursday: 4,
+      friday: 5,
+      saturday: 6
+    };
+    (Object.keys(settings.weeklyDaysOff) as WeekdayKey[]).forEach(day => {
+      if (settings.weeklyDaysOff![day] === false) {
+        disabled.push(dayIndexMap[day]);
+      }
+    });
+  }
+
+  return disabled;
+}
+
+// Check if a specific weekday is OFF for an instructor
+export function isInstructorWeekdayOff(instructorId = 'wally', dayIdx: number): boolean {
+  const disabled = getDisabledDaysOfWeek(instructorId);
+  return disabled.includes(dayIdx);
+}
+
+// Update a single weekday ON/OFF state for a specific instructor
+export function setInstructorWeekdayOff(
+  instructorId = 'wally',
+  weekday: WeekdayKey,
+  isAvailable: boolean
+): InstructorDayOffSettings {
+  const normId = (instructorId || 'wally').trim().toLowerCase();
+  const current = getInstructorSettings(normId);
+
+  const weeklyDaysOff: InstructorWeeklyDaysOff = {
+    monday: true,
+    tuesday: true,
+    wednesday: true,
+    thursday: true,
+    friday: true,
+    saturday: true,
+    sunday: true,
+    ...(current.weeklyDaysOff || {})
+  };
+
+  weeklyDaysOff[weekday] = Boolean(isAvailable);
+
+  const dayIndexMap: Record<WeekdayKey, number> = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6
+  };
+
+  const disabledDays: number[] = [];
+  const disabledWeekdays: WeekdayKey[] = [];
+
+  (Object.keys(weeklyDaysOff) as WeekdayKey[]).forEach(day => {
+    if (weeklyDaysOff[day] === false) {
+      disabledDays.push(dayIndexMap[day]);
+      disabledWeekdays.push(day);
     }
   });
-  return disabled;
+
+  const updated: InstructorSettings = {
+    ...current,
+    instructorId: normId,
+    weeklyDaysOff,
+    disabledDays,
+    disabledWeekdays,
+    updatedAt: new Date().toISOString()
+  };
+
+  cachedInstructorSettings.set(normId, updated);
+  if (normId === 'wally') {
+    cachedSettings = updated;
+  }
+
+  // Save to file on disk
+  try {
+    ensureDataDir();
+    fs.writeFileSync(path.join(DATA_DIR, `instructor-settings-${normId}.json`), JSON.stringify(updated, null, 2), 'utf-8');
+    if (normId === 'wally') {
+      fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    }
+  } catch (err) {
+    console.error('[AvailabilityService] Error saving instructor day-off settings:', err);
+  }
+
+  // Persist to REAL Database
+  saveInstructorWeeklyDaysOffDb(normId, weeklyDaysOff).catch(err => {
+    console.warn('[AvailabilityService] saveInstructorWeeklyDaysOffDb async warning:', err);
+  });
+
+  return {
+    instructorId: normId,
+    weeklyDaysOff,
+    disabledDays,
+    disabledWeekdays,
+    updatedAt: updated.updatedAt
+  };
+}
+
+// Bulk update weekly days off for a specific instructor
+export function setInstructorWeeklyDaysOff(
+  instructorId = 'wally',
+  weeklyDaysOff: InstructorWeeklyDaysOff
+): InstructorDayOffSettings {
+  const normId = (instructorId || 'wally').trim().toLowerCase();
+  const current = getInstructorSettings(normId);
+
+  const dayIndexMap: Record<WeekdayKey, number> = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6
+  };
+
+  const disabledDays: number[] = [];
+  const disabledWeekdays: WeekdayKey[] = [];
+
+  (Object.keys(weeklyDaysOff) as WeekdayKey[]).forEach(day => {
+    if (weeklyDaysOff[day] === false) {
+      disabledDays.push(dayIndexMap[day]);
+      disabledWeekdays.push(day);
+    }
+  });
+
+  const updated: InstructorSettings = {
+    ...current,
+    instructorId: normId,
+    weeklyDaysOff,
+    disabledDays,
+    disabledWeekdays,
+    updatedAt: new Date().toISOString()
+  };
+
+  cachedInstructorSettings.set(normId, updated);
+  if (normId === 'wally') {
+    cachedSettings = updated;
+  }
+
+  try {
+    ensureDataDir();
+    fs.writeFileSync(path.join(DATA_DIR, `instructor-settings-${normId}.json`), JSON.stringify(updated, null, 2), 'utf-8');
+    if (normId === 'wally') {
+      fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    }
+  } catch (err) {
+    console.error('[AvailabilityService] Error saving bulk day-off settings:', err);
+  }
+
+  saveInstructorWeeklyDaysOffDb(normId, weeklyDaysOff).catch(err => {
+    console.warn('[AvailabilityService] saveInstructorWeeklyDaysOffDb async warning:', err);
+  });
+
+  return {
+    instructorId: normId,
+    weeklyDaysOff,
+    disabledDays,
+    disabledWeekdays,
+    updatedAt: updated.updatedAt
+  };
 }
 
 // -------------------------------------------------------------
@@ -671,6 +913,19 @@ export async function getWorkingPeriodsForDate(
     }
   }
 
+  // 1b. Check Instructor-Specific Recurring Weekday Day Off
+  const dayKey = getDayKeyFromDateStr(normDate);
+  const dayIdx = dayKeyToDayIndex(dayKey);
+  if (isInstructorWeekdayOff(normInstructor, dayIdx)) {
+    const dayName = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
+    return {
+      isAvailable: false,
+      periods: [],
+      unavailableReason: `Instructor Day Off (${dayName}s permanently off).`,
+      isOverride: true
+    };
+  }
+
   // 2. Check Time Off Blocks (Full Day blocks)
   const timeOffBlocks = await getTimeOffBlocks(instructorId);
   const matchingTimeOff = timeOffBlocks.find(b => {
@@ -688,21 +943,10 @@ export async function getWorkingPeriodsForDate(
     };
   }
 
-  // 3. Weekly Operating Hours
-  const dayKey = getDayKeyFromDateStr(normDate);
-  const daySchedule = cachedSettings.operatingHours[dayKey];
-
-  if (!daySchedule || !daySchedule.enabled || daySchedule.periods.length === 0) {
-    return {
-      isAvailable: false,
-      periods: [],
-      unavailableReason: `Instructor does not operate on ${daySchedule?.label || dayKey}s.`
-    };
-  }
-
+  // 3. Operating Periods (operating hours system removed - all days standard open 8am-6pm)
   return {
     isAvailable: true,
-    periods: daySchedule.periods
+    periods: [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }]
   };
 }
 
@@ -771,6 +1015,24 @@ export async function getAvailability(params: GetAvailabilityParams): Promise<Da
     };
   }
 
+  // 1b. Check Instructor-Specific Recurring Weekday Day Off (Permanent across all future weeks, months, years)
+  const dayKey = getDayKeyFromDateStr(normDate);
+  const dayIdx = dayKeyToDayIndex(dayKey);
+  if (isInstructorWeekdayOff(normInstructor, dayIdx)) {
+    const dayName = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
+    const reason = `Instructor Day Off (${dayName}s permanently off)`;
+    return {
+      date: normDate,
+      instructorId,
+      isOpen: false,
+      isDayOff: true,
+      availableSlots: [],
+      reasonIfUnavailable: reason,
+      isSlotAvailable: false,
+      slotReason: reason
+    };
+  }
+
   // 2. Check Instructor-Specific Days Off (One-off specific date blocks)
   const timeOffBlocks = await getTimeOffBlocks(instructorId);
   const fullDayOff = timeOffBlocks.find(b => {
@@ -794,28 +1056,8 @@ export async function getAvailability(params: GetAvailabilityParams): Promise<Da
     };
   }
 
-  // 3. Weekly Operating Hours (Recurring weekly schedule)
-  const dayKey = getDayKeyFromDateStr(normDate);
-  const daySchedule = cachedSettings.operatingHours[dayKey];
-  const dayIndex = dayKeyToDayIndex(dayKey);
-  const disabledDays = getDisabledDaysOfWeek(instructorId);
-
-  if (!daySchedule || !daySchedule.enabled || daySchedule.periods.length === 0 || disabledDays.includes(dayIndex)) {
-    const reason = `Driving school does not operate on ${daySchedule?.label || dayKey}s.`;
-    return {
-      date: normDate,
-      instructorId,
-      isOpen: false,
-      isDayOff: false,
-      availableSlots: [],
-      reasonIfUnavailable: reason,
-      isSlotAvailable: false,
-      slotReason: reason
-    };
-  }
-
-  // 4. Determine Active Operating Periods for this day
-  let activePeriods: TimePeriod[] = daySchedule.periods;
+  // 3. Determine Active Periods for this day (operating hours system removed - standard open 8am-6pm)
+  let activePeriods: TimePeriod[] = [{ start: '08:00 AM', end: '06:00 PM', startMinutes: 480, endMinutes: 1080 }];
   if (override && override.type === 'custom_hours' && override.periods && override.periods.length > 0) {
     activePeriods = override.periods;
   }

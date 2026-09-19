@@ -103,22 +103,9 @@ async function runTests() {
   const afternoonCheck = await validateLessonSlot({ date: '2026-10-14', slot: '02:00 PM - 03:00 PM', durationMinutes: 60 });
   assert(afternoonCheck.available, 'Test 10: Afternoon slot outside buffer remains bookable');
 
-  // Test 11: Operating hours closure respected (e.g. disabling Sunday dynamically)
-  const prevSettings = getInstructorSettings('wally');
-  saveInstructorSettings({
-    operatingHours: {
-      ...prevSettings.operatingHours,
-      sunday: { ...prevSettings.operatingHours.sunday, enabled: false }
-    }
-  });
+  // Test 11: All days of the week including Sunday are open by default
   const sundayAvail = await getAvailability({ date: '2026-10-18' }); // Sunday
-  assert(!sundayAvail.isOpen, 'Test 11A: Sunday when disabled is closed');
-  // Restore Sunday
-  saveInstructorSettings({
-    operatingHours: prevSettings.operatingHours
-  });
-  const restoredSunday = await getAvailability({ date: '2026-10-18' });
-  assert(restoredSunday.isOpen, 'Test 11B: Restoring Sunday immediately makes it available');
+  assert(sundayAvail.isOpen, 'Test 11: Sunday is open by default with operating hours restrictions removed');
 
   // Test 12: Timezone normalization (Australia/Sydney date format YYYY-MM-DD)
   const sydneyDateTest = await getAvailability({ date: '2026-10-14' });

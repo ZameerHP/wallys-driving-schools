@@ -36,7 +36,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
 import { ManualBookingModal } from '../components/ManualBookingModal';
 import { EditBookingModal } from '../components/EditBookingModal';
-import { InstructorOperatingHours } from '../components/InstructorOperatingHours';
 import { 
   fetchTimeOffBlocks, 
   createClientTimeOffBlock, 
@@ -78,6 +77,7 @@ function formatBlockDate(dateStr: string): string {
   }
 }
 import { InstructorAvailability } from '../components/InstructorAvailability';
+import { InstructorDayOff } from '../components/InstructorDayOff';
 import { 
   isOwnerLoggedIn, 
   setOwnerLoggedIn, 
@@ -273,17 +273,18 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   } | null>(null);
 
   // Section navigation state - strictly sticky across page refresh and browser close
-  const [activeTab, setActiveTabState] = useState<'schedule' | 'availability' | 'operating-hours'>(() => {
+  type InstructorTab = 'schedule' | 'day-off' | 'availability';
+  const [activeTab, setActiveTabState] = useState<InstructorTab>(() => {
     try {
-      const saved = localStorage.getItem('wallys_instructor_active_tab');
-      if (saved === 'schedule' || saved === 'availability' || saved === 'operating-hours') {
+      const saved = localStorage.getItem('wallys_instructor_active_tab') as InstructorTab;
+      if (saved === 'schedule' || saved === 'day-off' || saved === 'availability') {
         return saved;
       }
     } catch {}
     return 'schedule';
   });
 
-  const setActiveTab = useCallback((tab: 'schedule' | 'availability' | 'operating-hours') => {
+  const setActiveTab = useCallback((tab: InstructorTab) => {
     setActiveTabState(tab);
     try {
       localStorage.setItem('wallys_instructor_active_tab', tab);
@@ -644,18 +645,18 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
               <Calendar className="w-4 h-4" />
               <span>Instructor Schedule</span>
             </button>
-            
+
             <button
-              onClick={() => setActiveTab('operating-hours')}
+              onClick={() => setActiveTab('day-off')}
               className={cn(
                 "flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all text-left cursor-pointer w-full",
-                activeTab === 'operating-hours'
+                activeTab === 'day-off'
                   ? "bg-brand-red text-white shadow-[0_0_15px_rgba(227,34,42,0.3)]"
                   : "text-white/80 hover:text-white hover:bg-white/10"
               )}
             >
-              <Clock className="w-4 h-4 text-sky-400" />
-              <span>Operating Hours</span>
+              <CalendarOff className="w-4 h-4 text-amber-300" />
+              <span>Instructor Day Off</span>
             </button>
 
             <button
@@ -716,7 +717,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
           className="max-w-5xl"
         >
           {/* Section Navigation Tabs */}
-          <div className="flex items-center gap-2 mb-6 border-b border-black/10 pb-4">
+          <div className="flex flex-wrap items-center gap-2 mb-6 border-b border-black/10 pb-4">
             <button
               onClick={() => setActiveTab('schedule')}
               className={cn(
@@ -731,16 +732,16 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             </button>
 
             <button
-              onClick={() => setActiveTab('operating-hours')}
+              onClick={() => setActiveTab('day-off')}
               className={cn(
                 "flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer",
-                activeTab === 'operating-hours'
+                activeTab === 'day-off'
                   ? "bg-brand-black text-white shadow-md"
                   : "bg-white text-black/60 hover:text-black border border-black/5 hover:bg-black/5"
               )}
             >
-              <Clock className="w-4 h-4 text-sky-500" />
-              <span>Operating Hours</span>
+              <CalendarOff className="w-4 h-4 text-amber-500" />
+              <span>Instructor Day Off</span>
             </button>
 
             <button
@@ -762,8 +763,8 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             </button>
           </div>
 
-          {activeTab === 'operating-hours' ? (
-            <InstructorOperatingHours />
+          {activeTab === 'day-off' ? (
+            <InstructorDayOff currentInstructorId="wally" />
           ) : activeTab === 'availability' ? (
             <InstructorAvailability />
           ) : (

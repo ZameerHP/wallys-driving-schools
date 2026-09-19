@@ -52,7 +52,7 @@ import {
   formatDurationDisplay,
   SlotPeriod
 } from '../lib/bookingSlots';
-import { computeDisabledDays, DayAvailabilityResponse, MonthAvailabilityDay, AvailabilitySlotItem } from '../types/availability';
+import { DayAvailabilityResponse, MonthAvailabilityDay, AvailabilitySlotItem } from '../types/availability';
 import { fetchTimeOffBlocks, isTimeOffBlockDeleted, getLocalTimeOffBlocks, normalizeDateKey } from '../lib/timeOff';
 
 // --- DATA DEFINITIONS BASED ON LIVE SITE ---
@@ -542,46 +542,7 @@ export function BookNow() {
     } catch {}
     return map;
   });
-  const [operatingSettings, setOperatingSettings] = useState<{
-    operatingHours?: any;
-    dateOverrides?: any[];
-    bufferMinutes?: number;
-    timezone?: string;
-    disabledDays?: number[];
-  }>(() => {
-    try {
-      const cached = localStorage.getItem('wallys_operating_settings');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed?.operatingHours) {
-          return {
-            ...parsed,
-            disabledDays: Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(parsed.operatingHours)
-          };
-        }
-        if (parsed?.settings?.operatingHours) {
-          return {
-            ...parsed.settings,
-            disabledDays: Array.isArray(parsed.settings.disabledDays) ? parsed.settings.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(parsed.settings.operatingHours))
-          };
-        }
-      }
-    } catch {}
-    return {
-      operatingHours: {
-        monday: { enabled: true, label: 'Monday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-        tuesday: { enabled: true, label: 'Tuesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-        wednesday: { enabled: true, label: 'Wednesday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-        thursday: { enabled: true, label: 'Thursday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-        friday: { enabled: true, label: 'Friday', periods: [{ start: '08:00 AM', end: '06:00 PM' }] },
-        saturday: { enabled: true, label: 'Saturday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] },
-        sunday: { enabled: true, label: 'Sunday', periods: [{ start: '08:00 AM', end: '05:00 PM' }] }
-      },
-      disabledDays: [],
-      bufferMinutes: 15,
-      timezone: 'Australia/Sydney'
-    };
-  });
+  const [bufferMinutes] = useState<number>(15);
   const [isRefreshingSlots, setIsRefreshingSlots] = useState(false);
   const [slotConflictError, setSlotConflictError] = useState<string | null>(null);
   const [monthAvailability, setMonthAvailability] = useState<Record<string, MonthAvailabilityDay>>({});
@@ -721,9 +682,35 @@ export function BookNow() {
     return null;
   };
 
+  // Instructor recurring weekday day off settings (synced directly from database)
+  const [instructorWeeklyDaysOff, setInstructorWeeklyDaysOff] = useState<Record<string, boolean>>({
+    monday: true,
+    tuesday: true,
+    wednesday: true,
+    thursday: true,
+    friday: true,
+    saturday: true,
+    sunday: true
+  });
+
+  const refreshWeeklyDaysOff = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/instructor/day-off?instructorId=wally&_t=${Date.now()}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.weeklyDaysOff) {
+          setInstructorWeeklyDaysOff(data.weeklyDaysOff);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load instructor weekly days off:', err);
+    }
+  }, []);
+
   // Fetch owner/instructor blocked days with zero caching and resilient cloud/localStorage fallback
   const refreshBlockedDays = useCallback(async () => {
     try {
+      refreshWeeklyDaysOff();
       const blocks = await fetchTimeOffBlocks();
       const map = new Map<string, { isFullDay: boolean; reason?: string }>();
       const partialBlockSlots: Array<{ date: string; time: string; status: string; isFullDay: boolean; reason?: string }> = [];
@@ -767,13 +754,13 @@ export function BookNow() {
     } catch (err) {
       console.warn('Failed to load blocked off days:', err);
     }
-  }, []);
+  }, [refreshWeeklyDaysOff]);
 
   // Authoritative month availability fetcher (Single Source of Truth)
   const fetchMonthAvailability = useCallback(async (year: number, month: number) => {
     try {
       setIsLoadingMonthAvail(true);
-      const res = await fetch(`/api/availability/month?year=${year}&month=${month}&_t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/availability/month?year=${year}&month=${month}&instructorId=wally&_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (data && data.days) {
@@ -793,7 +780,7 @@ export function BookNow() {
     try {
       setIsRefreshingSlots(true);
       const norm = normalizeDateStr(targetDate);
-      const res = await fetch(`/api/availability?date=${encodeURIComponent(norm)}&duration=${duration}&_t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/availability?date=${encodeURIComponent(norm)}&instructorId=wally&duration=${duration}&_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data: DayAvailabilityResponse = await res.json();
         setSelectedDayAvailability(data);
@@ -829,51 +816,30 @@ export function BookNow() {
     refreshBlockedDays();
   }, [fetchMonthAvailability, selectedYear, selectedMonth, selectedDate, packageSpecs.durationMinutes, fetchDayAvailability, refreshBlockedDays]);
 
-  // Fetch instructor weekly operating hours and overrides
-  const refreshOperatingHours = useCallback(async () => {
-    try {
-      const cached = localStorage.getItem('wallys_operating_settings');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed && (parsed.operatingHours || parsed.settings?.operatingHours)) {
-          const s = parsed.operatingHours ? parsed : parsed.settings;
-          const computedDisabled = computeDisabledDays(s.operatingHours);
-          setOperatingSettings(prev => ({
-            ...prev,
-            ...s,
-            operatingHours: s.operatingHours || prev.operatingHours,
-            disabledDays: Array.isArray(s.disabledDays) ? s.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computedDisabled),
-            bufferMinutes: typeof s.bufferMinutes === 'number' ? s.bufferMinutes : prev.bufferMinutes
-          }));
-        }
-      }
-    } catch {}
-
-    try {
-      const res = await fetch(`/api/availability/operating-hours?_t=${Date.now()}`, { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        const computedDisabled = computeDisabledDays(data.operatingHours || data.settings?.operatingHours);
-        setOperatingSettings(prev => ({
-          ...prev,
-          ...data,
-          operatingHours: data.operatingHours || data.settings?.operatingHours || prev.operatingHours,
-          disabledDays: Array.isArray(data.disabledDays) ? data.disabledDays : computedDisabled
-        }));
-        try {
-          localStorage.setItem('wallys_operating_settings', JSON.stringify(data));
-        } catch {}
-      }
-    } catch (err) {
-      console.warn('Failed to fetch operating hours:', err);
-    }
-  }, []);
-
-  // Compute exact operating status and active periods for any calendar date
+  // Compute exact day status and active periods for any calendar date (operating hours system removed)
   const getDayOperatingInfo = useCallback((dateStr: string): { isClosed: boolean; isDayOff: boolean; periods: SlotPeriod[]; reason?: string } => {
     if (!dateStr) return { isClosed: false, isDayOff: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
 
     const norm = normalizeDateStr(dateStr);
+
+    // 0. Check Instructor recurring weekday day off (Applies permanently to all future weeks, months, years)
+    if (norm) {
+      const [y, m, d] = norm.split('-').map(Number);
+      if (y && m && d) {
+        const dayOfWeek = new Date(y, m - 1, d).getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+        const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const dayKey = weekdayKeys[dayOfWeek];
+        if (instructorWeeklyDaysOff && instructorWeeklyDaysOff[dayKey] === false) {
+          const dayLabel = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
+          return {
+            isClosed: true,
+            isDayOff: true,
+            periods: [],
+            reason: `Instructor Day Off (${dayLabel}s permanently off)`
+          };
+        }
+      }
+    }
 
     // 1. Authoritative check from centralized backend month availability
     const monthDay = monthAvailability[norm];
@@ -890,7 +856,7 @@ export function BookNow() {
     if (norm && blockedOffDays.has(norm)) {
       return { 
         isClosed: true, 
-        isDayOff: true,
+        isDayOff: true, 
         periods: [], 
         reason: blockedOffDays.get(norm)?.reason || 'Instructor Day Off' 
       };
@@ -907,40 +873,9 @@ export function BookNow() {
       return { isClosed: true, isDayOff: true, periods: [], reason: 'Instructor Day Off' };
     }
 
-    // 4. Check custom Date Overrides
-    const overrides = operatingSettings.dateOverrides || [];
-    const override = overrides.find(o => normalizeDateStr(o.date) === norm);
-    if (override) {
-      if (override.type === 'unavailable' || override.isFullDay) {
-        return { isClosed: true, isDayOff: true, periods: [], reason: override.reason || 'Instructor unavailable' };
-      }
-      if (override.periods && override.periods.length > 0) {
-        return { isClosed: false, isDayOff: false, periods: override.periods, reason: override.reason };
-      }
-    }
-
-    // 5. Check weekly Operating Hours
-    const parts = norm.split('-').map(Number);
-    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
-      const dayIdx = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
-      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const dayKey = dayNames[dayIdx];
-      const dayConfig = operatingSettings.operatingHours?.[dayKey];
-
-      if (operatingSettings.disabledDays && operatingSettings.disabledDays.includes(dayIdx)) {
-        return { isClosed: true, isDayOff: false, periods: [], reason: `Closed on ${dayConfig?.label || dayKey}s` };
-      }
-
-      if (dayConfig) {
-        if (!dayConfig.enabled || !dayConfig.periods || dayConfig.periods.length === 0) {
-          return { isClosed: true, isDayOff: false, periods: [], reason: `Closed on ${dayConfig.label || dayKey}s` };
-        }
-        return { isClosed: false, isDayOff: false, periods: dayConfig.periods };
-      }
-    }
-
-    return { isClosed: false, isDayOff: false, periods: [{ start: '08:00 AM', end: '05:00 PM' }] };
-  }, [monthAvailability, operatingSettings, blockedOffDays, bookedSlots]);
+    // Operating hours removed: all calendar days are open 08:00 AM to 06:00 PM
+    return { isClosed: false, isDayOff: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
+  }, [monthAvailability, blockedOffDays, bookedSlots]);
 
   // Helper to find next non-blocked, upcoming available date
   const findNextAvailableDate = useCallback((startDateStr: string, blockedMap: Map<string, { isFullDay: boolean; reason?: string }>, offsetDays = 0) => {
@@ -974,11 +909,9 @@ export function BookNow() {
   useEffect(() => {
     refreshBlockedDays();
     refreshAvailability();
-    refreshOperatingHours();
     const timer = setInterval(() => {
       refreshAvailability();
       refreshBlockedDays();
-      refreshOperatingHours();
     }, 8000);
 
     const handleSync = (e?: any) => {
@@ -995,53 +928,7 @@ export function BookNow() {
         } catch {}
       }
 
-      // 1. Instantly update operating hours state for zero-latency calendar day fading
-      const incomingHours = detail?.operatingHours 
-        || detail?.operatingSettings?.operatingHours 
-        || detail?.settings?.operatingHours;
-
-      if (incomingHours) {
-        const op = detail.operatingSettings || detail.settings || detail;
-        const compDisabled = Array.isArray(op.disabledDays) 
-          ? op.disabledDays 
-          : (Array.isArray(detail.disabledDays) ? detail.disabledDays : computeDisabledDays(incomingHours));
-        
-        setOperatingSettings(prev => ({
-          ...prev,
-          ...op,
-          operatingHours: incomingHours,
-          disabledDays: compDisabled,
-          bufferMinutes: typeof op.bufferMinutes === 'number' ? op.bufferMinutes : prev.bufferMinutes
-        }));
-
-        try {
-          localStorage.setItem('wallys_operating_settings', JSON.stringify({
-            ...op,
-            operatingHours: incomingHours,
-            disabledDays: compDisabled
-          }));
-        } catch {}
-      } else {
-        try {
-          const cached = localStorage.getItem('wallys_operating_settings');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            const s = parsed.operatingHours ? parsed : parsed.settings;
-            if (s?.operatingHours) {
-              const compDisabled = Array.isArray(s.disabledDays) ? s.disabledDays : (Array.isArray(parsed.disabledDays) ? parsed.disabledDays : computeDisabledDays(s.operatingHours));
-              setOperatingSettings(prev => ({
-                ...prev,
-                ...s,
-                operatingHours: s.operatingHours,
-                disabledDays: compDisabled,
-                bufferMinutes: typeof s.bufferMinutes === 'number' ? s.bufferMinutes : prev.bufferMinutes
-              }));
-            }
-          }
-        } catch {}
-      }
-
-      // 2. Optimistically add newly blocked days if received in payload
+      // Optimistically add newly blocked days if received in payload
       if ((detail?.action === 'added' || detail?.action === 'created' || detail?.action === 'updated') && (detail?.block || detail?.date)) {
         const b = detail.block || { date: detail.date, isFullDay: true };
         const bNorm = normalizeDateStr(b.date);
@@ -1089,33 +976,37 @@ export function BookNow() {
         setSlotConflictError(null);
       }
 
+      refreshWeeklyDaysOff();
       refreshBlockedDays();
       refreshAvailability();
-      refreshOperatingHours();
     };
 
     window.addEventListener('wallys-availability-updated', handleSync);
-    window.addEventListener('wallys-operating-hours-updated', handleSync);
+    window.addEventListener('wallys-instructor-day-off-updated', handleSync);
     window.addEventListener('storage', handleSync);
 
-    let channel: BroadcastChannel | null = null;
+    let channel1: BroadcastChannel | null = null;
+    let channel2: BroadcastChannel | null = null;
     try {
       if ('BroadcastChannel' in window) {
-        channel = new BroadcastChannel('wallys-availability-channel');
-        channel.onmessage = (msg) => handleSync(msg);
+        channel1 = new BroadcastChannel('wallys-availability-channel');
+        channel1.onmessage = (msg) => handleSync(msg);
+        channel2 = new BroadcastChannel('wallys_availability_channel');
+        channel2.onmessage = (msg) => handleSync(msg);
       }
     } catch {}
 
     return () => {
       clearInterval(timer);
       window.removeEventListener('wallys-availability-updated', handleSync);
-      window.removeEventListener('wallys-operating-hours-updated', handleSync);
+      window.removeEventListener('wallys-instructor-day-off-updated', handleSync);
       window.removeEventListener('storage', handleSync);
       try {
-        channel?.close();
+        channel1?.close();
+        channel2?.close();
       } catch {}
     };
-  }, [refreshAvailability, refreshBlockedDays, refreshOperatingHours]);
+  }, [refreshAvailability, refreshBlockedDays]);
 
   // Auto-advance away from blocked days or closed days if initial or selected date is off
   useEffect(() => {
@@ -1245,13 +1136,13 @@ export function BookNow() {
       packageSpecs.lessonCount > 1 ? scheduledLessons : undefined,
       packageSpecs.lessonCount > 1 ? activeLesson.lessonNumber : undefined,
       {
-        bufferMinutes: operatingSettings.bufferMinutes ?? 15,
+        bufferMinutes: bufferMinutes ?? 15,
         operatingPeriods: dayInfo.periods,
         isClosed: dayInfo.isClosed,
         reason: dayInfo.reason
       }
     );
-  }, [selectedDate, selectedDayAvailability, packageSpecs.lessonCount, scheduledLessons, activeLesson.lessonNumber, getDayOperatingInfo, bookedSlots, operatingSettings.bufferMinutes]);
+  }, [selectedDate, selectedDayAvailability, packageSpecs.lessonCount, scheduledLessons, activeLesson.lessonNumber, getDayOperatingInfo, bookedSlots, bufferMinutes]);
 
   // Update date for the currently active lesson
   const handleSelectCalendarDate = (dateStr: string) => {
@@ -2604,12 +2495,12 @@ export function BookNow() {
                               const isSelectedDayFullDayOff = dayInfo.isDayOff || (dayInfo.isClosed && (dayInfo.reason?.toLowerCase().includes('day off') || dayInfo.reason?.toLowerCase().includes('time off')));
 
                               if (isSelectedDayClosed) {
-                                const reason = dayInfo.reason || (isSelectedDayFullDayOff ? 'Instructor Day Off' : 'Driving School Closed');
+                                const reason = dayInfo.reason || 'Instructor Scheduled Day Off';
                                 return (
                                   <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs my-2">
                                     <div className="flex items-center gap-2 font-bold mb-1 text-amber-800">
                                       <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                      <span>{isSelectedDayFullDayOff ? 'Instructor Day Off' : 'Driving School Closed'}</span>
+                                      <span>Instructor Day Off</span>
                                     </div>
                                     <p className="text-[11px] text-amber-800/90 leading-relaxed">
                                       {reason}. No lesson bookings are permitted on this date ({selectedDate}). Please select another date on the calendar.

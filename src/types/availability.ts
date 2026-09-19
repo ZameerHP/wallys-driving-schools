@@ -1,6 +1,26 @@
 // Instructor Availability, Operating Hours, Calendar Integration Types
 
 export type DayKey = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+export type WeekdayKey = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+
+export interface InstructorWeeklyDaysOff {
+  monday: boolean;    // true = ON (Available), false = OFF (Day Off)
+  tuesday: boolean;
+  wednesday: boolean;
+  thursday: boolean;
+  friday: boolean;
+  saturday: boolean;
+  sunday: boolean;
+}
+
+export interface InstructorDayOffSettings {
+  instructorId: string;
+  instructorName?: string;
+  weeklyDaysOff: InstructorWeeklyDaysOff;
+  disabledDays: number[]; // 0: Sunday, 1: Monday, ..., 6: Saturday
+  disabledWeekdays: WeekdayKey[];
+  updatedAt: string;
+}
 
 export interface TimePeriod {
   start: string; // e.g. "08:00 AM"
@@ -34,6 +54,9 @@ export interface InstructorSettings {
   minNoticeHours: number; // Default: 2 hours notice
   maxAdvanceDays: number; // Default: 60 days in advance
   operatingHours: WeeklyOperatingHours;
+  weeklyDaysOff?: InstructorWeeklyDaysOff;
+  disabledDays?: number[];
+  disabledWeekdays?: WeekdayKey[];
   updatedAt: string;
 }
 
