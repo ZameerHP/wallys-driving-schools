@@ -693,6 +693,18 @@ export function BookNow() {
     sunday: true
   });
 
+  // List of disabled/OFF weekdays dynamically synced from real database
+  const offWeekdaysList = useMemo(() => {
+    const days: string[] = [];
+    const weekdayOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    for (const key of weekdayOrder) {
+      if (instructorWeeklyDaysOff && instructorWeeklyDaysOff[key] === false) {
+        days.push(key.charAt(0).toUpperCase() + key.slice(1) + 's');
+      }
+    }
+    return days;
+  }, [instructorWeeklyDaysOff]);
+
   const refreshWeeklyDaysOff = useCallback(async () => {
     try {
       const res = await fetch(`/api/instructor/day-off?instructorId=wally&_t=${Date.now()}`, { cache: 'no-store' });
@@ -875,7 +887,7 @@ export function BookNow() {
 
     // Operating hours removed: all calendar days are open 08:00 AM to 06:00 PM
     return { isClosed: false, isDayOff: false, periods: [{ start: '08:00 AM', end: '06:00 PM' }] };
-  }, [monthAvailability, blockedOffDays, bookedSlots]);
+  }, [monthAvailability, blockedOffDays, bookedSlots, instructorWeeklyDaysOff]);
 
   // Helper to find next non-blocked, upcoming available date
   const findNextAvailableDate = useCallback((startDateStr: string, blockedMap: Map<string, { isFullDay: boolean; reason?: string }>, offsetDays = 0) => {
@@ -2340,6 +2352,24 @@ export function BookNow() {
                         
                         {/* Interactive Calendar (Mon-Sun) */}
                         <div className="lg:col-span-7 bg-brand-offwhite rounded-2xl p-3 sm:p-4 border border-black/10">
+                          {/* Clean, highly visible bold availability notice directly above the calendar */}
+                          <div 
+                            id="instructor-availability-notice"
+                            role="status"
+                            className="mb-3 px-3.5 py-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-xs sm:text-sm text-amber-950 leading-snug">
+                                ⚠️ Instructor is unavailable on selected days. Please choose an available day.
+                              </span>
+                            </div>
+                            {offWeekdaysList.length > 0 && (
+                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-200/70 text-amber-900 border border-amber-300/80">
+                                Off: {offWeekdaysList.join(', ')}
+                              </span>
+                            )}
+                          </div>
+
                           {/* Month / Year header with arrows */}
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-2">
@@ -2443,7 +2473,7 @@ export function BookNow() {
                                   className={cn(
                                     "relative h-8 rounded-lg flex items-center justify-center transition-all duration-200 text-xs select-none",
                                     isDayOff
-                                      ? "opacity-15 text-neutral-400/50 cursor-not-allowed line-through pointer-events-none select-none bg-transparent hover:bg-transparent"
+                                      ? "opacity-25 text-neutral-400 cursor-not-allowed line-through select-none bg-neutral-200/30 hover:bg-neutral-200/30"
                                       : isUnavailable 
                                       ? "text-black/20 cursor-not-allowed line-through"
                                       : isSelected 
