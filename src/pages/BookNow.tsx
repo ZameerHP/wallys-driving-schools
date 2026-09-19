@@ -206,14 +206,17 @@ export function BookNow() {
     d.setDate(d.getDate() + 2 + offsetDays);
     try {
       const rawDaysOff = typeof window !== 'undefined' ? localStorage.getItem('wallys_instructor_weekly_days_off') : null;
-      const daysOff = rawDaysOff ? JSON.parse(rawDaysOff) : { monday: false };
+      const daysOff = rawDaysOff ? JSON.parse(rawDaysOff) : {};
+      const rawDisabled = typeof window !== 'undefined' ? localStorage.getItem('wallys_instructor_disabled_weekdays') : null;
+      const disabledList = rawDisabled ? JSON.parse(rawDisabled) : [];
       const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
       for (let i = 0; i < 30; i++) {
         const testD = new Date(d);
         testD.setDate(d.getDate() + i);
         const dayOfWeek = testD.getDay();
         const key = weekdayKeys[dayOfWeek];
-        if (daysOff[key] !== false) {
+        const isOff = daysOff[key] === false || (Array.isArray(disabledList) && disabledList.includes(key));
+        if (!isOff) {
           const y = testD.getFullYear();
           const m = String(testD.getMonth() + 1).padStart(2, '0');
           const day = String(testD.getDate()).padStart(2, '0');
@@ -707,11 +710,14 @@ export function BookNow() {
   // Instructor recurring weekday day off settings (synced directly from database)
   const [instructorWeeklyDaysOff, setInstructorWeeklyDaysOff] = useState<Record<string, boolean>>(() => {
     try {
-      const cached = localStorage.getItem('wallys_instructor_weekly_days_off');
-      if (cached) return JSON.parse(cached);
+      const cached = typeof window !== 'undefined' ? localStorage.getItem('wallys_instructor_weekly_days_off') : null;
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
     } catch {}
     return {
-      monday: false,
+      monday: true,
       tuesday: true,
       wednesday: true,
       thursday: true,
@@ -723,10 +729,13 @@ export function BookNow() {
 
   const [disabledWeekdays, setDisabledWeekdays] = useState<string[]>(() => {
     try {
-      const cached = localStorage.getItem('wallys_instructor_disabled_weekdays');
-      if (cached) return JSON.parse(cached);
+      const cached = typeof window !== 'undefined' ? localStorage.getItem('wallys_instructor_disabled_weekdays') : null;
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch {}
-    return ['monday'];
+    return [];
   });
 
   // List of disabled/OFF weekdays dynamically synced from real database
@@ -746,20 +755,40 @@ export function BookNow() {
 
   const refreshWeeklyDaysOff = useCallback(async () => {
     try {
-      const res = await fetch(`/api/instructor/day-off?instructorId=wally&_t=${Date.now()}`, { cache: 'no-store' });
+      let localDaysOff: any = null;
+      try {
+        const cached = localStorage.getItem('wallys_instructor_weekly_days_off');
+        if (cached) localDaysOff = JSON.parse(cached);
+      } catch {}
+
+      const clientParam = localDaysOff ? `&clientDaysOff=${encodeURIComponent(JSON.stringify(localDaysOff))}` : '';
+      const res = await fetch(`/api/instructor/day-off?instructorId=wally${clientParam}&_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (data && data.weeklyDaysOff) {
-          setInstructorWeeklyDaysOff(data.weeklyDaysOff);
-          try {
-            localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(data.weeklyDaysOff));
-          } catch {}
-        }
-        if (data && data.disabledWeekdays) {
-          setDisabledWeekdays(data.disabledWeekdays);
-          try {
-            localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(data.disabledWeekdays));
-          } catch {}
+          const serverHasOffDay = Object.values(data.weeklyDaysOff).some(v => v === false);
+          const localHasOffDay = localDaysOff && Object.values(localDaysOff).some(v => v === false);
+
+          if (serverHasOffDay || !localHasOffDay) {
+            setInstructorWeeklyDaysOff(data.weeklyDaysOff);
+            try {
+              localStorage.setItem('wallys_instructor_weekly_days_off', JSON.stringify(data.weeklyDaysOff));
+            } catch {}
+          } else if (localHasOffDay && localDaysOff) {
+            setInstructorWeeklyDaysOff(localDaysOff);
+            fetch('/api/instructor/day-off', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ instructorId: 'wally', weeklyDaysOff: localDaysOff })
+            }).catch(() => {});
+          }
+
+          if (data.disabledWeekdays && (serverHasOffDay || !localHasOffDay)) {
+            setDisabledWeekdays(data.disabledWeekdays);
+            try {
+              localStorage.setItem('wallys_instructor_disabled_weekdays', JSON.stringify(data.disabledWeekdays));
+            } catch {}
+          }
         }
       }
     } catch (err) {

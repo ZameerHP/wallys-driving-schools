@@ -770,6 +770,21 @@ export async function getInstructorSettingsDb(instructorId = 'wally'): Promise<a
         return parsed;
       }
     } catch {}
+
+    // Resilient fallback: check backup config row in instructor_time_off in case instructor_settings table is not migrated in Supabase
+    try {
+      const { data, error } = await supabase
+        .from('instructor_time_off')
+        .select('reason')
+        .eq('instructor_id', normId)
+        .eq('date', '__CONFIG_SETTINGS__')
+        .maybeSingle();
+      if (!error && data?.reason) {
+        const parsed = JSON.parse(data.reason);
+        inMemoryInstructorSettings.set(normId, parsed);
+        return parsed;
+      }
+    } catch {}
   }
 
   if (db && isSqlConfigured) {
@@ -792,16 +807,25 @@ export async function getInstructorSettingsDb(instructorId = 'wally'): Promise<a
     return inMemoryInstructorSettings.get(normId);
   }
 
-  // Check file-system fallback
-  try {
-    const settingsFile = path.join(process.cwd(), 'data', `instructor-settings-${normId}.json`);
-    if (fs.existsSync(settingsFile)) {
-      const raw = fs.readFileSync(settingsFile, 'utf-8');
-      const parsed = JSON.parse(raw);
-      inMemoryInstructorSettings.set(normId, parsed);
-      return parsed;
-    }
-  } catch {}
+  // Check file-system fallback across both project data/ and /tmp/ (essential for Vercel/serverless environments)
+  const candidateDirs = [
+    path.join(process.cwd(), 'data'),
+    '/tmp'
+  ];
+
+  for (const dir of candidateDirs) {
+    try {
+      const settingsFile = path.join(dir, `instructor-settings-${normId}.json`);
+      if (fs.existsSync(settingsFile)) {
+        const raw = fs.readFileSync(settingsFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed) {
+          inMemoryInstructorSettings.set(normId, parsed);
+          return parsed;
+        }
+      }
+    } catch {}
+  }
 
   return null;
 }
@@ -814,13 +838,22 @@ export async function saveInstructorSettingsDb(instructorId = 'wally', settings:
   // Save to in-memory fallback
   inMemoryInstructorSettings.set(normId, settings);
 
-  // Save to file system
-  try {
-    const dataDir = path.join(process.cwd(), 'data');
-    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-    fs.writeFileSync(path.join(dataDir, `instructor-settings-${normId}.json`), jsonStr, 'utf-8');
-    saved = true;
-  } catch {}
+  // Save to file system across both project data/ and /tmp/ (essential for Vercel / serverless / Hostinger environments)
+  const candidateDirs = [
+    path.join(process.cwd(), 'data'),
+    '/tmp'
+  ];
+
+  for (const dir of candidateDirs) {
+    try {
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `instructor-settings-${normId}.json`), jsonStr, 'utf-8');
+      if (normId === 'wally') {
+        fs.writeFileSync(path.join(dir, 'instructor-operating-hours.json'), jsonStr, 'utf-8');
+      }
+      saved = true;
+    } catch {}
+  }
 
   const supabase = getSupabaseServerClient();
   if (supabase) {
@@ -833,6 +866,28 @@ export async function saveInstructorSettingsDb(instructorId = 'wally', settings:
           updated_at: new Date().toISOString()
         }, { onConflict: 'instructor_id' });
       if (!error) saved = true;
+    } catch {}
+
+    // Also persist a backup row into instructor_time_off table to guarantee persistence even if instructor_settings table is not migrated in Supabase
+    try {
+      await supabase
+        .from('instructor_time_off')
+        .delete()
+        .eq('instructor_id', normId)
+        .eq('date', '__CONFIG_SETTINGS__');
+
+      const { error: backupErr } = await supabase
+        .from('instructor_time_off')
+        .insert([{
+          instructor_id: normId,
+          instructor_name: normId === 'wally' ? 'Wally' : normId,
+          date: '__CONFIG_SETTINGS__',
+          is_full_day: 1,
+          reason: jsonStr,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }]);
+      if (!backupErr) saved = true;
     } catch {}
   }
 
@@ -963,7 +1018,9 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
         .order('date', { ascending: true });
 
       if (!error && Array.isArray(data)) {
-        const mapped: TimeOffBlock[] = data.map(r => {
+        const mapped: TimeOffBlock[] = data
+          .filter(r => r.date && !r.date.startsWith('__'))
+          .map(r => {
           const sMin = r.start_minutes ?? (r.start_time ? timeStringToMinutes(r.start_time) : null);
           const eMin = r.end_minutes ?? (r.end_time ? timeStringToMinutes(r.end_time) : null);
           const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (r.start_time ? to24HourTime(r.start_time) : null);
@@ -1013,7 +1070,9 @@ export async function getTimeOffBlocks(instructorId?: string): Promise<TimeOffBl
     try {
       const rows = await db.select().from(instructorTimeOff);
       if (rows) {
-        const mapped: TimeOffBlock[] = rows.map(r => {
+        const mapped: TimeOffBlock[] = rows
+          .filter(r => r.date && !r.date.startsWith('__'))
+          .map(r => {
           const sMin = r.startMinutes ?? (r.startTime ? timeStringToMinutes(r.startTime) : null);
           const eMin = r.endMinutes ?? (r.endTime ? timeStringToMinutes(r.endTime) : null);
           const s24 = sMin !== null ? minutesTo24HourTime(sMin) : (r.startTime ? to24HourTime(r.startTime) : null);

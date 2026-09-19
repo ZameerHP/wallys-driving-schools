@@ -2463,7 +2463,23 @@ app.get([
     ).trim().toLowerCase();
 
     // Fetch from real database, syncs with in-memory service
-    const daysOffSettings = await getInstructorWeeklyDaysOff(targetInstructor);
+    let daysOffSettings = await getInstructorWeeklyDaysOff(targetInstructor);
+
+    // Self-healing: if server currently has all days ON (default after cold start/container restart),
+    // but the client has stored days off, rehydrate server state and database so days off are never lost!
+    const serverHasOffDay = Object.values(daysOffSettings.weeklyDaysOff || {}).some(v => v === false);
+    if (!serverHasOffDay && req.query.clientDaysOff) {
+      try {
+        const clientObj = JSON.parse(String(req.query.clientDaysOff));
+        if (clientObj && typeof clientObj === 'object') {
+          const clientHasOffDay = Object.values(clientObj).some(v => v === false);
+          if (clientHasOffDay) {
+            daysOffSettings = setInstructorWeeklyDaysOff(targetInstructor, clientObj);
+            await saveInstructorWeeklyDaysOff(targetInstructor, clientObj);
+          }
+        }
+      } catch {}
+    }
 
     res.json({
       success: true,

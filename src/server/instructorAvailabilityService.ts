@@ -192,12 +192,43 @@ let cachedDateOverrides: DateOverride[] = [];
 let isInitialized = false;
 
 function ensureDataDir() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+  const candidateDirs = [DATA_DIR, '/tmp'];
+  for (const dir of candidateDirs) {
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    } catch (err) {
+      // Ignore read-only fs error on Vercel
     }
-  } catch (err) {
-    console.warn('[AvailabilityService] Warning creating data dir:', err);
+  }
+}
+
+function readJsonFile<T>(filename: string, defaultValue: T): T {
+  const dirs = [DATA_DIR, '/tmp'];
+  for (const dir of dirs) {
+    try {
+      const p = path.join(dir, filename);
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed !== null && parsed !== undefined) return parsed;
+      }
+    } catch {}
+  }
+  return defaultValue;
+}
+
+function writeJsonFile(filename: string, data: any): void {
+  const dirs = [DATA_DIR, '/tmp'];
+  const json = JSON.stringify(data, null, 2);
+  for (const dir of dirs) {
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(dir, filename), json, 'utf-8');
+    } catch {}
   }
 }
 
@@ -207,21 +238,18 @@ function initService() {
 
   // 1. Operating Hours
   try {
-    if (fs.existsSync(OPERATING_HOURS_FILE)) {
-      const raw = fs.readFileSync(OPERATING_HOURS_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.operatingHours) {
-        cachedSettings = {
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          operatingHours: {
-            ...DEFAULT_WEEKLY_HOURS,
-            ...parsed.operatingHours
-          }
-        };
-      }
+    const parsed = readJsonFile<any | null>('instructor-operating-hours.json', null);
+    if (parsed && parsed.operatingHours) {
+      cachedSettings = {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        operatingHours: {
+          ...DEFAULT_WEEKLY_HOURS,
+          ...parsed.operatingHours
+        }
+      };
     } else {
-      fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(DEFAULT_SETTINGS, null, 2), 'utf-8');
+      writeJsonFile('instructor-operating-hours.json', DEFAULT_SETTINGS);
     }
   } catch (err) {
     console.warn('[AvailabilityService] Error loading operating hours:', err);
@@ -229,39 +257,27 @@ function initService() {
 
   // 2. External Calendar Events
   try {
-    if (fs.existsSync(EXTERNAL_EVENTS_FILE)) {
-      const raw = fs.readFileSync(EXTERNAL_EVENTS_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) cachedExternalEvents = parsed;
-    } else {
-      fs.writeFileSync(EXTERNAL_EVENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
-    }
+    const parsed = readJsonFile<ExternalCalendarEvent[]>('external-calendar-events.json', []);
+    if (Array.isArray(parsed)) cachedExternalEvents = parsed;
+    else writeJsonFile('external-calendar-events.json', []);
   } catch (err) {
     console.warn('[AvailabilityService] Error loading external events:', err);
   }
 
   // 3. Calendar Connection
   try {
-    if (fs.existsSync(CALENDAR_CONN_FILE)) {
-      const raw = fs.readFileSync(CALENDAR_CONN_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed) cachedCalendarConn = parsed;
-    } else {
-      fs.writeFileSync(CALENDAR_CONN_FILE, JSON.stringify(cachedCalendarConn, null, 2), 'utf-8');
-    }
+    const parsed = readJsonFile<CalendarConnectionConfig | null>('calendar-connection.json', null);
+    if (parsed) cachedCalendarConn = parsed;
+    else writeJsonFile('calendar-connection.json', cachedCalendarConn);
   } catch (err) {
     console.warn('[AvailabilityService] Error loading calendar connection:', err);
   }
 
   // 4. Date Overrides
   try {
-    if (fs.existsSync(DATE_OVERRIDES_FILE)) {
-      const raw = fs.readFileSync(DATE_OVERRIDES_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) cachedDateOverrides = parsed;
-    } else {
-      fs.writeFileSync(DATE_OVERRIDES_FILE, JSON.stringify([], null, 2), 'utf-8');
-    }
+    const parsed = readJsonFile<DateOverride[]>('date-overrides.json', []);
+    if (Array.isArray(parsed)) cachedDateOverrides = parsed;
+    else writeJsonFile('date-overrides.json', []);
   } catch (err) {
     console.warn('[AvailabilityService] Error loading date overrides:', err);
   }
@@ -279,11 +295,11 @@ export function getInstructorSettings(instructorId = 'wally'): InstructorSetting
 
   let settings = cachedInstructorSettings.get(normId);
   if (!settings) {
-    // Check disk file for this specific instructor
+    // Check disk file across candidate directories
     try {
-      const specificFile = path.join(DATA_DIR, `instructor-settings-${normId}.json`);
-      if (fs.existsSync(specificFile)) {
-        settings = JSON.parse(fs.readFileSync(specificFile, 'utf-8'));
+      const fromDisk = readJsonFile<any | null>(`instructor-settings-${normId}.json`, null);
+      if (fromDisk) {
+        settings = fromDisk;
       }
     } catch {}
 
@@ -386,10 +402,9 @@ export function saveInstructorSettings(newSettings: Partial<InstructorSettings>,
   }
 
   try {
-    ensureDataDir();
-    fs.writeFileSync(path.join(DATA_DIR, `instructor-settings-${normId}.json`), JSON.stringify(updated, null, 2), 'utf-8');
+    writeJsonFile(`instructor-settings-${normId}.json`, updated);
     if (normId === 'wally') {
-      fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+      writeJsonFile('instructor-operating-hours.json', updated);
     }
   } catch (err) {
     console.error('[AvailabilityService] Error saving settings to disk:', err);
@@ -492,10 +507,9 @@ export function setInstructorWeekdayOff(
 
   // Save to file on disk
   try {
-    ensureDataDir();
-    fs.writeFileSync(path.join(DATA_DIR, `instructor-settings-${normId}.json`), JSON.stringify(updated, null, 2), 'utf-8');
+    writeJsonFile(`instructor-settings-${normId}.json`, updated);
     if (normId === 'wally') {
-      fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+      writeJsonFile('instructor-operating-hours.json', updated);
     }
   } catch (err) {
     console.error('[AvailabilityService] Error saving instructor day-off settings:', err);
@@ -558,10 +572,9 @@ export function setInstructorWeeklyDaysOff(
   }
 
   try {
-    ensureDataDir();
-    fs.writeFileSync(path.join(DATA_DIR, `instructor-settings-${normId}.json`), JSON.stringify(updated, null, 2), 'utf-8');
+    writeJsonFile(`instructor-settings-${normId}.json`, updated);
     if (normId === 'wally') {
-      fs.writeFileSync(OPERATING_HOURS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+      writeJsonFile('instructor-operating-hours.json', updated);
     }
   } catch (err) {
     console.error('[AvailabilityService] Error saving bulk day-off settings:', err);
@@ -605,8 +618,7 @@ export function addDateOverride(override: Omit<DateOverride, 'id' | 'createdAt' 
   cachedDateOverrides.push(newOverride);
 
   try {
-    ensureDataDir();
-    fs.writeFileSync(DATE_OVERRIDES_FILE, JSON.stringify(cachedDateOverrides, null, 2), 'utf-8');
+    writeJsonFile('date-overrides.json', cachedDateOverrides);
   } catch (err) {
     console.error('[AvailabilityService] Error saving date overrides:', err);
   }
@@ -622,8 +634,7 @@ export function deleteDateOverride(idOrDate: string): boolean {
 
   if (cachedDateOverrides.length !== beforeLen) {
     try {
-      ensureDataDir();
-      fs.writeFileSync(DATE_OVERRIDES_FILE, JSON.stringify(cachedDateOverrides, null, 2), 'utf-8');
+      writeJsonFile('date-overrides.json', cachedDateOverrides);
     } catch (err) {
       console.error('[AvailabilityService] Error saving date overrides:', err);
     }
@@ -653,8 +664,7 @@ export function updateCalendarConnection(updates: Partial<CalendarConnectionConf
   };
 
   try {
-    ensureDataDir();
-    fs.writeFileSync(CALENDAR_CONN_FILE, JSON.stringify(cachedCalendarConn, null, 2), 'utf-8');
+    writeJsonFile('calendar-connection.json', cachedCalendarConn);
   } catch (err) {
     console.error('[AvailabilityService] Error saving calendar connection:', err);
   }
@@ -691,8 +701,7 @@ export function addExternalEvent(event: Omit<ExternalCalendarEvent, 'id' | 'crea
   cachedExternalEvents.push(newEvent);
 
   try {
-    ensureDataDir();
-    fs.writeFileSync(EXTERNAL_EVENTS_FILE, JSON.stringify(cachedExternalEvents, null, 2), 'utf-8');
+    writeJsonFile('external-calendar-events.json', cachedExternalEvents);
   } catch (err) {
     console.error('[AvailabilityService] Error saving external events:', err);
   }
@@ -707,8 +716,7 @@ export function deleteExternalEvent(id: string): boolean {
 
   if (cachedExternalEvents.length !== beforeLen) {
     try {
-      ensureDataDir();
-      fs.writeFileSync(EXTERNAL_EVENTS_FILE, JSON.stringify(cachedExternalEvents, null, 2), 'utf-8');
+      writeJsonFile('external-calendar-events.json', cachedExternalEvents);
     } catch (err) {
       console.error('[AvailabilityService] Error saving external events:', err);
     }
@@ -821,8 +829,7 @@ export async function syncIcalFeed(feedUrl: string, instructorId = 'wally'): Pro
     cachedExternalEvents = [...manualEvents, ...parsedEvents];
 
     try {
-      ensureDataDir();
-      fs.writeFileSync(EXTERNAL_EVENTS_FILE, JSON.stringify(cachedExternalEvents, null, 2), 'utf-8');
+      writeJsonFile('external-calendar-events.json', cachedExternalEvents);
     } catch (err) {
       console.error('[AvailabilityService] Error saving external events:', err);
     }
