@@ -43,7 +43,6 @@ import { Country, DEFAULT_COUNTRY } from '../lib/countries';
 import { PhoneInputWithCountry } from '../components/PhoneInputWithCountry';
 import { useAuth } from '../context/AuthContext';
 import { PACKAGES } from '../lib/content';
-import { GoogleAutofillModal, GoogleGIcon } from '../components/booking/GoogleAutofillModal';
 import { 
   getPackageSpecs, 
   generateSlotsForDuration, 
@@ -344,81 +343,8 @@ export function BookNow() {
   const [emailTouched, setEmailTouched] = useState(false);
   const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
   const [isGoogleVerified, setIsGoogleVerified] = useState(false);
-  const [isGoogleAutofillModalOpen, setIsGoogleAutofillModalOpen] = useState(false);
-  const [autofillSuccessNotice, setAutofillSuccessNotice] = useState<string | null>(null);
 
-  // Helper to load saved verified Google profile from localStorage
-  const getSavedGoogleAccount = () => {
-    try {
-      const stored = localStorage.getItem('wallys_verified_google_account');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed?.email && validateWorkingEmail(parsed.email).isValid) {
-          return parsed;
-        }
-      }
-    } catch {}
-    return null;
-  };
-
-  // Auto-fill from authenticated Google account or saved profile if available
-  useEffect(() => {
-    if (auth?.user?.email && !email) {
-      const gEmail = auth.user.email;
-      setEmail(gEmail);
-      setIsGoogleVerified(true);
-      const fullName = auth.user.user_metadata?.full_name || auth.user.user_metadata?.name || '';
-      if (fullName) {
-        const parts = fullName.trim().split(' ');
-        if (!firstName) setFirstName(parts[0] || '');
-        if (!lastName && parts.length > 1) setLastName(parts.slice(1).join(' ') || '');
-      }
-      return;
-    }
-
-    // Check if user has previously saved a verified Google account on this device
-    if (!email) {
-      const saved = getSavedGoogleAccount();
-      if (saved?.email) {
-        setEmail(saved.email);
-        setIsGoogleVerified(true);
-        if (saved.firstName && !firstName) setFirstName(saved.firstName);
-        if (saved.lastName && !lastName) setLastName(saved.lastName);
-        if (saved.phone && !phone) setPhone(saved.phone);
-      }
-    }
-  }, [auth?.user]);
-
-  const handleAutofillWithGoogle = () => {
-    // Open the Google Account Selector modal for 1-click account selection & auto-paste
-    setIsGoogleAutofillModalOpen(true);
-  };
-
-  const handleApplyGoogleAutofill = (data: { email: string; firstName: string; lastName: string; phone?: string }) => {
-    setEmail(data.email);
-    setEmailTouched(true);
-    setIsGoogleVerified(true);
-    // Reset verification status if a new email is selected
-    setIsEmailVerified(false);
-    setVerifiedEmailAddress(null);
-    setVerificationToken(null);
-    setCodeSent(false);
-    setVerificationCode('');
-    setVerificationSuccessMsg(null);
-    setVerificationError(null);
-    if (data.firstName) setFirstName(data.firstName);
-    if (data.lastName) setLastName(data.lastName);
-    if (data.phone) setPhone(data.phone);
-    setInfoErrors(prev => {
-      const copy = { ...prev };
-      delete copy.email;
-      return copy;
-    });
-    setAutofillSuccessNotice(`✓ Auto-filled with Google Account: ${data.email}`);
-    setTimeout(() => setAutofillSuccessNotice(null), 6000);
-  };
-
-  // Real Email Verification State
+  // Real Email Verification State - clean and completely manual
   const [isEmailVerified, setIsEmailVerified] = useState(false);
   const [verifiedEmailAddress, setVerifiedEmailAddress] = useState<string | null>(null);
   const [verificationToken, setVerificationToken] = useState<string | null>(null);
@@ -3050,23 +2976,6 @@ export function BookNow() {
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-4"
                     >
-                      {/* Autofill Success Notification */}
-                      {autofillSuccessNotice && (
-                        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between text-xs text-emerald-900 shadow-2xs">
-                          <div className="flex items-center gap-2">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <span className="font-semibold">{autofillSuccessNotice}</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setAutofillSuccessNotice(null)}
-                            className="text-emerald-700 hover:text-emerald-950 text-xs font-bold px-2 py-0.5 rounded hover:bg-emerald-100 transition-colors cursor-pointer"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                      )}
-
                       {/* First Name & Last Name Form Inputs */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {/* First Name */}
@@ -3114,23 +3023,13 @@ export function BookNow() {
                               <Mail className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
                               <span>Email Address <span className="text-brand-red">*</span></span>
                             </label>
-                            {isEmailVerified ? (
+                            {isEmailVerified && (
                               <div className="flex items-center gap-1.5">
                                 <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                   Verified
                                 </span>
                               </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={handleAutofillWithGoogle}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 hover:border-neutral-400 rounded-lg shadow-2xs transition-all active:scale-95 cursor-pointer"
-                                title="Auto-fill with your Google Account"
-                              >
-                                <GoogleGIcon className="w-3.5 h-3.5" />
-                                <span>Auto-fill with Google</span>
-                              </button>
                             )}
                           </div>
                           <div className="relative">
@@ -3321,11 +3220,18 @@ export function BookNow() {
                                   <div className="flex flex-col sm:flex-row gap-2">
                                     <input
                                       id="otp-code-input"
-                                      name="verificationOtp"
+                                      name="otpVerificationCode"
                                       type="text"
                                       inputMode="numeric"
                                       pattern="[0-9]*"
                                       maxLength={6}
+                                      autoComplete="off"
+                                      autoCorrect="off"
+                                      autoCapitalize="off"
+                                      spellCheck={false}
+                                      data-lpignore="true"
+                                      data-1p-ignore="true"
+                                      data-form-type="other"
                                       placeholder="Enter 6-digit code"
                                       value={verificationCode}
                                       onChange={(e) => {
@@ -3762,17 +3668,6 @@ export function BookNow() {
           </div>
         )}
       </AnimatePresence>
-
-      {/* Interactive Google Autofill Modal */}
-      <GoogleAutofillModal
-        isOpen={isGoogleAutofillModalOpen}
-        onClose={() => setIsGoogleAutofillModalOpen(false)}
-        onApply={handleApplyGoogleAutofill}
-        initialEmail={email}
-        initialFirstName={firstName}
-        initialLastName={lastName}
-        initialPhone={phone}
-      />
     </div>
   );
 }

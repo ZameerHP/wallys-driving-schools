@@ -1,8 +1,63 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { Resend } from 'resend';
 import nodemailer, { type Transporter } from 'nodemailer';
 import { validateWorkingEmail } from '../lib/validation.ts';
 import { escapeHtml } from './email-reminder-service.ts';
+
+interface EmailSettings {
+  gmailUser?: string;
+  gmailAppPassword?: string;
+  resendApiKey?: string;
+  resendFromEmail?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
+  smtpPass?: string;
+}
+
+function getSettingsFilePath(): string {
+  const primary = path.join(process.cwd(), 'data', 'email-settings.json');
+  try {
+    const dir = path.dirname(primary);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return primary;
+  } catch {
+    return path.join('/tmp', 'email-settings.json');
+  }
+}
+
+export function loadStoredEmailSettings(): EmailSettings {
+  const candidates = [
+    path.join(process.cwd(), 'data', 'email-settings.json'),
+    path.join('/tmp', 'email-settings.json')
+  ];
+  for (const file of candidates) {
+    try {
+      if (fs.existsSync(file)) {
+        const raw = fs.readFileSync(file, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch {}
+  }
+  return {};
+}
+
+export function saveStoredEmailSettings(settings: EmailSettings): void {
+  try {
+    const file = getSettingsFilePath();
+    const existing = loadStoredEmailSettings();
+    const merged = { ...existing, ...settings };
+    fs.writeFileSync(file, JSON.stringify(merged, null, 2), 'utf-8');
+    // Invalidate cached clients so they re-initialize immediately
+    resendClient = null;
+    smtpTransporter = null;
+    lastSmtpKey = '';
+  } catch (err) {
+    console.error('[Email Verification] Error saving email settings to disk:', err);
+  }
+}
 
 interface OtpEntry {
   email: string;
@@ -36,7 +91,8 @@ let resendClient: Resend | null = null;
 let smtpTransporter: Transporter | null = null;
 
 function getResendInstance(): Resend | null {
-  const apiKey = (process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY || '').trim();
+  const stored = loadStoredEmailSettings();
+  const apiKey = (process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY || stored.resendApiKey || '').trim();
   if (!apiKey) {
     return null;
   }
@@ -49,16 +105,17 @@ function getResendInstance(): Resend | null {
 let lastSmtpKey = '';
 
 function getSmtpTransporter(): Transporter | null {
-  const user = (process.env.SMTP_USER || process.env.GMAIL_USER || '').trim();
-  let pass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || '').trim();
+  const stored = loadStoredEmailSettings();
+  const user = (process.env.SMTP_USER || process.env.GMAIL_USER || stored.gmailUser || stored.smtpUser || '').trim();
+  let pass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || stored.gmailAppPassword || stored.smtpPass || '').trim();
   // Google App Passwords are 16 letters generated as 4x4 groups like "abcd efgh ijkl mnop".
   // Stripping all whitespace ensures Nodemailer and Gmail SMTP authenticate seamlessly.
   pass = pass.replace(/\s+/g, '');
-  const host = (process.env.SMTP_HOST || '').trim();
+  const host = (process.env.SMTP_HOST || stored.smtpHost || '').trim();
   const currentKey = `${user}:${pass}:${host}`;
 
   // If Gmail credentials are provided (either GMAIL_USER or user@gmail.com)
-  if (user && pass && (host === 'smtp.gmail.com' || user.toLowerCase().endsWith('@gmail.com') || process.env.GMAIL_USER)) {
+  if (user && pass && (host === 'smtp.gmail.com' || user.toLowerCase().endsWith('@gmail.com') || process.env.GMAIL_USER || stored.gmailUser)) {
     if (!smtpTransporter || lastSmtpKey !== currentKey) {
       lastSmtpKey = currentKey;
       smtpTransporter = nodemailer.createTransport({
@@ -73,7 +130,7 @@ function getSmtpTransporter(): Transporter | null {
   if (host && user && pass) {
     if (!smtpTransporter || lastSmtpKey !== currentKey) {
       lastSmtpKey = currentKey;
-      const port = Number(process.env.SMTP_PORT) || 587;
+      const port = Number(process.env.SMTP_PORT || stored.smtpPort) || 587;
       smtpTransporter = nodemailer.createTransport({
         host,
         port,
@@ -88,16 +145,42 @@ function getSmtpTransporter(): Transporter | null {
 }
 
 function getSender(): string {
-  const customFrom = process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM;
+  const stored = loadStoredEmailSettings();
+  const customFrom = process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM || stored.resendFromEmail;
   if (customFrom && customFrom.trim()) {
     const raw = customFrom.trim();
     if (raw.includes('<') && raw.includes('>')) return raw;
     return `Wally's Driving School <${raw}>`;
   }
-  if (process.env.GMAIL_USER) {
-    return `Wally's Driving School <${process.env.GMAIL_USER.trim()}>`;
+  const gmailUser = (process.env.GMAIL_USER || stored.gmailUser || '').trim();
+  if (gmailUser) {
+    return `Wally's Driving School <${gmailUser}>`;
   }
   return "Wally's Driving School <onboarding@resend.dev>";
+}
+
+export function getEmailServiceStatus() {
+  const stored = loadStoredEmailSettings();
+  const gmailUser = (process.env.GMAIL_USER || stored.gmailUser || '').trim();
+  const hasGmailPass = Boolean((process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || stored.gmailAppPassword || stored.smtpPass || '').trim());
+  const hasResend = Boolean((process.env.RESEND_API_KEY || stored.resendApiKey || '').trim());
+  const resendFrom = (process.env.RESEND_FROM_EMAIL || stored.resendFromEmail || '').trim();
+
+  let activeProvider = 'none';
+  if (gmailUser && hasGmailPass) {
+    activeProvider = 'gmail';
+  } else if (hasResend) {
+    activeProvider = resendFrom && !resendFrom.includes('resend.dev') ? 'resend_custom_domain' : 'resend_sandbox';
+  }
+
+  return {
+    configured: (gmailUser && hasGmailPass) || hasResend,
+    activeProvider,
+    gmailConfigured: Boolean(gmailUser && hasGmailPass),
+    gmailUser: gmailUser ? gmailUser.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
+    resendConfigured: hasResend,
+    resendSandboxMode: activeProvider === 'resend_sandbox'
+  };
 }
 
 // Periodic cleanup of expired entries (runs every 5 minutes)

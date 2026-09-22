@@ -3985,8 +3985,8 @@ init_queries();
 init_bookingSlots();
 init_instructorAvailabilityService();
 import express from "express";
-import path3 from "path";
-import fs3 from "fs";
+import path4 from "path";
+import fs4 from "fs";
 import dotenv from "dotenv";
 import Stripe from "stripe";
 
@@ -5283,8 +5283,49 @@ async function sendInstructorNotificationEmail(booking) {
 
 // src/server/email-verification-service.ts
 import crypto from "crypto";
+import fs3 from "fs";
+import path3 from "path";
 import { Resend as Resend2 } from "resend";
 import nodemailer from "nodemailer";
+function getSettingsFilePath() {
+  const primary = path3.join(process.cwd(), "data", "email-settings.json");
+  try {
+    const dir = path3.dirname(primary);
+    if (!fs3.existsSync(dir)) fs3.mkdirSync(dir, { recursive: true });
+    return primary;
+  } catch {
+    return path3.join("/tmp", "email-settings.json");
+  }
+}
+function loadStoredEmailSettings() {
+  const candidates = [
+    path3.join(process.cwd(), "data", "email-settings.json"),
+    path3.join("/tmp", "email-settings.json")
+  ];
+  for (const file of candidates) {
+    try {
+      if (fs3.existsSync(file)) {
+        const raw = fs3.readFileSync(file, "utf-8");
+        return JSON.parse(raw);
+      }
+    } catch {
+    }
+  }
+  return {};
+}
+function saveStoredEmailSettings(settings) {
+  try {
+    const file = getSettingsFilePath();
+    const existing = loadStoredEmailSettings();
+    const merged = { ...existing, ...settings };
+    fs3.writeFileSync(file, JSON.stringify(merged, null, 2), "utf-8");
+    resendClient = null;
+    smtpTransporter = null;
+    lastSmtpKey = "";
+  } catch (err) {
+    console.error("[Email Verification] Error saving email settings to disk:", err);
+  }
+}
 var otpStore = /* @__PURE__ */ new Map();
 var verifiedTokensStore = /* @__PURE__ */ new Map();
 var OTP_EXPIRY_MS = 10 * 60 * 1e3;
@@ -5295,7 +5336,8 @@ var TOKEN_EXPIRY_MS = 60 * 60 * 1e3;
 var resendClient = null;
 var smtpTransporter = null;
 function getResendInstance() {
-  const apiKey = (process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY || "").trim();
+  const stored = loadStoredEmailSettings();
+  const apiKey = (process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY || stored.resendApiKey || "").trim();
   if (!apiKey) {
     return null;
   }
@@ -5306,12 +5348,13 @@ function getResendInstance() {
 }
 var lastSmtpKey = "";
 function getSmtpTransporter() {
-  const user = (process.env.SMTP_USER || process.env.GMAIL_USER || "").trim();
-  let pass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || "").trim();
+  const stored = loadStoredEmailSettings();
+  const user = (process.env.SMTP_USER || process.env.GMAIL_USER || stored.gmailUser || stored.smtpUser || "").trim();
+  let pass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || stored.gmailAppPassword || stored.smtpPass || "").trim();
   pass = pass.replace(/\s+/g, "");
-  const host = (process.env.SMTP_HOST || "").trim();
+  const host = (process.env.SMTP_HOST || stored.smtpHost || "").trim();
   const currentKey2 = `${user}:${pass}:${host}`;
-  if (user && pass && (host === "smtp.gmail.com" || user.toLowerCase().endsWith("@gmail.com") || process.env.GMAIL_USER)) {
+  if (user && pass && (host === "smtp.gmail.com" || user.toLowerCase().endsWith("@gmail.com") || process.env.GMAIL_USER || stored.gmailUser)) {
     if (!smtpTransporter || lastSmtpKey !== currentKey2) {
       lastSmtpKey = currentKey2;
       smtpTransporter = nodemailer.createTransport({
@@ -5324,7 +5367,7 @@ function getSmtpTransporter() {
   if (host && user && pass) {
     if (!smtpTransporter || lastSmtpKey !== currentKey2) {
       lastSmtpKey = currentKey2;
-      const port = Number(process.env.SMTP_PORT) || 587;
+      const port = Number(process.env.SMTP_PORT || stored.smtpPort) || 587;
       smtpTransporter = nodemailer.createTransport({
         host,
         port,
@@ -5337,16 +5380,39 @@ function getSmtpTransporter() {
   return null;
 }
 function getSender() {
-  const customFrom = process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM;
+  const stored = loadStoredEmailSettings();
+  const customFrom = process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM || stored.resendFromEmail;
   if (customFrom && customFrom.trim()) {
     const raw = customFrom.trim();
     if (raw.includes("<") && raw.includes(">")) return raw;
     return `Wally's Driving School <${raw}>`;
   }
-  if (process.env.GMAIL_USER) {
-    return `Wally's Driving School <${process.env.GMAIL_USER.trim()}>`;
+  const gmailUser = (process.env.GMAIL_USER || stored.gmailUser || "").trim();
+  if (gmailUser) {
+    return `Wally's Driving School <${gmailUser}>`;
   }
   return "Wally's Driving School <onboarding@resend.dev>";
+}
+function getEmailServiceStatus() {
+  const stored = loadStoredEmailSettings();
+  const gmailUser = (process.env.GMAIL_USER || stored.gmailUser || "").trim();
+  const hasGmailPass = Boolean((process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || stored.gmailAppPassword || stored.smtpPass || "").trim());
+  const hasResend = Boolean((process.env.RESEND_API_KEY || stored.resendApiKey || "").trim());
+  const resendFrom = (process.env.RESEND_FROM_EMAIL || stored.resendFromEmail || "").trim();
+  let activeProvider = "none";
+  if (gmailUser && hasGmailPass) {
+    activeProvider = "gmail";
+  } else if (hasResend) {
+    activeProvider = resendFrom && !resendFrom.includes("resend.dev") ? "resend_custom_domain" : "resend_sandbox";
+  }
+  return {
+    configured: gmailUser && hasGmailPass || hasResend,
+    activeProvider,
+    gmailConfigured: Boolean(gmailUser && hasGmailPass),
+    gmailUser: gmailUser ? gmailUser.replace(/(.{2})(.*)(@.*)/, "$1***$3") : null,
+    resendConfigured: hasResend,
+    resendSandboxMode: activeProvider === "resend_sandbox"
+  };
 }
 var cleanupTimer = setInterval(() => {
   const now = Date.now();
@@ -5756,12 +5822,12 @@ function sanitizeText(val) {
   if (typeof val !== "string") return "";
   return val.replace(/<[^>]*>?/gm, "").trim();
 }
-var INSTRUCTOR_SESSIONS_FILE = path3.join(process.cwd(), "data", "instructor-sessions.json");
+var INSTRUCTOR_SESSIONS_FILE = path4.join(process.cwd(), "data", "instructor-sessions.json");
 function loadPersistentInstructorSessions() {
   const map = /* @__PURE__ */ new Map();
   try {
-    if (fs3.existsSync(INSTRUCTOR_SESSIONS_FILE)) {
-      const data = JSON.parse(fs3.readFileSync(INSTRUCTOR_SESSIONS_FILE, "utf-8"));
+    if (fs4.existsSync(INSTRUCTOR_SESSIONS_FILE)) {
+      const data = JSON.parse(fs4.readFileSync(INSTRUCTOR_SESSIONS_FILE, "utf-8"));
       if (Array.isArray(data)) {
         const now = Date.now();
         for (const s of data) {
@@ -5779,12 +5845,12 @@ function loadPersistentInstructorSessions() {
 var activeInstructorSessions = loadPersistentInstructorSessions();
 function persistInstructorSessions() {
   try {
-    const dir = path3.dirname(INSTRUCTOR_SESSIONS_FILE);
-    if (!fs3.existsSync(dir)) {
-      fs3.mkdirSync(dir, { recursive: true });
+    const dir = path4.dirname(INSTRUCTOR_SESSIONS_FILE);
+    if (!fs4.existsSync(dir)) {
+      fs4.mkdirSync(dir, { recursive: true });
     }
     const arr = Array.from(activeInstructorSessions.values()).filter((s) => !s.expiresAt || s.expiresAt > Date.now());
-    fs3.writeFileSync(INSTRUCTOR_SESSIONS_FILE, JSON.stringify(arr, null, 2), "utf-8");
+    fs4.writeFileSync(INSTRUCTOR_SESSIONS_FILE, JSON.stringify(arr, null, 2), "utf-8");
   } catch (e) {
     console.error("[Session] Failed to write persistent instructor sessions:", e);
   }
@@ -6012,6 +6078,37 @@ app.post("/api/email-verification/verify", async (req, res) => {
       error: "SERVER_ERROR",
       message: "An error occurred during verification. Please try again."
     });
+  }
+});
+app.get("/api/email-verification/status", (req, res) => {
+  try {
+    const status = getEmailServiceStatus();
+    return res.json({
+      success: true,
+      ...status
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+app.post("/api/email-verification/settings", (req, res) => {
+  try {
+    const { gmailUser, gmailAppPassword, resendApiKey, resendFromEmail } = req.body || {};
+    saveStoredEmailSettings({
+      ...gmailUser ? { gmailUser: String(gmailUser).trim() } : {},
+      ...gmailAppPassword ? { gmailAppPassword: String(gmailAppPassword).replace(/\s+/g, "") } : {},
+      ...resendApiKey ? { resendApiKey: String(resendApiKey).trim() } : {},
+      ...resendFromEmail ? { resendFromEmail: String(resendFromEmail).trim() } : {}
+    });
+    const status = getEmailServiceStatus();
+    return res.json({
+      success: true,
+      message: "Email service settings updated successfully",
+      ...status
+    });
+  } catch (err) {
+    console.error("[Email Verification API] Error updating settings:", err);
+    return res.status(500).json({ success: false, error: "Failed to update email settings" });
   }
 });
 app.get("/api/stripe/status", (req, res) => {
@@ -8668,10 +8765,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path3.join(process.cwd(), "dist");
+    const distPath = path4.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path3.join(distPath, "index.html"));
+      res.sendFile(path4.join(distPath, "index.html"));
     });
   }
   const REMINDER_CHECK_INTERVAL_MS = 60 * 1e3;
