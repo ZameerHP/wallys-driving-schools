@@ -46,14 +46,21 @@ function getResendInstance(): Resend | null {
   return resendClient;
 }
 
+let lastSmtpKey = '';
+
 function getSmtpTransporter(): Transporter | null {
   const user = (process.env.SMTP_USER || process.env.GMAIL_USER || '').trim();
-  const pass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || '').trim();
+  let pass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || '').trim();
+  // Google App Passwords are 16 letters generated as 4x4 groups like "abcd efgh ijkl mnop".
+  // Stripping all whitespace ensures Nodemailer and Gmail SMTP authenticate seamlessly.
+  pass = pass.replace(/\s+/g, '');
   const host = (process.env.SMTP_HOST || '').trim();
+  const currentKey = `${user}:${pass}:${host}`;
 
   // If Gmail credentials are provided (either GMAIL_USER or user@gmail.com)
   if (user && pass && (host === 'smtp.gmail.com' || user.toLowerCase().endsWith('@gmail.com') || process.env.GMAIL_USER)) {
-    if (!smtpTransporter) {
+    if (!smtpTransporter || lastSmtpKey !== currentKey) {
+      lastSmtpKey = currentKey;
       smtpTransporter = nodemailer.createTransport({
         service: 'gmail',
         auth: { user, pass }
@@ -64,7 +71,8 @@ function getSmtpTransporter(): Transporter | null {
 
   // If custom SMTP host is provided
   if (host && user && pass) {
-    if (!smtpTransporter) {
+    if (!smtpTransporter || lastSmtpKey !== currentKey) {
+      lastSmtpKey = currentKey;
       const port = Number(process.env.SMTP_PORT) || 587;
       smtpTransporter = nodemailer.createTransport({
         host,
@@ -246,10 +254,40 @@ If you did not request this booking, you can safely disregard this email.
   `.trim();
 
   let emailSent = false;
+  let deliveryErrorReason: string | null = null;
 
-  // 1. Try Resend if configured
+  const smtp = getSmtpTransporter();
   const resend = getResendInstance();
-  if (resend) {
+  const hasCustomResendDomain = Boolean(
+    process.env.RESEND_FROM_EMAIL && !process.env.RESEND_FROM_EMAIL.includes('resend.dev')
+  );
+
+  // Helper: Try sending via Gmail / SMTP
+  const trySmtpSend = async (): Promise<boolean> => {
+    if (!smtp) return false;
+    try {
+      const fromAddress = process.env.SMTP_FROM || process.env.GMAIL_USER || primaryFrom;
+      await smtp.sendMail({
+        from: `Wally's Driving School <${fromAddress}>`,
+        to: email,
+        subject,
+        html: htmlContent,
+        text: textContent
+      });
+      console.log(`[Email Verification] Successfully sent verification code to ${email} via Gmail/SMTP.`);
+      return true;
+    } catch (err: any) {
+      console.warn(`[Email Verification] Exception sending via SMTP to ${email}:`, err);
+      if (!deliveryErrorReason) {
+        deliveryErrorReason = err.message || null;
+      }
+      return false;
+    }
+  };
+
+  // Helper: Try sending via Resend
+  const tryResendSend = async (): Promise<boolean> => {
+    if (!resend) return false;
     try {
       let payload = {
         from: primaryFrom,
@@ -269,42 +307,49 @@ If you did not request this booking, you can safely disregard this email.
 
       if (!result.error && result.data?.id) {
         console.log(`[Email Verification] Successfully sent verification code to ${email} via Resend (${result.data.id}).`);
-        emailSent = true;
+        return true;
       } else if (result.error) {
-        console.warn(`[Email Verification] Resend notice for ${email}:`, result.error);
+        console.warn(`[Email Verification] Resend error for ${email}:`, result.error);
+        if (result.error.message?.toLowerCase().includes('only send testing emails') || result.error.message?.toLowerCase().includes('own email address')) {
+          deliveryErrorReason = 'RESEND_SANDBOX_RESTRICTION: Resend sandbox only allows sending to the account owner. Gmail App Password or custom domain required.';
+        } else {
+          deliveryErrorReason = result.error.message || null;
+        }
       }
     } catch (err: any) {
       console.warn(`[Email Verification] Exception sending via Resend to ${email}:`, err);
+      deliveryErrorReason = err.message || null;
     }
-  }
+    return false;
+  };
 
-  // 2. Try SMTP / Gmail Nodemailer if Resend was not used or failed
-  if (!emailSent) {
-    const smtp = getSmtpTransporter();
-    if (smtp) {
-      try {
-        const fromAddress = process.env.SMTP_FROM || process.env.GMAIL_USER || primaryFrom;
-        await smtp.sendMail({
-          from: `Wally's Driving School <${fromAddress}>`,
-          to: email,
-          subject,
-          html: htmlContent,
-          text: textContent
-        });
-        console.log(`[Email Verification] Successfully sent verification code to ${email} via SMTP/Gmail.`);
-        emailSent = true;
-      } catch (err: any) {
-        console.warn(`[Email Verification] Exception sending via SMTP to ${email}:`, err);
-      }
+  // If Gmail/SMTP is configured and Resend does not have a verified domain, prioritize Gmail SMTP!
+  if (smtp && !hasCustomResendDomain) {
+    emailSent = await trySmtpSend();
+    if (!emailSent) {
+      emailSent = await tryResendSend();
+    }
+  } else {
+    // Otherwise try Resend first, fallback to SMTP
+    emailSent = await tryResendSend();
+    if (!emailSent) {
+      emailSent = await trySmtpSend();
     }
   }
 
   if (!emailSent) {
-    console.error(`[Email Verification] Failed to deliver verification email to ${email}. Check Resend or Gmail credentials.`);
+    console.error(`[Email Verification] Failed to deliver verification email to ${email}. Reason: ${deliveryErrorReason || 'No email service credentials configured'}`);
+    
+    // Provide actionable user message if Resend sandbox restriction is hit
+    const isSandboxError = deliveryErrorReason?.includes('RESEND_SANDBOX_RESTRICTION') || deliveryErrorReason?.toLowerCase().includes('only send testing emails');
+    const userMessage = isSandboxError
+      ? 'Email sending is currently restricted by Resend sandbox mode to the account owner (zameerpanhwer67@gmail.com). To send to all customer emails, please configure Gmail App Password (GMAIL_USER & GMAIL_APP_PASSWORD) or verify a domain in Resend.'
+      : 'Could not send verification email. Please check your email address or ensure email service (Gmail or Resend) is configured.';
+
     return {
       success: false,
-      error: 'DELIVERY_FAILED',
-      message: 'Could not send verification email. Please verify your email address or ensure email service (Resend or Gmail) is configured in Settings.'
+      error: isSandboxError ? 'RESEND_SANDBOX_MODE' : 'DELIVERY_FAILED',
+      message: userMessage
     };
   }
 
