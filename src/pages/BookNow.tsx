@@ -429,7 +429,6 @@ export function BookNow() {
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [verificationSuccessMsg, setVerificationSuccessMsg] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
-  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
 
   // 60-second cooldown timer for code resend
   useEffect(() => {
@@ -460,7 +459,6 @@ export function BookNow() {
     setIsSendingCode(true);
     setVerificationError(null);
     setVerificationSuccessMsg(null);
-    setDevOtpHint(null);
 
     try {
       const res = await fetch('/api/email-verification/send', {
@@ -479,14 +477,8 @@ export function BookNow() {
       }
 
       setCodeSent(true);
-      if (data.devCode) {
-        setVerificationCode(data.devCode);
-        setDevOtpHint(data.devCode);
-        setVerificationSuccessMsg(`Verification code generated (${data.devCode}) and auto-filled.`);
-      } else {
-        setVerificationCode('');
-        setVerificationSuccessMsg(data.message || 'Verification code sent to your email.');
-      }
+      setVerificationCode('');
+      setVerificationSuccessMsg(data.message || 'Verification code sent to your email.');
       setResendCooldown(data.cooldownSeconds || 60);
     } catch (err: any) {
       setVerificationError('Unable to send the verification code. Please try again.');
@@ -3326,18 +3318,6 @@ export function BookNow() {
                                   <label htmlFor="otp-code-input" className="block text-[11px] font-bold text-neutral-700 uppercase tracking-wider mb-1.5">
                                     Verification Code
                                   </label>
-                                  {devOtpHint && (
-                                    <div className="mb-2 p-2 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs flex items-center justify-between">
-                                      <span>⚡ Preview Code: <strong className="font-mono text-sm tracking-wider">{devOtpHint}</strong></span>
-                                      <button
-                                        type="button"
-                                        onClick={() => setVerificationCode(devOtpHint)}
-                                        className="text-[11px] underline font-semibold text-amber-800 hover:text-amber-900"
-                                      >
-                                        Auto-fill
-                                      </button>
-                                    </div>
-                                  )}
                                   <div className="flex flex-col sm:flex-row gap-2">
                                     <input
                                       id="otp-code-input"
