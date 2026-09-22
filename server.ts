@@ -45,6 +45,8 @@ import {
   setInstructorWeekdayOff,
   setInstructorWeeklyDaysOff,
   isInstructorWeekdayOff,
+  getDayKeyFromDateStr,
+  dayKeyToDayIndex,
   getDateOverrides,
   addDateOverride,
   deleteDateOverride,
@@ -661,7 +663,28 @@ app.post("/api/create-checkout-session", async (req, res) => {
       });
     }
 
-    // Authoritative slot check before creating checkout session
+    // Authoritative instructor day off & slot check before creating checkout session
+    const sessionInstructorId = (req.body.instructorId || 'wally').trim().toLowerCase();
+    const allSessionLessons = Array.isArray(lessons) && lessons.length > 0 
+      ? lessons 
+      : [{ date: bookingDate, time: bookingTime, instructorId: sessionInstructorId }];
+
+    for (let i = 0; i < allSessionLessons.length; i++) {
+      const l = allSessionLessons[i];
+      if (l?.date) {
+        const dKey = getDayKeyFromDateStr(l.date);
+        const dIdx = dayKeyToDayIndex(dKey);
+        const instId = (l.instructorId || sessionInstructorId || 'wally').trim().toLowerCase();
+        if (isInstructorWeekdayOff(instId, dIdx)) {
+          const dName = dKey.charAt(0).toUpperCase() + dKey.slice(1);
+          return res.status(409).json({
+            error: "INSTRUCTOR_DAY_OFF",
+            message: `Lesson ${l.lessonNumber || (i + 1)} (${l.date}): Instructor is permanently off on ${dName}s. No bookings can be placed on an instructor's day off.`
+          });
+        }
+      }
+    }
+
     if (Array.isArray(lessons) && lessons.length > 0) {
       const batchCheck = await checkMultipleSlotsBooked(lessons, targetRef, studentEmail, studentPhone);
       if (!batchCheck.available) {
@@ -2788,7 +2811,28 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
 
     // Double booking & availability verification: multi-lesson batch or single slot
     const canOverrideSlot = Boolean(allowOverride && isInstructor);
-    const targetInstructorId = req.body.instructorId || 'wally';
+    const targetInstructorId = (req.body.instructorId || 'wally').trim().toLowerCase();
+
+    // Strictly forbid booking on an instructor's permanent recurring day off
+    const allBookingItems = hasMultipleLessons 
+      ? lessons 
+      : [{ date: primaryDate, time: primaryTime, instructorId: targetInstructorId }];
+
+    for (let i = 0; i < allBookingItems.length; i++) {
+      const bItem = allBookingItems[i];
+      if (bItem?.date) {
+        const dKey = getDayKeyFromDateStr(bItem.date);
+        const dIdx = dayKeyToDayIndex(dKey);
+        const instId = (bItem.instructorId || targetInstructorId || 'wally').trim().toLowerCase();
+        if (isInstructorWeekdayOff(instId, dIdx) && !canOverrideSlot) {
+          const dName = dKey.charAt(0).toUpperCase() + dKey.slice(1);
+          return res.status(409).json({
+            error: "INSTRUCTOR_DAY_OFF",
+            message: `Lesson ${bItem.lessonNumber || (i + 1)} (${bItem.date}): Instructor is permanently off on ${dName}s. No bookings can be placed on an instructor's day off.`
+          });
+        }
+      }
+    }
 
     if (hasMultipleLessons) {
       for (let i = 0; i < lessons.length; i++) {

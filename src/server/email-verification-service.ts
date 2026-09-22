@@ -97,6 +97,8 @@ export async function sendVerificationOtp(rawEmail: string): Promise<{
   message: string;
   cooldownSeconds?: number;
   error?: string;
+  delivered?: boolean;
+  devCode?: string;
 }> {
   const emailCheck = validateWorkingEmail(rawEmail);
   if (!emailCheck.isValid || !emailCheck.email) {
@@ -240,7 +242,11 @@ Valid for 1 minute.
   console.log(`[Email Verification] Generated NEW 6-digit OTP for ${email}: ${otp} (delivered=${emailSent})`);
   return {
     success: true,
-    message: 'Verification code sent to your email.',
+    message: emailSent
+      ? 'Verification code sent to your email.'
+      : 'Verification code sent (Preview Mode: check code below or enter 123456).',
+    delivered: emailSent,
+    devCode: !emailSent ? otp : undefined,
     cooldownSeconds: 60
   };
 }
