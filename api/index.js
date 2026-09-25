@@ -3985,8 +3985,8 @@ init_queries();
 init_bookingSlots();
 init_instructorAvailabilityService();
 import express from "express";
-import path3 from "path";
-import fs3 from "fs";
+import path4 from "path";
+import fs4 from "fs";
 import dotenv from "dotenv";
 import Stripe from "stripe";
 
@@ -4474,17 +4474,127 @@ init_queries();
 
 // src/server/email-dispatcher.ts
 init_queries();
+import fs3 from "node:fs";
+import path3 from "node:path";
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
 var gmailTransporter = null;
 var customSmtpTransporter = null;
 var resendClient = null;
+var EMAIL_SETTINGS_FILES = [
+  path3.join(process.cwd(), "data", "email-settings.json"),
+  "/tmp/email-settings.json"
+];
+function readSavedEmailSettings() {
+  for (const f of EMAIL_SETTINGS_FILES) {
+    try {
+      if (fs3.existsSync(f)) {
+        const raw = fs3.readFileSync(f, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") return parsed;
+      }
+    } catch {
+    }
+  }
+  return null;
+}
 function getGmailConfig() {
-  const user = (process.env.GMAIL_USER || process.env.SMTP_USER || "").trim();
-  const rawPass = process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || "";
+  const userCandidates = [
+    ["GMAIL_USER", process.env.GMAIL_USER],
+    ["GMAIL_EMAIL", process.env.GMAIL_EMAIL],
+    ["EMAIL_USER", process.env.EMAIL_USER],
+    ["EMAIL", process.env.EMAIL],
+    ["EMAIL_ADDRESS", process.env.EMAIL_ADDRESS],
+    ["SMTP_USER", process.env.SMTP_USER],
+    ["MAIL_USER", process.env.MAIL_USER],
+    ["GOOGLE_EMAIL", process.env.GOOGLE_EMAIL],
+    ["GOOGLE_USER", process.env.GOOGLE_USER],
+    // Variables with spaces or special formats
+    ["EMAIL USER", process.env["EMAIL USER"]],
+    ["GMAIL USER", process.env["GMAIL USER"]]
+  ];
+  let user = "";
+  let detectedKeyUser = "";
+  for (const [key, val] of userCandidates) {
+    if (val && typeof val === "string" && val.trim().length > 0) {
+      const clean = val.trim().replace(/^["']|["']$/g, "");
+      if (clean.includes("@")) {
+        user = clean.toLowerCase();
+        detectedKeyUser = key;
+        break;
+      }
+    }
+  }
+  const passCandidates = [
+    ["GMAIL_APP_PASSWORD", process.env.GMAIL_APP_PASSWORD],
+    ["EMAIL_PASS", process.env.EMAIL_PASS],
+    ["EMAIL_PASSS", process.env.EMAIL_PASSS],
+    ["EMAIL_PASSWORD", process.env.EMAIL_PASSWORD],
+    ["GMAIL_PASS", process.env.GMAIL_PASS],
+    ["GMAIL_PASSWORD", process.env.GMAIL_PASSWORD],
+    ["GMAIL_APP_PASS", process.env.GMAIL_APP_PASS],
+    ["EMAIL_APP_PASSWORD", process.env.EMAIL_APP_PASSWORD],
+    ["EMAIL_APP_PASS", process.env.EMAIL_APP_PASS],
+    ["SMTP_PASS", process.env.SMTP_PASS],
+    ["SMTP_PASSWORD", process.env.SMTP_PASSWORD],
+    ["APP_PASSWORD", process.env.APP_PASSWORD],
+    ["APP_PASS", process.env.APP_PASS],
+    ["PASSWORD", process.env.PASSWORD],
+    ["PASS", process.env.PASS],
+    // Variables with spaces as commonly entered in Vercel dashboard
+    ["EMAIL PASSS", process.env["EMAIL PASSS"]],
+    ["EMAIL PASS", process.env["EMAIL PASS"]],
+    ["EMAIL PASSWORD", process.env["EMAIL PASSWORD"]],
+    ["GMAIL APP PASSWORD", process.env["GMAIL APP PASSWORD"]],
+    ["APP PASSWORD", process.env["APP PASSWORD"]]
+  ];
+  let rawPass = "";
+  let detectedKeyPass = "";
+  for (const [key, val] of passCandidates) {
+    if (val && typeof val === "string" && val.trim().length > 0) {
+      rawPass = val.trim().replace(/^["']|["']$/g, "");
+      detectedKeyPass = key;
+      break;
+    }
+  }
+  if (!user || !rawPass) {
+    for (const [key, val] of Object.entries(process.env)) {
+      if (!val || typeof val !== "string" || !val.trim()) continue;
+      const cleanVal = val.trim().replace(/^["']|["']$/g, "");
+      const normKey = key.toUpperCase().replace(/[\s_\-]+/g, "");
+      if (!user && (normKey === "EMAIL" || normKey === "GMAIL" || normKey === "EMAILUSER" || normKey === "GMAILUSER" || normKey === "GOOGLEEMAIL" || normKey === "GOOGLEUSER" || normKey === "SMTPUSER" || normKey === "MAILUSER")) {
+        if (cleanVal.includes("@")) {
+          user = cleanVal.toLowerCase();
+          detectedKeyUser = key;
+        }
+      }
+      if (!rawPass && (normKey === "EMAILPASS" || normKey === "EMAILPASSS" || normKey === "EMAILPASSWORD" || normKey === "GMAILPASS" || normKey === "GMAILPASSS" || normKey === "GMAILPASSWORD" || normKey === "GMAILAPPPASSWORD" || normKey === "GMAILAPPPASS" || normKey === "EMAILAPPPASSWORD" || normKey === "EMAILAPPPASS" || normKey === "SMTPPASS" || normKey === "SMTPPASSWORD" || normKey === "APPPASSWORD" || normKey === "APPPASS" || normKey === "PASSWORD" || normKey === "PASS")) {
+        if (cleanVal.length >= 8) {
+          rawPass = cleanVal;
+          detectedKeyPass = key;
+        }
+      }
+    }
+  }
   const pass = rawPass.replace(/\s+/g, "");
+  if (!user || !pass) {
+    const saved = readSavedEmailSettings();
+    if (saved) {
+      if (!user && (saved.gmailUser || saved.email || saved.emailUser)) {
+        user = String(saved.gmailUser || saved.email || saved.emailUser).trim().toLowerCase();
+        detectedKeyUser = "SAVED_SETTINGS_FILE";
+      }
+      if (!pass && (saved.gmailAppPassword || saved.emailPass || saved.emailPassword || saved.password)) {
+        const p = String(saved.gmailAppPassword || saved.emailPass || saved.emailPassword || saved.password).replace(/\s+/g, "");
+        if (p.length >= 8) {
+          detectedKeyPass = "SAVED_SETTINGS_FILE";
+          return { user, pass: p, isConfigured: Boolean(user && user.includes("@")), detectedKeyUser, detectedKeyPass };
+        }
+      }
+    }
+  }
   const isConfigured = Boolean(user && user.includes("@") && pass.length >= 8);
-  return { user, pass, isConfigured };
+  return { user, pass, isConfigured, detectedKeyUser, detectedKeyPass };
 }
 function getCustomSmtpConfig() {
   const host = (process.env.SMTP_HOST || "").trim();
@@ -4530,6 +4640,9 @@ function getEmailSystemStatus() {
     hasCustomSmtp: smtp.isConfigured,
     hasResend,
     gmailUser: gmail.user ? gmail.user.replace(/(?<=^.{2}).(?=.*@)/g, "*") : null,
+    detectedEmailVariable: gmail.detectedKeyUser,
+    detectedPasswordVariable: gmail.detectedKeyPass,
+    passwordLength: gmail.pass.length,
     fromEmail: getFormattedSender(),
     resendSandbox
   };
@@ -4543,11 +4656,28 @@ function getEmailServiceStatus() {
   };
 }
 function saveStoredEmailSettings(settings) {
+  const existing = readSavedEmailSettings() || {};
+  const merged = {
+    ...existing,
+    ...settings,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  for (const f of EMAIL_SETTINGS_FILES) {
+    try {
+      const dir = path3.dirname(f);
+      if (!fs3.existsSync(dir)) fs3.mkdirSync(dir, { recursive: true });
+      fs3.writeFileSync(f, JSON.stringify(merged, null, 2), "utf-8");
+    } catch {
+    }
+  }
   if (settings.gmailUser !== void 0) {
     process.env.GMAIL_USER = settings.gmailUser;
+    process.env.EMAIL = settings.gmailUser;
   }
   if (settings.gmailAppPassword !== void 0) {
-    process.env.GMAIL_APP_PASSWORD = settings.gmailAppPassword.replace(/\s+/g, "");
+    const clean = settings.gmailAppPassword.replace(/\s+/g, "");
+    process.env.GMAIL_APP_PASSWORD = clean;
+    process.env.EMAIL_PASS = clean;
   }
   if (settings.resendApiKey !== void 0) {
     process.env.RESEND_API_KEY = settings.resendApiKey;
@@ -4614,8 +4744,15 @@ async function sendViaGmail(options, recipient) {
     console.log(`[Email Dispatcher] Sent email via Gmail SMTP (${user}) to ${recipient} (id: ${info.messageId})`);
     return { success: true, messageId: info.messageId };
   } catch (err) {
-    console.error(`[Email Dispatcher] Gmail SMTP error to ${recipient}:`, err?.message || err);
-    return { success: false, error: err?.message || "Gmail SMTP failed" };
+    const rawMsg = err?.message || String(err);
+    let errorMsg = rawMsg;
+    if (rawMsg.includes("535") || rawMsg.includes("Username and Password not accepted") || rawMsg.includes("BadCredentials") || rawMsg.includes("Application-specific password required")) {
+      errorMsg = "Gmail Authentication Failed (535 Bad Credentials). Google requires a 16-character App Password (not your regular Gmail password). Please generate an App Password at https://myaccount.google.com/apppasswords and set GMAIL_APP_PASSWORD or EMAIL_PASS in your Vercel Environment Variables.";
+    } else if (rawMsg.includes("ECONNREFUSED") || rawMsg.includes("ETIMEDOUT") || rawMsg.includes("ENOTFOUND")) {
+      errorMsg = `Gmail SMTP Connection Error: ${rawMsg}`;
+    }
+    console.error(`[Email Dispatcher] Gmail SMTP error to ${recipient}:`, errorMsg);
+    return { success: false, error: errorMsg };
   }
 }
 async function sendViaCustomSmtp(options, recipient) {
@@ -4702,6 +4839,7 @@ async function dispatchEmail(options) {
   const resend = getResendClient();
   const customFrom = (process.env.RESEND_FROM_EMAIL || "").trim();
   const resendHasCustomDomain = Boolean(customFrom && !customFrom.includes("resend.dev"));
+  let lastGmailError = null;
   if (hasGmail && (!resend || !resendHasCustomDomain)) {
     const gmailResult = await sendViaGmail(options, recipient);
     if (gmailResult.success) {
@@ -4719,7 +4857,8 @@ async function dispatchEmail(options) {
         recipient
       };
     }
-    console.warn(`[Email Dispatcher] Gmail SMTP failed (${gmailResult.error}). Checking Resend fallback...`);
+    lastGmailError = gmailResult.error || "Gmail SMTP failed";
+    console.warn(`[Email Dispatcher] Gmail SMTP failed (${lastGmailError}). Checking Resend fallback...`);
   }
   if (resend) {
     const resendResult = await sendViaResend(options, recipient);
@@ -4757,6 +4896,7 @@ async function dispatchEmail(options) {
           recipient
         };
       }
+      lastGmailError = gmailFallback.error || "Gmail SMTP failed";
     }
     if (hasCustomSmtp) {
       const smtpFallback = await sendViaCustomSmtp(options, recipient);
@@ -4776,17 +4916,31 @@ async function dispatchEmail(options) {
         };
       }
     }
+    const isSandbox = (resendResult.error || "").toLowerCase().includes("only send testing emails") || (resendResult.error || "").toLowerCase().includes("resend sandbox") || (resendResult.error || "").toLowerCase().includes("verify a domain");
+    let descriptiveError = resendResult.error;
+    if (isSandbox) {
+      if (lastGmailError) {
+        descriptiveError = `Email delivery to ${recipient} failed: Gmail credentials failed with error: "${lastGmailError}". Resend fallback was attempted but Resend is restricted to sandbox mode (zameerpanhwer67@gmail.com only). Please verify your 16-character Google App Password in Vercel Environment Variables.`;
+      } else {
+        const gmailConf = getGmailConfig();
+        if (gmailConf.detectedKeyUser && !gmailConf.detectedKeyPass) {
+          descriptiveError = `Email delivery to ${recipient} failed: Resend is restricted to sandbox mode (zameerpanhwer67@gmail.com only). Detected user email (${gmailConf.detectedKeyUser}), but no valid password secret was found. Please add GMAIL_APP_PASSWORD or EMAIL_PASS in Vercel Environment Variables.`;
+        } else {
+          descriptiveError = `Email sending is restricted by Resend sandbox mode to the account owner (zameerpanhwer67@gmail.com). To send verification codes to all customer emails, please add GMAIL_USER and GMAIL_APP_PASSWORD in your Vercel Environment Variables and redeploy.`;
+        }
+      }
+    }
     await logEmailDelivery({
       bookingRef: options.bookingRef,
       emailType,
       recipientEmail: recipient,
       status: "failed",
-      error: resendResult.error
+      error: descriptiveError
     });
     return {
       success: false,
       provider: "resend",
-      error: resendResult.error,
+      error: descriptiveError,
       recipient
     };
   }
@@ -5704,6 +5858,16 @@ Valid for 1 minute.
     emailType: "verification"
   });
   console.log(`[Email Verification] Generated OTP for ${email}: ${otp} (provider=${dispatchResult.provider}, delivered=${dispatchResult.success})`);
+  if (!dispatchResult.success) {
+    const msg = dispatchResult.error || "Unable to deliver the verification code to your email.";
+    console.error(`[Email Verification] Failed to deliver OTP to ${email}:`, msg);
+    return {
+      success: false,
+      error: "DELIVERY_FAILED",
+      message: msg,
+      cooldownSeconds: 15
+    };
+  }
   return {
     success: true,
     message: "Verification code sent to your email.",
@@ -5900,12 +6064,12 @@ function sanitizeText(val) {
   if (typeof val !== "string") return "";
   return val.replace(/<[^>]*>?/gm, "").trim();
 }
-var INSTRUCTOR_SESSIONS_FILE = path3.join(process.cwd(), "data", "instructor-sessions.json");
+var INSTRUCTOR_SESSIONS_FILE = path4.join(process.cwd(), "data", "instructor-sessions.json");
 function loadPersistentInstructorSessions() {
   const map = /* @__PURE__ */ new Map();
   try {
-    if (fs3.existsSync(INSTRUCTOR_SESSIONS_FILE)) {
-      const data = JSON.parse(fs3.readFileSync(INSTRUCTOR_SESSIONS_FILE, "utf-8"));
+    if (fs4.existsSync(INSTRUCTOR_SESSIONS_FILE)) {
+      const data = JSON.parse(fs4.readFileSync(INSTRUCTOR_SESSIONS_FILE, "utf-8"));
       if (Array.isArray(data)) {
         const now = Date.now();
         for (const s of data) {
@@ -5923,12 +6087,12 @@ function loadPersistentInstructorSessions() {
 var activeInstructorSessions = loadPersistentInstructorSessions();
 function persistInstructorSessions() {
   try {
-    const dir = path3.dirname(INSTRUCTOR_SESSIONS_FILE);
-    if (!fs3.existsSync(dir)) {
-      fs3.mkdirSync(dir, { recursive: true });
+    const dir = path4.dirname(INSTRUCTOR_SESSIONS_FILE);
+    if (!fs4.existsSync(dir)) {
+      fs4.mkdirSync(dir, { recursive: true });
     }
     const arr = Array.from(activeInstructorSessions.values()).filter((s) => !s.expiresAt || s.expiresAt > Date.now());
-    fs3.writeFileSync(INSTRUCTOR_SESSIONS_FILE, JSON.stringify(arr, null, 2), "utf-8");
+    fs4.writeFileSync(INSTRUCTOR_SESSIONS_FILE, JSON.stringify(arr, null, 2), "utf-8");
   } catch (e) {
     console.error("[Session] Failed to write persistent instructor sessions:", e);
   }
@@ -8894,10 +9058,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path3.join(process.cwd(), "dist");
+    const distPath = path4.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path3.join(distPath, "index.html"));
+      res.sendFile(path4.join(distPath, "index.html"));
     });
   }
   const REMINDER_CHECK_INTERVAL_MS = 60 * 1e3;

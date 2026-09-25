@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import nodemailer, { type Transporter } from 'nodemailer';
 import { Resend } from 'resend';
 import { logEmailDelivery } from '../db/queries.ts';
@@ -6,6 +8,24 @@ import { logEmailDelivery } from '../db/queries.ts';
 let gmailTransporter: Transporter | null = null;
 let customSmtpTransporter: Transporter | null = null;
 let resendClient: Resend | null = null;
+
+const EMAIL_SETTINGS_FILES = [
+  path.join(process.cwd(), 'data', 'email-settings.json'),
+  '/tmp/email-settings.json'
+];
+
+function readSavedEmailSettings(): any {
+  for (const f of EMAIL_SETTINGS_FILES) {
+    try {
+      if (fs.existsSync(f)) {
+        const raw = fs.readFileSync(f, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {}
+  }
+  return null;
+}
 
 export interface EmailDispatchOptions {
   to: string | string[];
@@ -33,20 +53,164 @@ export interface EmailSystemStatus {
   hasCustomSmtp: boolean;
   hasResend: boolean;
   gmailUser: string | null;
+  detectedEmailVariable?: string;
+  detectedPasswordVariable?: string;
+  passwordLength?: number;
   fromEmail: string;
   resendSandbox: boolean;
 }
 
 /**
  * Normalizes and extracts Gmail configuration.
- * Automatically cleans spaces from Google 16-character App Passwords (e.g., 'xxxx xxxx xxxx xxxx').
+ * Automatically checks all common environment variable synonyms:
+ * - Email: GMAIL_USER, GMAIL_EMAIL, EMAIL_USER, EMAIL, EMAIL_ADDRESS, SMTP_USER, MAIL_USER
+ * - Password: GMAIL_APP_PASSWORD, EMAIL_PASS, EMAIL_PASSS, EMAIL_PASSWORD, GMAIL_PASS, GMAIL_PASSWORD, APP_PASSWORD, SMTP_PASS
+ * Automatically strips quotes and whitespace from Google 16-character App Passwords.
  */
-export function getGmailConfig(): { user: string; pass: string; isConfigured: boolean } {
-  const user = (process.env.GMAIL_USER || process.env.SMTP_USER || '').trim();
-  const rawPass = process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || '';
+export function getGmailConfig(): {
+  user: string;
+  pass: string;
+  isConfigured: boolean;
+  detectedKeyUser?: string;
+  detectedKeyPass?: string;
+} {
+  // Direct prioritized candidates
+  const userCandidates: Array<[string, string | undefined]> = [
+    ['GMAIL_USER', process.env.GMAIL_USER],
+    ['GMAIL_EMAIL', process.env.GMAIL_EMAIL],
+    ['EMAIL_USER', process.env.EMAIL_USER],
+    ['EMAIL', process.env.EMAIL],
+    ['EMAIL_ADDRESS', process.env.EMAIL_ADDRESS],
+    ['SMTP_USER', process.env.SMTP_USER],
+    ['MAIL_USER', process.env.MAIL_USER],
+    ['GOOGLE_EMAIL', process.env.GOOGLE_EMAIL],
+    ['GOOGLE_USER', process.env.GOOGLE_USER],
+    // Variables with spaces or special formats
+    ['EMAIL USER', (process.env as any)['EMAIL USER']],
+    ['GMAIL USER', (process.env as any)['GMAIL USER']],
+  ];
+
+  let user = '';
+  let detectedKeyUser = '';
+  for (const [key, val] of userCandidates) {
+    if (val && typeof val === 'string' && val.trim().length > 0) {
+      const clean = val.trim().replace(/^["']|["']$/g, '');
+      if (clean.includes('@')) {
+        user = clean.toLowerCase();
+        detectedKeyUser = key;
+        break;
+      }
+    }
+  }
+
+  const passCandidates: Array<[string, string | undefined]> = [
+    ['GMAIL_APP_PASSWORD', process.env.GMAIL_APP_PASSWORD],
+    ['EMAIL_PASS', process.env.EMAIL_PASS],
+    ['EMAIL_PASSS', process.env.EMAIL_PASSS],
+    ['EMAIL_PASSWORD', process.env.EMAIL_PASSWORD],
+    ['GMAIL_PASS', process.env.GMAIL_PASS],
+    ['GMAIL_PASSWORD', process.env.GMAIL_PASSWORD],
+    ['GMAIL_APP_PASS', process.env.GMAIL_APP_PASS],
+    ['EMAIL_APP_PASSWORD', process.env.EMAIL_APP_PASSWORD],
+    ['EMAIL_APP_PASS', process.env.EMAIL_APP_PASS],
+    ['SMTP_PASS', process.env.SMTP_PASS],
+    ['SMTP_PASSWORD', process.env.SMTP_PASSWORD],
+    ['APP_PASSWORD', process.env.APP_PASSWORD],
+    ['APP_PASS', process.env.APP_PASS],
+    ['PASSWORD', process.env.PASSWORD],
+    ['PASS', process.env.PASS],
+    // Variables with spaces as commonly entered in Vercel dashboard
+    ['EMAIL PASSS', (process.env as any)['EMAIL PASSS']],
+    ['EMAIL PASS', (process.env as any)['EMAIL PASS']],
+    ['EMAIL PASSWORD', (process.env as any)['EMAIL PASSWORD']],
+    ['GMAIL APP PASSWORD', (process.env as any)['GMAIL APP PASSWORD']],
+    ['APP PASSWORD', (process.env as any)['APP PASSWORD']],
+  ];
+
+  let rawPass = '';
+  let detectedKeyPass = '';
+  for (const [key, val] of passCandidates) {
+    if (val && typeof val === 'string' && val.trim().length > 0) {
+      rawPass = val.trim().replace(/^["']|["']$/g, '');
+      detectedKeyPass = key;
+      break;
+    }
+  }
+
+  // Dynamic scan of all process.env keys (handling custom keys, typos, case differences)
+  if (!user || !rawPass) {
+    for (const [key, val] of Object.entries(process.env)) {
+      if (!val || typeof val !== 'string' || !val.trim()) continue;
+      const cleanVal = val.trim().replace(/^["']|["']$/g, '');
+      const normKey = key.toUpperCase().replace(/[\s_\-]+/g, '');
+
+      // Check user: e.g. EMAIL, GMAIL, EMAILUSER, GMAILUSER, SMTPUSER, GOOGLEEMAIL
+      if (!user && (
+        normKey === 'EMAIL' ||
+        normKey === 'GMAIL' ||
+        normKey === 'EMAILUSER' ||
+        normKey === 'GMAILUSER' ||
+        normKey === 'GOOGLEEMAIL' ||
+        normKey === 'GOOGLEUSER' ||
+        normKey === 'SMTPUSER' ||
+        normKey === 'MAILUSER'
+      )) {
+        if (cleanVal.includes('@')) {
+          user = cleanVal.toLowerCase();
+          detectedKeyUser = key;
+        }
+      }
+
+      // Check pass: e.g. EMAILPASS, EMAILPASSS, EMAILPASSWORD, GMAILPASS, GMAILPASSWORD, GMAILAPPPASSWORD, APPPASSWORD
+      if (!rawPass && (
+        normKey === 'EMAILPASS' ||
+        normKey === 'EMAILPASSS' ||
+        normKey === 'EMAILPASSWORD' ||
+        normKey === 'GMAILPASS' ||
+        normKey === 'GMAILPASSS' ||
+        normKey === 'GMAILPASSWORD' ||
+        normKey === 'GMAILAPPPASSWORD' ||
+        normKey === 'GMAILAPPPASS' ||
+        normKey === 'EMAILAPPPASSWORD' ||
+        normKey === 'EMAILAPPPASS' ||
+        normKey === 'SMTPPASS' ||
+        normKey === 'SMTPPASSWORD' ||
+        normKey === 'APPPASSWORD' ||
+        normKey === 'APPPASS' ||
+        normKey === 'PASSWORD' ||
+        normKey === 'PASS'
+      )) {
+        if (cleanVal.length >= 8) {
+          rawPass = cleanVal;
+          detectedKeyPass = key;
+        }
+      }
+    }
+  }
+
   const pass = rawPass.replace(/\s+/g, '');
+
+  // Check saved credentials file if environment variables are not set
+  if (!user || !pass) {
+    const saved = readSavedEmailSettings();
+    if (saved) {
+      if (!user && (saved.gmailUser || saved.email || saved.emailUser)) {
+        user = String(saved.gmailUser || saved.email || saved.emailUser).trim().toLowerCase();
+        detectedKeyUser = 'SAVED_SETTINGS_FILE';
+      }
+      if (!pass && (saved.gmailAppPassword || saved.emailPass || saved.emailPassword || saved.password)) {
+        const p = String(saved.gmailAppPassword || saved.emailPass || saved.emailPassword || saved.password).replace(/\s+/g, '');
+        if (p.length >= 8) {
+          detectedKeyPass = 'SAVED_SETTINGS_FILE';
+          return { user, pass: p, isConfigured: Boolean(user && user.includes('@')), detectedKeyUser, detectedKeyPass };
+        }
+      }
+    }
+  }
+
   const isConfigured = Boolean(user && user.includes('@') && pass.length >= 8);
-  return { user, pass, isConfigured };
+
+  return { user, pass, isConfigured, detectedKeyUser, detectedKeyPass };
 }
 
 /**
@@ -119,6 +283,9 @@ export function getEmailSystemStatus(): EmailSystemStatus {
     hasCustomSmtp: smtp.isConfigured,
     hasResend,
     gmailUser: gmail.user ? gmail.user.replace(/(?<=^.{2}).(?=.*@)/g, '*') : null,
+    detectedEmailVariable: gmail.detectedKeyUser,
+    detectedPasswordVariable: gmail.detectedKeyPass,
+    passwordLength: gmail.pass.length,
     fromEmail: getFormattedSender(),
     resendSandbox
   };
@@ -137,7 +304,7 @@ export function getEmailServiceStatus() {
 }
 
 /**
- * Dynamically updates and persists email settings at runtime.
+ * Dynamically updates and persists email settings at runtime across server restarts and Vercel container instances.
  */
 export function saveStoredEmailSettings(settings: {
   gmailUser?: string;
@@ -145,11 +312,29 @@ export function saveStoredEmailSettings(settings: {
   resendApiKey?: string;
   resendFromEmail?: string;
 }): void {
+  const existing = readSavedEmailSettings() || {};
+  const merged = {
+    ...existing,
+    ...settings,
+    updatedAt: new Date().toISOString()
+  };
+
+  for (const f of EMAIL_SETTINGS_FILES) {
+    try {
+      const dir = path.dirname(f);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(f, JSON.stringify(merged, null, 2), 'utf-8');
+    } catch {}
+  }
+
   if (settings.gmailUser !== undefined) {
     process.env.GMAIL_USER = settings.gmailUser;
+    process.env.EMAIL = settings.gmailUser;
   }
   if (settings.gmailAppPassword !== undefined) {
-    process.env.GMAIL_APP_PASSWORD = settings.gmailAppPassword.replace(/\s+/g, '');
+    const clean = settings.gmailAppPassword.replace(/\s+/g, '');
+    process.env.GMAIL_APP_PASSWORD = clean;
+    process.env.EMAIL_PASS = clean;
   }
   if (settings.resendApiKey !== undefined) {
     process.env.RESEND_API_KEY = settings.resendApiKey;
@@ -238,8 +423,20 @@ async function sendViaGmail(
     console.log(`[Email Dispatcher] Sent email via Gmail SMTP (${user}) to ${recipient} (id: ${info.messageId})`);
     return { success: true, messageId: info.messageId };
   } catch (err: any) {
-    console.error(`[Email Dispatcher] Gmail SMTP error to ${recipient}:`, err?.message || err);
-    return { success: false, error: err?.message || 'Gmail SMTP failed' };
+    const rawMsg = err?.message || String(err);
+    let errorMsg = rawMsg;
+    if (
+      rawMsg.includes('535') ||
+      rawMsg.includes('Username and Password not accepted') ||
+      rawMsg.includes('BadCredentials') ||
+      rawMsg.includes('Application-specific password required')
+    ) {
+      errorMsg = 'Gmail Authentication Failed (535 Bad Credentials). Google requires a 16-character App Password (not your regular Gmail password). Please generate an App Password at https://myaccount.google.com/apppasswords and set GMAIL_APP_PASSWORD or EMAIL_PASS in your Vercel Environment Variables.';
+    } else if (rawMsg.includes('ECONNREFUSED') || rawMsg.includes('ETIMEDOUT') || rawMsg.includes('ENOTFOUND')) {
+      errorMsg = `Gmail SMTP Connection Error: ${rawMsg}`;
+    }
+    console.error(`[Email Dispatcher] Gmail SMTP error to ${recipient}:`, errorMsg);
+    return { success: false, error: errorMsg };
   }
 }
 
@@ -359,6 +556,7 @@ export async function dispatchEmail(options: EmailDispatchOptions): Promise<Emai
   const resend = getResendClient();
   const customFrom = (process.env.RESEND_FROM_EMAIL || '').trim();
   const resendHasCustomDomain = Boolean(customFrom && !customFrom.includes('resend.dev'));
+  let lastGmailError: string | null = null;
 
   // 1. If Gmail is configured and Resend does not have a verified domain,
   // use Gmail SMTP directly to guarantee customer delivery without Resend sandbox restriction errors.
@@ -379,8 +577,8 @@ export async function dispatchEmail(options: EmailDispatchOptions): Promise<Emai
         recipient,
       };
     }
-    // If Gmail threw an error and Resend exists, try Resend as fallback
-    console.warn(`[Email Dispatcher] Gmail SMTP failed (${gmailResult.error}). Checking Resend fallback...`);
+    lastGmailError = gmailResult.error || 'Gmail SMTP failed';
+    console.warn(`[Email Dispatcher] Gmail SMTP failed (${lastGmailError}). Checking Resend fallback...`);
   }
 
   // 2. Try Resend if available
@@ -423,6 +621,7 @@ export async function dispatchEmail(options: EmailDispatchOptions): Promise<Emai
           recipient,
         };
       }
+      lastGmailError = gmailFallback.error || 'Gmail SMTP failed';
     }
 
     // Try Custom SMTP fallback if available
@@ -445,19 +644,37 @@ export async function dispatchEmail(options: EmailDispatchOptions): Promise<Emai
       }
     }
 
+    const isSandbox = (resendResult.error || '').toLowerCase().includes('only send testing emails') ||
+                      (resendResult.error || '').toLowerCase().includes('resend sandbox') ||
+                      (resendResult.error || '').toLowerCase().includes('verify a domain');
+
+    let descriptiveError = resendResult.error;
+    if (isSandbox) {
+      if (lastGmailError) {
+        descriptiveError = `Email delivery to ${recipient} failed: Gmail credentials failed with error: "${lastGmailError}". Resend fallback was attempted but Resend is restricted to sandbox mode (zameerpanhwer67@gmail.com only). Please verify your 16-character Google App Password in Vercel Environment Variables.`;
+      } else {
+        const gmailConf = getGmailConfig();
+        if (gmailConf.detectedKeyUser && !gmailConf.detectedKeyPass) {
+          descriptiveError = `Email delivery to ${recipient} failed: Resend is restricted to sandbox mode (zameerpanhwer67@gmail.com only). Detected user email (${gmailConf.detectedKeyUser}), but no valid password secret was found. Please add GMAIL_APP_PASSWORD or EMAIL_PASS in Vercel Environment Variables.`;
+        } else {
+          descriptiveError = `Email sending is restricted by Resend sandbox mode to the account owner (zameerpanhwer67@gmail.com). To send verification codes to all customer emails, please add GMAIL_USER and GMAIL_APP_PASSWORD in your Vercel Environment Variables and redeploy.`;
+        }
+      }
+    }
+
     // Resend failed and no SMTP fallback succeeded
     await logEmailDelivery({
       bookingRef: options.bookingRef,
       emailType,
       recipientEmail: recipient,
       status: 'failed',
-      error: resendResult.error,
+      error: descriptiveError,
     });
 
     return {
       success: false,
       provider: 'resend',
-      error: resendResult.error,
+      error: descriptiveError,
       recipient,
     };
   }

@@ -147,6 +147,17 @@ Valid for 1 minute.
 
   console.log(`[Email Verification] Generated OTP for ${email}: ${otp} (provider=${dispatchResult.provider}, delivered=${dispatchResult.success})`);
 
+  if (!dispatchResult.success) {
+    const msg = dispatchResult.error || 'Unable to deliver the verification code to your email.';
+    console.error(`[Email Verification] Failed to deliver OTP to ${email}:`, msg);
+    return {
+      success: false,
+      error: 'DELIVERY_FAILED',
+      message: msg,
+      cooldownSeconds: 15
+    };
+  }
+
   return {
     success: true,
     message: 'Verification code sent to your email.',
