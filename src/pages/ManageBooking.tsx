@@ -397,7 +397,7 @@ export function ManageBooking() {
 
           <Link
             to="/instructor-login"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black/5 hover:bg-black/10 text-brand-black text-xs font-bold border border-black/10 transition-all"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black/5 hover:bg-black/10 text-brand-black text-xs font-bold border border-black/10 transition-all cursor-pointer"
           >
             <Lock className="w-3.5 h-3.5 text-brand-red" />
             <span>Instructor Login (Wally)</span>
@@ -757,13 +757,13 @@ export function ManageBooking() {
             <div className="pt-6 border-t border-black/5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               {selectedBooking.status === 'Cancelled' ? (
                 <>
-                  <Link
-                    to="/book-now"
-                    className="flex-1 bg-brand-red hover:bg-[#c41a21] text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-red/20 transition-all text-center"
+                  <a
+                    href="/book"
+                    className="flex-1 bg-brand-red hover:bg-[#c41a21] text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-red/20 transition-all text-center cursor-pointer"
                   >
                     <Calendar className="w-4 h-4" />
                     <span>Book a New Driving Lesson</span>
-                  </Link>
+                  </a>
                   <a
                     href={`https://wa.me/61406693301?text=${encodeURIComponent(`Hi Wally, regarding my cancelled driving lesson booking #${selectedBooking.ref} (${selectedBooking.studentName}).`)}`}
                     target="_blank"
@@ -846,12 +846,12 @@ export function ManageBooking() {
               Please double check the reference code (e.g. <strong>WD-8492</strong> or just <strong>8492</strong>) or search with the phone number used when booking.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-              <Link
-                to="/book-now"
-                className="bg-brand-red text-white text-xs font-bold px-5 py-2.5 rounded-xl hover:bg-[#c41a21] transition-all"
+              <a
+                href="/book"
+                className="bg-brand-red text-white text-xs font-bold px-5 py-2.5 rounded-xl hover:bg-[#c41a21] transition-all cursor-pointer"
               >
                 Book a Driving Lesson Now
-              </Link>
+              </a>
               <a
                 href="https://wa.me/61406693301"
                 target="_blank"

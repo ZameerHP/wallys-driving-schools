@@ -58,7 +58,7 @@ export function Services() {
                 <div className="pt-6 border-t border-black/5">
                   <Link 
                     to="/book-now" 
-                    className="inline-flex items-center gap-2 text-sm font-bold text-brand-black group-hover:text-brand-red transition-colors"
+                    className="inline-flex items-center gap-2 text-sm font-bold text-brand-black group-hover:text-brand-red transition-colors cursor-pointer"
                   >
                     <span>Inquire or Book Service</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform" />

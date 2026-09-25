@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { FAQS } from '../lib/content';
 import { useState } from 'react';
-import { Plus, Minus, HelpCircle, MessageSquare } from 'lucide-react';
+import { Plus, Minus, HelpCircle, MessageSquare, ArrowRight } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export function Faqs() {
@@ -46,15 +46,25 @@ export function Faqs() {
               <p className="text-white/80 text-sm leading-relaxed mb-8">
                 Speak directly with Wally or our friendly team. We're available 7 days a week, 8:00 AM to 8:00 PM.
               </p>
-              <a 
-                href="https://wa.me/61406693301?text=Hi%20Wally,%20I%20have%20a%20question%20about%20driving%20lessons." 
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-3 text-base font-bold bg-white text-brand-black px-6 py-4 rounded-2xl hover:bg-brand-black hover:text-white transition-all shadow-lg"
-              >
-                <MessageSquare className="w-5 h-5 text-brand-red" />
-                <span>Chat on WhatsApp: 0406 693 301</span>
-              </a>
+              <div className="flex flex-col gap-3">
+                <Link
+                  to="/book-now"
+                  className="flex items-center justify-center gap-2 text-base font-bold bg-white text-brand-black px-6 py-4 rounded-2xl hover:bg-brand-black hover:text-white transition-all shadow-lg group cursor-pointer"
+                >
+                  <span>Book Driving Lesson Online</span>
+                  <ArrowRight className="w-4 h-4 text-brand-red group-hover:translate-x-1 transition-transform" />
+                </Link>
+
+                <a 
+                  href="https://wa.me/61406693301?text=Hi%20Wally,%20I%20have%20a%20question%20about%20driving%20lessons." 
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-3 text-sm font-semibold bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-2xl transition-all border border-white/20"
+                >
+                  <MessageSquare className="w-4 h-4 text-white" />
+                  <span>Chat on WhatsApp: 0406 693 301</span>
+                </a>
+              </div>
             </div>
 
             <div className="bg-white p-6 rounded-[28px] border border-black/5 shadow-sm">

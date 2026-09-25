@@ -67,13 +67,35 @@ export function Footer() {
               Quick Links
             </h4>
             <ul className="space-y-3.5 text-sm text-white/70">
-              <li><Link to="/about" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">About Us</Link></li>
+              <li className="pb-1">
+                <Link 
+                  to="/book-now" 
+                  className="text-brand-red font-bold hover:text-white inline-flex items-center gap-1.5 transition-colors group cursor-pointer"
+                >
+                  <span>Book a Driving Lesson</span>
+                  <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                </Link>
+              </li>
               <li><Link to="/packages" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Packages & Pricing</Link></li>
               <li><Link to="/services" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Our Services</Link></li>
               <li><Link to="/coverage-area" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Coverage Area</Link></li>
-              <li><Link to="/contact" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Contact Us</Link></li>
               <li><Link to="/faqs" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Frequently Asked Questions</Link></li>
+              <li><Link to="/about" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">About Us</Link></li>
               <li><Link to="/blog" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Driving Guides & Blog</Link></li>
+              <li><Link to="/contact" className="hover:text-brand-red hover:translate-x-1 inline-block transition-all">Contact Us</Link></li>
+              <li className="pt-2 border-t border-white/10">
+                <Link 
+                  to="/instructor-login" 
+                  className="text-white/80 hover:text-brand-red inline-flex items-center gap-1.5 transition-colors text-xs font-semibold cursor-pointer"
+                >
+                  <span>Instructor Login Portal</span>
+                </Link>
+              </li>
+              <li>
+                <Link to="/manage-booking" className="text-white/80 hover:text-brand-red inline-flex items-center gap-1.5 transition-colors text-xs">
+                  <span>Manage Student Booking</span>
+                </Link>
+              </li>
             </ul>
           </div>
 
@@ -156,10 +178,11 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="pt-8 border-t border-white/10 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-white/50">
           <p>© {new Date().getFullYear()} Wallys Driving School. All rights reserved.</p>
-          <div className="flex gap-6">
+          <div className="flex flex-wrap gap-4 sm:gap-6">
+            <Link to="/book-now" className="hover:text-white transition-colors text-white/90 font-semibold cursor-pointer">Book Now</Link>
             <Link to="/coverage-area" className="hover:text-white transition-colors">Service Areas</Link>
             <Link to="/manage-booking" className="hover:text-white transition-colors">Manage Booking</Link>
-            <Link to="/instructor-login" className="hover:text-white transition-colors">Instructor Portal</Link>
+            <Link to="/instructor-login" className="hover:text-white transition-colors cursor-pointer">Instructor Portal</Link>
           </div>
         </div>
       </div>

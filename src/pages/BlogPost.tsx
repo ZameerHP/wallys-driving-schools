@@ -1,6 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Calendar, User, ArrowLeft, Clock, MessageSquare, Send, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Calendar, User, ArrowLeft, ArrowRight, Clock, MessageSquare, Send, CheckCircle2, AlertCircle } from 'lucide-react';
 import { BLOG_POSTS } from '../lib/content';
 import { useState } from 'react';
 import { validateWorkingEmail } from '../lib/validation';
@@ -107,12 +107,35 @@ export function BlogPost() {
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2, ease: "easeOut" }}
-          className="bg-white rounded-[32px] p-8 md:p-12 shadow-sm border border-black/5 mb-16"
+          className="bg-white rounded-[32px] p-8 md:p-12 shadow-sm border border-black/5 mb-8"
         >
           <div 
             className="text-brand-black/80 leading-relaxed text-lg"
             dangerouslySetInnerHTML={{ __html: post.content || '' }}
           />
+        </motion.div>
+
+        {/* Action Banner to Book Lesson */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          className="bg-brand-black text-white rounded-[32px] p-8 md:p-10 mb-16 shadow-xl relative overflow-hidden flex flex-col sm:flex-row items-center justify-between gap-6 border border-white/10"
+        >
+          <div className="space-y-2 text-center sm:text-left">
+            <span className="text-xs uppercase tracking-widest text-brand-red font-bold">Ready to Hit the Road?</span>
+            <h3 className="text-2xl font-display font-bold">Put Theory into Practice Behind the Wheel</h3>
+            <p className="text-white/70 text-sm max-w-lg">
+              Book a dual-controlled driving lesson with Wally in Western Sydney. Free pick-up & drop-off included.
+            </p>
+          </div>
+          <Link
+            to="/book-now"
+            className="shrink-0 inline-flex items-center gap-2.5 bg-brand-red hover:bg-[#c41a21] text-white px-7 py-3.5 rounded-xl font-bold text-sm transition-all shadow-[0_0_20px_rgba(227,34,42,0.4)] cursor-pointer"
+          >
+            <span>Book Driving Lesson</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
         </motion.div>
 
         {/* Comment Section */}

@@ -231,7 +231,7 @@ export function Home() {
                     <Link 
                       to="/book-now" 
                       data-cursor-text="BOOK"
-                      className="inline-flex items-center gap-2 bg-brand-red text-white px-8 py-4 rounded-full font-bold text-lg hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_30px_rgba(227,34,42,0.4)] hover:shadow-[0_0_40px_rgba(227,34,42,0.6)]"
+                      className="inline-flex items-center gap-2 bg-brand-red text-white px-8 py-4 rounded-full font-bold text-lg hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_30px_rgba(227,34,42,0.4)] hover:shadow-[0_0_40px_rgba(227,34,42,0.6)] cursor-pointer"
                     >
                       <span>Get Started</span>
                       <ArrowRight className="w-5 h-5" />
@@ -522,7 +522,7 @@ export function Home() {
                     <Link 
                       to="/book-now" 
                       data-cursor-text="BOOK"
-                      className="w-12 h-12 rounded-full bg-brand-black text-white flex items-center justify-center group-hover:bg-brand-red group-hover:shadow-[0_0_20px_rgba(227,34,42,0.5)] transition-all duration-300"
+                      className="w-12 h-12 rounded-full bg-brand-black text-white flex items-center justify-center group-hover:bg-brand-red group-hover:shadow-[0_0_20px_rgba(227,34,42,0.5)] transition-all duration-300 cursor-pointer"
                     >
                       <ArrowRight className="w-5 h-5 -rotate-45 group-hover:rotate-0 transition-transform" />
                     </Link>
@@ -765,7 +765,7 @@ export function Home() {
                   <Link 
                     to="/book-now" 
                     data-cursor-text="BOOK"
-                    className="inline-block bg-brand-red text-white px-10 py-5 rounded-full font-bold text-xl hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_30px_rgba(227,34,42,0.4)]"
+                    className="inline-block bg-brand-red text-white px-10 py-5 rounded-full font-bold text-xl hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_30px_rgba(227,34,42,0.4)] cursor-pointer"
                   >
                     Book Now
                   </Link>

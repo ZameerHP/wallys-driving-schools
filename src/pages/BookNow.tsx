@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useSearchParams } from 'react-router-dom';
+import { REAL_INSTRUCTOR_LOGIN_URL } from '../constants/urls';
 import { 
   Search, 
   Clock, 
@@ -188,13 +189,25 @@ export function BookNow() {
     };
   }, []);
 
+  const [searchParams] = useSearchParams();
+
   // Navigation & Wizard State
-  const [activeStepId, setActiveStepId] = useState<string>('service');
+  const [activeStepId, setActiveStepId] = useState<string>(() => {
+    const pkg = searchParams.get('package') || searchParams.get('service');
+    return pkg ? 'datetime' : 'service';
+  });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [serviceSearch, setServiceSearch] = useState('');
   
   // Selections
-  const [selectedPackage, setSelectedPackage] = useState<any>(PACKAGES[0]);
+  const [selectedPackage, setSelectedPackage] = useState<any>(() => {
+    const pkg = searchParams.get('package') || searchParams.get('service');
+    if (pkg) {
+      const found = PACKAGES.find(p => p.id === pkg || p.id.toLowerCase() === pkg.toLowerCase());
+      if (found) return found;
+    }
+    return PACKAGES[0];
+  });
   
   // Package Specifications
   const packageSpecs = useMemo(() => getPackageSpecs(selectedPackage), [selectedPackage]);
@@ -1308,9 +1321,6 @@ export function BookNow() {
   };
 
 
-  // URL params for Stripe redirection
-  const [searchParams] = useSearchParams();
-
   // Stable booking reference for current checkout flow
   const [activeBookingRef, setActiveBookingRef] = useState<string>(() => {
     try {
@@ -1849,11 +1859,23 @@ export function BookNow() {
               BOOK A DRIVING LESSON
             </h1>
           </div>
-          <div className="hidden sm:flex items-center gap-3 text-xs text-brand-black/60 font-medium">
-            <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2 sm:gap-4 text-xs text-brand-black/60 font-medium">
+            <div className="hidden sm:flex items-center gap-1.5">
               <Link to="/" className="hover:text-brand-red transition-colors">Home</Link>
               <span>/</span>
               <span className="text-brand-red font-semibold">Book Now</span>
+            </div>
+            <div className="flex items-center gap-2 pl-2 sm:pl-3 sm:border-l sm:border-black/10 text-[11px] sm:text-xs">
+              <Link to="/manage-booking" className="hover:text-brand-red text-black/70 font-semibold transition-colors">
+                Manage Booking
+              </Link>
+              <span className="text-black/30">•</span>
+              <a 
+                href={REAL_INSTRUCTOR_LOGIN_URL} 
+                className="hover:text-brand-red text-black/70 font-semibold transition-colors cursor-pointer"
+              >
+                Instructor Login
+              </a>
             </div>
           </div>
         </div>

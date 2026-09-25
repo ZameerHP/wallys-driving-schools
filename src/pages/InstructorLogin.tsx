@@ -30,7 +30,8 @@ import {
   Edit3,
   AlertTriangle,
   Check,
-  Sliders
+  Sliders,
+  ExternalLink
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
@@ -227,11 +228,18 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
             </motion.button>
           </form>
 
-          <div className="mt-6 pt-5 border-t border-white/10 text-center relative z-10 flex flex-col gap-2">
+          <div className="mt-6 pt-5 border-t border-white/10 text-center relative z-10 flex flex-col gap-2.5">
             <span className="text-xs text-white/40">Credential: Wally@wallysdrivingschool.com.au</span>
-            <Link to="/manage-booking" className="text-xs font-medium text-brand-red hover:underline">
-              ← Customer Booking Lookup & Reschedule
-            </Link>
+            <div className="flex items-center justify-center gap-4 text-xs font-semibold pt-1">
+              <Link to="/book" className="text-white/80 hover:text-white hover:underline flex items-center gap-1 cursor-pointer">
+                <span>Book a Lesson</span>
+                <span className="text-brand-red font-bold">→</span>
+              </Link>
+              <span className="text-white/20">•</span>
+              <Link to="/manage-booking" className="text-brand-red hover:underline">
+                Manage Booking
+              </Link>
+            </div>
           </div>
         </motion.div>
         
@@ -259,7 +267,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   const [isRunningCron, setIsRunningCron] = useState(false);
   const [reminderStatusInfo, setReminderStatusInfo] = useState<{
     configured: boolean;
-    provider: 'resend' | 'none';
+    provider: 'resend' | 'gmail' | 'smtp' | 'simulation' | 'none' | string;
     fromEmail?: string;
     timezone: string;
     intervalSeconds: number;
@@ -522,7 +530,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
       const res = await triggerLessonReminder(targetRef, force);
       if (res.success) {
         const dest = res.recipientEmail || apt.email || 'student email';
-        setActionFeedback(`Resend lesson reminder email ${res.status === 'scheduled' ? 'scheduled' : 'sent'} to student (${apt.studentName} at ${dest})!`);
+        setActionFeedback(`Lesson reminder email ${res.status === 'scheduled' ? 'scheduled' : 'sent'} to student (${apt.studentName} at ${dest})!`);
         setBookingsList(prev => prev.map(b => (b.ref === apt.ref || b.id === apt.id) ? {
           ...b,
           reminderStatus: (res.status as any) || 'sent',
@@ -532,7 +540,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
           reminderError: null
         } : b));
       } else {
-        setActionFeedback(`Resend reminder error: ${res.error || 'Failed to dispatch email'}. Check RESEND_API_KEY.`);
+        setActionFeedback(`Reminder error: ${res.error || 'Failed to dispatch email'}`);
         setBookingsList(prev => prev.map(b => (b.ref === apt.ref || b.id === apt.id) ? {
           ...b,
           reminderStatus: 'failed',
@@ -705,6 +713,14 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
               <FileText className="w-4 h-4 text-brand-red" />
               <span>Customer Lookup</span>
             </Link>
+
+            <Link 
+              to="/book"
+              className="flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-xl font-bold text-sm transition-all cursor-pointer"
+            >
+              <ExternalLink className="w-4 h-4 text-emerald-400" />
+              <span>Live Booking Page</span>
+            </Link>
           </nav>
         </div>
 
@@ -834,7 +850,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
             )}
           </AnimatePresence>
 
-          {/* Automatic Resend Email Reminder Engine Status Banner */}
+          {/* Automatic Email Reminder Engine Status Banner */}
           <div className="bg-gradient-to-r from-emerald-950 to-neutral-900 text-white rounded-3xl p-5 mb-6 shadow-md border border-emerald-800/40">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-start sm:items-center gap-3.5">
@@ -844,15 +860,19 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-bold text-white tracking-wide">
-                      Automatic Resend Email Lesson Reminder System
+                      Automatic 2-Hour Email Lesson Reminder Engine
                     </h3>
                     <span className={cn(
                       "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
                       reminderStatusInfo?.configured ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
                     )}>
                       {reminderStatusInfo?.configured 
-                        ? 'Resend API Live' 
-                        : 'Ready (Awaiting RESEND_API_KEY)'}
+                        ? (reminderStatusInfo?.provider === 'gmail' 
+                            ? 'Gmail SMTP Live' 
+                            : reminderStatusInfo?.provider === 'resend' 
+                            ? 'Resend API Live' 
+                            : 'Email Engine Live')
+                        : 'Awaiting Email Credentials'}
                     </span>
                   </div>
                   <p className="text-xs text-white/70 mt-0.5">
@@ -1254,7 +1274,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                         ) : apt.reminderStatus === 'failed' ? (
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-red-50 text-red-800 border border-red-200 text-xs font-semibold">
                             <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                            <span className="truncate max-w-xs">Reminder Failed: {apt.reminderError || 'Resend delivery error'}</span>
+                            <span className="truncate max-w-xs">Reminder Failed: {apt.reminderError || 'Email delivery error'}</span>
                           </div>
                         ) : apt.reminderStatus === 'cancelled' ? (
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gray-100 text-gray-500 border border-gray-200 text-xs font-medium">
@@ -1333,7 +1353,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                         <span>Edit & Reschedule</span>
                       </button>
 
-                      {/* Direct API Dispatch Resend Email Reminder */}
+                      {/* Direct API Dispatch Email Reminder */}
                       {apt.status !== 'Cancelled' && (
                         <button
                           onClick={() => handleTriggerReminder(apt, true)}
@@ -1346,7 +1366,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                               ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200"
                               : "bg-emerald-600 hover:bg-emerald-700 text-white border-transparent shadow-xs"
                           )}
-                          title={`Schedule or send Resend 2-hour lesson reminder email to student: ${apt.email}`}
+                          title={`Send or retry 2-hour lesson reminder email to student: ${apt.email}`}
                         >
                           <Mail className="w-3.5 h-3.5 shrink-0" />
                           <span>
@@ -1355,8 +1375,8 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
                               : apt.reminderStatus === 'failed'
                               ? "Retry Email Reminder"
                               : apt.reminderStatus === 'sent'
-                              ? "Resend 2h Email"
-                              : "Send 2h Email"}
+                              ? "Send Again"
+                              : "Send 2h Reminder"}
                           </span>
                         </button>
                       )}

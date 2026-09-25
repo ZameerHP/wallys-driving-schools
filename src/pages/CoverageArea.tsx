@@ -73,15 +73,25 @@ export function CoverageArea() {
                 ))}
               </div>
 
-              <a 
-                href="https://wa.me/61406693301?text=Hi%20Wally,%20I'd%20like%20to%20check%20if%20you%20cover%20my%20suburb."
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full bg-[#25D366] hover:bg-[#20bd5a] text-black py-3.5 rounded-2xl font-bold text-sm text-center flex items-center justify-center gap-2 transition-all shadow-md"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>Enquire via WhatsApp: 0406 693 301</span>
-              </a>
+              <div className="flex flex-col gap-2.5">
+                <Link 
+                  to="/book-now"
+                  className="w-full bg-brand-red hover:bg-[#c41a21] text-white py-3.5 rounded-2xl font-bold text-sm text-center flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(227,34,42,0.4)] cursor-pointer"
+                >
+                  <Car className="w-4 h-4" />
+                  <span>Book Lesson in Your Suburb</span>
+                </Link>
+
+                <a 
+                  href="https://wa.me/61406693301?text=Hi%20Wally,%20I'd%20like%20to%20check%20if%20you%20cover%20my%20suburb."
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full bg-[#25D366] hover:bg-[#20bd5a] text-black py-3 rounded-2xl font-bold text-xs text-center flex items-center justify-center gap-2 transition-all shadow-md"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>Enquire via WhatsApp: 0406 693 301</span>
+                </a>
+              </div>
             </div>
 
             {/* Test Center Card */}

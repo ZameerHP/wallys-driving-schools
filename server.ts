@@ -76,7 +76,9 @@ import {
   sendBookingCancellationNoticeEmail,
   sendInstructorNotificationEmail,
   getResend,
-  getFormattedSender
+  getFormattedSender,
+  getEmailSystemStatus,
+  dispatchEmail
 } from "./src/server/email-reminder-service.ts";
 import {
   sendVerificationOtp,
@@ -3548,10 +3550,10 @@ app.post("/api/supabase/sync", async (_req, res) => {
 // RESEND EMAIL LESSON REMINDERS API ENDPOINTS
 // =========================================================================
 
-// Get Resend Reminder Configuration and Queue Status
+// Get Email Reminder & Delivery Configuration and Queue Status
 app.get("/api/reminders/status", async (req, res) => {
   try {
-    const isConfigured = !!process.env.RESEND_API_KEY;
+    const emailStatus = getEmailSystemStatus();
     const fromEmail = getFormattedSender();
 
     const bookings = await getBookings({ includeUnpaid: false });
@@ -3563,8 +3565,9 @@ app.get("/api/reminders/status", async (req, res) => {
     const cancelled = bookings.filter(b => b.reminderStatus === 'cancelled').length;
 
     res.json({
-      configured: isConfigured,
-      provider: 'resend',
+      configured: emailStatus.isConfigured,
+      provider: emailStatus.primaryProvider,
+      details: emailStatus,
       fromEmail,
       timezone: process.env.SCHOOL_TIMEZONE || 'Australia/Sydney',
       intervalSeconds: 60,
@@ -3653,7 +3656,7 @@ app.all("/api/reminders/cron/run", optionalAuth, async (req, res) => {
   }
 });
 
-// Send a direct email reminder or test message via Resend
+// Send a direct email reminder or test message via unified email dispatcher (Gmail SMTP, Custom SMTP, Resend)
 app.post("/api/reminders/send-direct", async (req, res) => {
   try {
     const { to, subject, message } = req.body;
@@ -3661,14 +3664,13 @@ app.post("/api/reminders/send-direct", async (req, res) => {
       return res.status(400).json({ error: "Valid recipient email address is required" });
     }
 
-    const resend = getResend();
-    if (!resend) {
+    const emailStatus = getEmailSystemStatus();
+    if (!emailStatus.isConfigured && process.env.NODE_ENV === 'production' && !emailStatus.hasGmail && !emailStatus.hasResend) {
       return res.status(400).json({
-        error: "RESEND_API_KEY is not configured on the server. Please add it to your server environment variables."
+        error: "No email sending credentials configured on the server. Please add GMAIL_USER & GMAIL_APP_PASSWORD or RESEND_API_KEY in environment variables."
       });
     }
 
-    const fromEmail = getFormattedSender();
     const sub = subject || "Reminder: Your Driving Lesson Today – Wallys Driving School";
     const body = message || [
       "Hi Student,",
@@ -3681,28 +3683,81 @@ app.post("/api/reminders/send-direct", async (req, res) => {
       "Wallys Driving School"
     ].join('\n');
 
-    let sendPayload: any = {
-      from: fromEmail,
-      to: [to.trim().toLowerCase()],
+    const result = await dispatchEmail({
+      to: to.trim().toLowerCase(),
       subject: sub,
-      text: body
-    };
+      text: body,
+      emailType: 'direct'
+    });
 
-    let result = await resend.emails.send(sendPayload);
-
-    // Fallback for unverified domains during testing/sandbox mode
-    if (result.error && (result.error.message.includes('domain') || result.error.name === 'validation_error')) {
-      sendPayload.from = "Wallys Driving School <onboarding@resend.dev>";
-      result = await resend.emails.send(sendPayload);
+    if (!result.success) {
+      return res.status(500).json({ error: result.error || "Failed to send email" });
     }
 
-    if (result.error) {
-      return res.status(500).json({ error: result.error.message || "Resend email send error" });
-    }
-
-    res.json({ success: true, id: result.data?.id, to });
+    res.json({
+      success: true,
+      id: result.messageId,
+      provider: result.provider,
+      to
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to send direct email" });
+  }
+});
+
+// Safe diagnostic endpoint for checking email configuration
+app.get("/api/email/diagnostics", (req, res) => {
+  const status = getEmailSystemStatus();
+  const rawPass = process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD || '';
+  const cleanPass = rawPass.replace(/\s+/g, '');
+  const rawUser = process.env.GMAIL_USER || process.env.SMTP_USER || '';
+
+  res.json({
+    ...status,
+    diagnostics: {
+      gmailUserConfigured: Boolean(rawUser),
+      gmailUserMasked: rawUser ? rawUser.replace(/(?<=^.{2}).(?=.*@)/g, '*') : null,
+      gmailAppPasswordConfigured: Boolean(rawPass),
+      gmailAppPasswordLength: cleanPass.length,
+      hadSpacesInPassword: rawPass.includes(' '),
+      resendKeyConfigured: Boolean(process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY),
+      smtpHostConfigured: Boolean(process.env.SMTP_HOST),
+      fromEmail: getFormattedSender(),
+    }
+  });
+});
+
+// Test email sending endpoint
+app.post("/api/email/test", async (req, res) => {
+  try {
+    const { to } = req.body;
+    const recipient = to || process.env.GMAIL_USER || 'zameerpanhwer67@gmail.com';
+    const status = getEmailSystemStatus();
+
+    const result = await dispatchEmail({
+      to: recipient,
+      subject: "Test Email – Wally's Driving School Delivery System",
+      text: `This is a test email sent from Wally's Driving School to verify outgoing email delivery.\n\nActive Provider: ${status.primaryProvider}\nTimestamp: ${new Date().toISOString()}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e5e5e5; border-radius: 8px;">
+          <h2 style="color: #E3222A; margin-top: 0;">Wally's Driving School</h2>
+          <p>This is a test email confirming that your outgoing email configuration is active and functioning correctly.</p>
+          <hr style="border: none; border-top: 1px solid #eeeeee; margin: 16px 0;" />
+          <p><strong>Active Provider:</strong> ${status.primaryProvider.toUpperCase()}</p>
+          <p><strong>Recipient:</strong> ${recipient}</p>
+          <p><strong>Timestamp:</strong> ${new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })}</p>
+        </div>
+      `,
+      emailType: 'direct'
+    });
+
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
+
+    res.json({ success: true, provider: result.provider, messageId: result.messageId, recipient });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to send test email" });
   }
 });
 

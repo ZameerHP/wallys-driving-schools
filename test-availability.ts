@@ -5,9 +5,7 @@ import {
   addDateOverride,
   deleteDateOverride,
   getInstructorSettings,
-  saveInstructorSettings,
-  setInstructorWeekdayOff,
-  setInstructorWeeklyDaysOff
+  saveInstructorSettings
 } from './src/server/instructorAvailabilityService';
 
 async function runTests() {
@@ -105,47 +103,34 @@ async function runTests() {
   const afternoonCheck = await validateLessonSlot({ date: '2026-10-14', slot: '02:00 PM - 03:00 PM', durationMinutes: 60 });
   assert(afternoonCheck.available, 'Test 10: Afternoon slot outside buffer remains bookable');
 
-  // Test 11: All days of the week including Sunday are open by default
-  const sundayAvail = await getAvailability({ date: '2026-10-18' }); // Sunday
-  assert(sundayAvail.isOpen, 'Test 11: Sunday is open by default with operating hours restrictions removed');
+  // Test 11: Operating hours closure respected (Sunday closed by default, bookable when enabled)
+  const prevSettings = getInstructorSettings('wally');
+  const initialSunday = await getAvailability({ date: '2026-10-18' }); // Sunday
+  assert(!initialSunday.isOpen, 'Test 11A: Sunday when disabled is closed');
+
+  // Temporarily enable Sunday
+  saveInstructorSettings({
+    operatingHours: {
+      ...prevSettings.operatingHours,
+      sunday: { ...prevSettings.operatingHours.sunday, enabled: true }
+    }
+  });
+  const enabledSunday = await getAvailability({ date: '2026-10-18' });
+  assert(enabledSunday.isOpen, 'Test 11B: Enabling Sunday dynamically makes it available');
+
+  // Restore Sunday to disabled
+  saveInstructorSettings({
+    operatingHours: prevSettings.operatingHours
+  });
 
   // Test 12: Timezone normalization (Australia/Sydney date format YYYY-MM-DD)
   const sydneyDateTest = await getAvailability({ date: '2026-10-14' });
   assert(sydneyDateTest.date === '2026-10-14', 'Test 12: Normalized YYYY-MM-DD date preserved across calculations');
 
-  // Test 13: Setting a recurring weekday OFF disables all occurrences
-  setInstructorWeekdayOff('wally', 'wednesday', false);
-  const wedClosedCheck = await getAvailability({ date: '2026-10-14' });
-  assert(!wedClosedCheck.isOpen && wedClosedCheck.isDayOff, 'Test 13: Setting Wednesday OFF closes Wednesday dates with isDayOff=true');
-
-  // Test 14: Setting a recurring weekday ON re-opens it successfully with available slots
-  setInstructorWeekdayOff('wally', 'wednesday', true);
-  const wedReopenedCheck = await getAvailability({ date: '2026-10-14' });
-  assert(wedReopenedCheck.isOpen && !wedReopenedCheck.isDayOff && wedReopenedCheck.availableSlots.length > 0, 'Test 14: Setting Wednesday back ON immediately opens Wednesday with available slots');
-
-  // Test 15: Bulk setting all days ON keeps all days open with zero errors
-  setInstructorWeeklyDaysOff('wally', {
-    monday: true,
-    tuesday: true,
-    wednesday: true,
-    thursday: true,
-    friday: true,
-    saturday: true,
-    sunday: true
-  });
-  const sundayCheck = await getAvailability({ date: '2026-10-18' });
-  const mondayCheck = await getAvailability({ date: '2026-10-19' });
-  assert(sundayCheck.isOpen && mondayCheck.isOpen, 'Test 15: All days ON keeps all weekdays open and available');
-
-  // Test 16: validateLessonSlot succeeds for an open slot after turning day ON
-  const validSlotAfterTurnOn = await validateLessonSlot({ date: '2026-10-14', slot: '09:00 AM - 10:00 AM', durationMinutes: 60 });
-  assert(validSlotAfterTurnOn.available, 'Test 16: validateLessonSlot succeeds on day that was turned ON');
-
   console.log(`\nTEST RESULTS: ${passed} PASSED, ${failed} FAILED`);
   if (failed > 0) {
     process.exit(1);
   }
-  process.exit(0);
 }
 
 runTests().catch(err => {

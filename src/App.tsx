@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { AuthProvider } from './context/AuthContext.tsx';
@@ -39,6 +39,20 @@ function AnimatedRoutes() {
         <Route path="/coverage-area" element={<PageTransition><CoverageArea /></PageTransition>} />
         <Route path="/manage-booking" element={<PageTransition><ManageBooking /></PageTransition>} />
         <Route path="/instructor-login" element={<PageTransition><InstructorLogin /></PageTransition>} />
+
+        {/* Convenient Route Aliases & Redirects */}
+        <Route path="/book" element={<Navigate to="/book-now" replace />} />
+        <Route path="/book-new" element={<Navigate to="/book-now" replace />} />
+        <Route path="/booking" element={<Navigate to="/book-now" replace />} />
+        <Route path="/booknow" element={<Navigate to="/book-now" replace />} />
+        <Route path="/book-a-lesson" element={<Navigate to="/book-now" replace />} />
+        <Route path="/instructor" element={<Navigate to="/instructor-login" replace />} />
+        <Route path="/instructor/login" element={<Navigate to="/instructor-login" replace />} />
+        <Route path="/login" element={<Navigate to="/instructor-login" replace />} />
+        <Route path="/admin" element={<Navigate to="/instructor-login" replace />} />
+        <Route path="/admin/login" element={<Navigate to="/instructor-login" replace />} />
+        <Route path="/portal" element={<Navigate to="/instructor-login" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AnimatePresence>
   );
@@ -46,7 +60,7 @@ function AnimatedRoutes() {
 
 function MainLayout() {
   const location = useLocation();
-  const isBookNow = location.pathname === '/book-now';
+  const isBookNow = location.pathname.startsWith('/book');
 
   return (
     <SmoothScroll>
@@ -61,7 +75,7 @@ export default function App() {
   const [showPreloader, setShowPreloader] = useState(() => {
     if (typeof window !== 'undefined') {
       const path = window.location.pathname;
-      if (path.startsWith('/book-now') || path.startsWith('/manage-booking') || path.startsWith('/instructor-login')) {
+      if (path.startsWith('/book') || path.startsWith('/manage-booking') || path.startsWith('/instructor')) {
         return false;
       }
       try {

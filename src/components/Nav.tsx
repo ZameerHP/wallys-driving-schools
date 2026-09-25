@@ -16,8 +16,8 @@ const MAIN_LINKS = [
 ];
 
 const LOGIN_LINKS = [
-  { name: 'Manage Booking', path: '/manage-booking', desc: 'View and reschedule lessons' },
-  { name: 'Instructor Login', path: '/instructor-login', desc: 'Instructor schedule & portal' },
+  { name: 'Instructor Login', path: '/instructor-login', desc: 'Instructor schedule & portal', isInstructor: true, isExternal: false },
+  { name: 'Manage Booking', path: '/manage-booking', desc: 'View and reschedule lessons', isInstructor: false, isExternal: false },
 ];
 
 export function Nav() {
@@ -162,21 +162,37 @@ export function Nav() {
                       <div className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white/40">
                         Select Access Portal
                       </div>
-                      {LOGIN_LINKS.map(link => (
-                        <Link 
-                          key={link.path} 
-                          to={link.path}
-                          className="flex flex-col px-3 py-2.5 rounded-xl hover:bg-white/10 transition-all duration-200 group"
-                        >
-                          <span className="text-sm font-bold text-white group-hover:text-brand-red transition-colors flex items-center justify-between">
-                            {link.name}
-                            <ShieldCheck className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-brand-red transition-opacity" />
-                          </span>
-                          <span className="text-[11px] text-white/50 group-hover:text-white/70 transition-colors">
-                            {link.desc}
-                          </span>
-                        </Link>
-                      ))}
+                      {LOGIN_LINKS.map(link => 
+                        link.isExternal ? (
+                          <a 
+                            key={link.name} 
+                            href={link.path}
+                            className="flex flex-col px-3 py-2.5 rounded-xl hover:bg-white/10 transition-all duration-200 group cursor-pointer"
+                          >
+                            <span className="text-sm font-bold text-white group-hover:text-brand-red transition-colors flex items-center justify-between">
+                              {link.name}
+                              <ShieldCheck className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-brand-red transition-opacity" />
+                            </span>
+                            <span className="text-[11px] text-white/50 group-hover:text-white/70 transition-colors">
+                              {link.desc}
+                            </span>
+                          </a>
+                        ) : (
+                          <Link 
+                            key={link.path} 
+                            to={link.path}
+                            className="flex flex-col px-3 py-2.5 rounded-xl hover:bg-white/10 transition-all duration-200 group"
+                          >
+                            <span className="text-sm font-bold text-white group-hover:text-brand-red transition-colors flex items-center justify-between">
+                              {link.name}
+                              <ShieldCheck className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-brand-red transition-opacity" />
+                            </span>
+                            <span className="text-[11px] text-white/50 group-hover:text-white/70 transition-colors">
+                              {link.desc}
+                            </span>
+                          </Link>
+                        )
+                      )}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -199,7 +215,7 @@ export function Nav() {
                   <Link 
                     to="/book-now" 
                     data-cursor-text="BOOK"
-                    className="inline-block bg-brand-red text-white px-6 py-2.5 rounded-full text-sm font-bold shadow-[0_0_20px_rgba(227,34,42,0.4)] hover:shadow-[0_0_35px_rgba(227,34,42,0.7)] hover:bg-white hover:text-brand-black transition-all duration-300 whitespace-nowrap"
+                    className="inline-block bg-brand-red text-white px-6 py-2.5 rounded-full text-sm font-bold shadow-[0_0_20px_rgba(227,34,42,0.4)] hover:shadow-[0_0_35px_rgba(227,34,42,0.7)] hover:bg-white hover:text-brand-black transition-all duration-300 whitespace-nowrap cursor-pointer"
                   >
                     Book Now
                   </Link>
@@ -255,14 +271,37 @@ export function Nav() {
 
               <div className="grid grid-cols-2 gap-3">
                 {LOGIN_LINKS.map((link) => (
-                  <motion.div key={link.path} variants={navItemVariants}>
-                    <Link
-                      to={link.path}
-                      className="flex flex-col p-3.5 rounded-2xl bg-white/5 border border-white/10 text-white/90 hover:text-white hover:border-brand-red/40 hover:bg-white/10 transition-all"
-                    >
-                      <User className="w-4 h-4 text-brand-red mb-1.5" />
-                      <span className="text-sm font-bold">{link.name}</span>
-                    </Link>
+                  <motion.div key={link.name} variants={navItemVariants}>
+                    {link.isExternal ? (
+                      <a
+                        href={link.path}
+                        className={cn(
+                          "flex flex-col p-3.5 rounded-2xl border transition-all cursor-pointer",
+                          link.isInstructor
+                            ? "bg-brand-red/15 border-brand-red/30 text-white hover:bg-brand-red/25"
+                            : "bg-white/5 border-white/10 text-white/90 hover:text-white hover:border-brand-red/40 hover:bg-white/10"
+                        )}
+                      >
+                        <User className="w-4 h-4 text-brand-red mb-1.5" />
+                        <span className="text-sm font-bold">{link.name}</span>
+                        <span className="text-[10px] text-white/50">{link.isInstructor ? 'Owner Portal' : 'Student Access'}</span>
+                      </a>
+                    ) : (
+                      <Link
+                        to={link.path}
+                        onClick={() => setMobileOpen(false)}
+                        className={cn(
+                          "flex flex-col p-3.5 rounded-2xl border transition-all",
+                          link.isInstructor
+                            ? "bg-brand-red/15 border-brand-red/30 text-white hover:bg-brand-red/25"
+                            : "bg-white/5 border-white/10 text-white/90 hover:text-white hover:border-brand-red/40 hover:bg-white/10"
+                        )}
+                      >
+                        <User className="w-4 h-4 text-brand-red mb-1.5" />
+                        <span className="text-sm font-bold">{link.name}</span>
+                        <span className="text-[10px] text-white/50">{link.isInstructor ? 'Owner Portal' : 'Student Access'}</span>
+                      </Link>
+                    )}
                   </motion.div>
                 ))}
               </div>
@@ -270,7 +309,8 @@ export function Nav() {
               <motion.div variants={navItemVariants} className="mt-6 flex flex-col gap-3.5">
                 <Link 
                   to="/book-now"
-                  className="w-full bg-brand-red text-white py-4 rounded-full text-center text-lg font-bold shadow-[0_0_25px_rgba(227,34,42,0.5)] active:scale-[0.98] transition-all"
+                  onClick={() => setMobileOpen(false)}
+                  className="w-full bg-brand-red text-white py-4 rounded-full text-center text-lg font-bold shadow-[0_0_25px_rgba(227,34,42,0.5)] active:scale-[0.98] transition-all cursor-pointer block"
                 >
                   Book Now
                 </Link>

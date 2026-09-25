@@ -125,10 +125,10 @@ export function Packages() {
                   
                   <div data-magnetic>
                     <Link 
-                      to="/book-now" 
+                      to={`/book-now?package=${pkg.id}`} 
                       data-cursor-text="BOOK"
                       className={cn(
-                        "w-full py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all duration-300 shadow-sm",
+                        "w-full py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all duration-300 shadow-sm cursor-pointer",
                         isPopular 
                           ? "bg-brand-red text-white hover:bg-white hover:text-brand-black shadow-[0_0_15px_rgba(227,34,42,0.4)]" 
                           : "bg-brand-black text-white hover:bg-brand-red hover:text-white"

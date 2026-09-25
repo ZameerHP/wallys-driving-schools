@@ -753,7 +753,7 @@ export function logoutOwner(): void {
 // Fetch server Resend email reminder engine status
 export async function fetchReminderSystemStatus(): Promise<{
   configured: boolean;
-  provider: 'resend' | 'none';
+  provider: 'resend' | 'gmail' | 'smtp' | 'simulation' | 'none' | string;
   fromEmail?: string;
   timezone: string;
   intervalSeconds: number;

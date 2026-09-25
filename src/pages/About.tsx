@@ -195,7 +195,7 @@ export function About() {
               </h2>
               <Link 
                 to="/book-now" 
-                className="inline-block bg-brand-red text-white px-10 py-5 rounded-full font-bold text-lg hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_30px_rgba(227,34,42,0.4)]"
+                className="inline-block bg-brand-red text-white px-10 py-5 rounded-full font-bold text-lg hover:bg-white hover:text-brand-black transition-all duration-300 shadow-[0_0_30px_rgba(227,34,42,0.4)] cursor-pointer"
               >
                 Book Online Now
               </Link>

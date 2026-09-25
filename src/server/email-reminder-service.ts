@@ -1,10 +1,23 @@
-import { Resend } from 'resend';
 import { getBookings, updateBooking, updateBookingByRef, logEmailDelivery } from '../db/queries.ts';
+import {
+  dispatchEmail,
+  getEmailSystemStatus,
+  getFormattedSender,
+  getResendClient,
+  getGmailConfig,
+  type EmailDispatchOptions,
+} from './email-dispatcher.ts';
 
 // Lock map to prevent duplicate concurrent executions for the same booking ref/id
 const inFlightSendingLocks = new Set<string>();
 
-let resendInstance: Resend | null = null;
+/**
+ * Re-export getResend and getFormattedSender for backward compatibility with existing callers.
+ */
+export function getResend() {
+  return getResendClient();
+}
+export { getFormattedSender, getEmailSystemStatus, dispatchEmail };
 
 /**
  * Escapes user-supplied text for safe injection into email HTML templates.
@@ -17,24 +30,6 @@ export function escapeHtml(str: string | null | undefined): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
-}
-
-export function getResend(): Resend | null {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    return null;
-  }
-  if (!resendInstance) {
-    resendInstance = new Resend(apiKey);
-  }
-  return resendInstance;
-}
-
-export function getFormattedSender(): string {
-  const raw = process.env.RESEND_FROM_EMAIL?.trim();
-  if (!raw) return "Wallys Driving School <info@wallysdrivingschool.com.au>";
-  if (raw.includes("<") && raw.includes(">")) return raw;
-  return `Wallys Driving School <${raw}>`;
 }
 
 export interface ReminderScheduleResult {
@@ -298,10 +293,10 @@ export async function scheduleOrSendLessonReminder(
   inFlightSendingLocks.add(refKey);
 
   try {
-    const resend = getResend();
-    if (!resend) {
-      const err = "RESEND_API_KEY is not configured on the server. Please set it in Settings/environment.";
-      console.warn(`[Resend Reminder] Cannot process booking #${refKey}: ${err}`);
+    const status = getEmailSystemStatus();
+    if (!status.isConfigured && process.env.NODE_ENV === 'production' && !status.hasGmail && !status.hasResend) {
+      const err = "Email sending credentials (Gmail App Password or Resend API Key) are not configured on the server.";
+      console.warn(`[Reminder Engine] Cannot process booking #${refKey}: ${err}`);
       await updateBookingInDatabase(booking, {
         reminderStatus: 'failed',
         reminderError: err,
@@ -339,96 +334,109 @@ export async function scheduleOrSendLessonReminder(
       suburb: booking.suburb || 'Rooty Hill'
     });
 
-    const primarySender = getFormattedSender();
     const now = Date.now();
-
-    // Determine whether to send immediately or schedule
-    // Resend allows scheduled_at up to 72 hours in advance (72 * 3600 * 1000 ms)
     const MAX_RESEND_SCHEDULE_MS = 72 * 60 * 60 * 1000;
     const msUntilReminder = sched.reminderTimeMs - now;
 
-    let sendPayload: any = {
-      from: primarySender,
-      to: [recipientEmail],
-      subject,
-      text,
-    };
+    // Send immediately if forced, due right now, or within 2 hours
+    const shouldSendNow = Boolean(options?.force) || sched.isDue || msUntilReminder <= 0;
 
-    let willSchedule = false;
-    if (msUntilReminder > 0 && msUntilReminder <= MAX_RESEND_SCHEDULE_MS) {
-      // Within Resend's 72-hour scheduling window
-      sendPayload.scheduled_at = new Date(sched.reminderTimeMs).toISOString();
-      willSchedule = true;
-    } else if (msUntilReminder > MAX_RESEND_SCHEDULE_MS) {
-      // Too far in advance for Resend's 72h window. Record in DB as scheduled;
-      // background runner will schedule with Resend once it is within the 72h window.
+    if (shouldSendNow) {
+      console.log(`[Reminder Engine] Sending 2-hour lesson reminder now for booking #${refKey} to ${recipientEmail}`);
+
+      const dispatchResult = await dispatchEmail({
+        to: recipientEmail,
+        subject,
+        text,
+        emailType: 'reminder',
+        bookingRef: refKey,
+      });
+
+      if (!dispatchResult.success) {
+        const errorMsg = dispatchResult.error || 'Failed to dispatch reminder email';
+        console.error(`[Reminder Engine] Error sending email for #${refKey}:`, errorMsg);
+        await updateBookingInDatabase(booking, {
+          reminderStatus: 'failed',
+          reminderError: errorMsg,
+          reminderRecipientEmail: recipientEmail
+        });
+        return {
+          success: false,
+          status: 'failed',
+          error: errorMsg,
+          recipientEmail
+        };
+      }
+
       await updateBookingInDatabase(booking, {
-        reminderStatus: 'scheduled',
+        reminderStatus: 'sent',
         reminderScheduledFor: sched.scheduledForISO,
+        reminderSentAt: new Date().toISOString(),
+        reminderMessageId: dispatchResult.messageId || null,
         reminderRecipientEmail: recipientEmail,
         reminderError: null
       });
-      console.log(`[Resend Reminder] Booking #${refKey} scheduled for future lesson (${sched.scheduledForISO}).`);
+
+      console.log(`[Reminder Engine] Successfully delivered reminder email for #${refKey} via ${dispatchResult.provider}! ID: ${dispatchResult.messageId}`);
+
       return {
         success: true,
-        status: 'scheduled',
-        recipientEmail
-      };
-    } else {
-      // Due right now or within 2 hours of lesson start: send immediately!
-      willSchedule = false;
-    }
-
-    console.log(`[Resend Reminder] Dispatching to Resend for booking #${refKey} to ${recipientEmail} (willSchedule: ${willSchedule}, scheduled_at: ${sendPayload.scheduled_at || 'now'})`);
-
-    let resendResponse = await resend.emails.send(sendPayload);
-
-    // If custom domain is not yet verified in Resend during testing, retry gracefully with verified onboarding domain
-    if (resendResponse.error && (resendResponse.error.message.includes('domain') || resendResponse.error.name === 'validation_error')) {
-      console.warn(`[Resend Reminder] Primary domain returned: ${resendResponse.error.message}. Retrying with onboarding@resend.dev...`);
-      sendPayload.from = "Wallys Driving School <onboarding@resend.dev>";
-      resendResponse = await resend.emails.send(sendPayload);
-    }
-
-    if (resendResponse.error) {
-      const errorMsg = resendResponse.error.message || 'Unknown Resend API error';
-      console.error(`[Resend Reminder] Error sending email for #${refKey}:`, resendResponse.error);
-      await updateBookingInDatabase(booking, {
-        reminderStatus: 'failed',
-        reminderError: errorMsg,
-        reminderRecipientEmail: recipientEmail
-      });
-      return {
-        success: false,
-        status: 'failed',
-        error: errorMsg,
+        emailId: dispatchResult.messageId,
+        status: 'sent',
         recipientEmail
       };
     }
 
-    const emailId = resendResponse.data?.id;
-    const finalStatus = willSchedule ? 'scheduled' : 'sent';
+    // Future reminder (more than 2 hours away):
+    // If Resend is available with a custom verified domain (not in sandbox mode) and within 72h window,
+    // schedule directly through Resend. Otherwise, schedule locally in the database.
+    const resend = getResend();
+    const hasCustomDomain = !status.resendSandbox;
+    let scheduledWithResend = false;
+    let resendEmailId: string | undefined;
+
+    if (resend && hasCustomDomain && msUntilReminder > 0 && msUntilReminder <= MAX_RESEND_SCHEDULE_MS) {
+      try {
+        const sendPayload: any = {
+          from: getFormattedSender(),
+          to: [recipientEmail],
+          subject,
+          text,
+          scheduled_at: new Date(sched.reminderTimeMs).toISOString(),
+        };
+
+        const resendRes = await resend.emails.send(sendPayload);
+        if (!resendRes.error && resendRes.data?.id) {
+          scheduledWithResend = true;
+          resendEmailId = resendRes.data.id;
+        } else {
+          console.warn(`[Reminder Engine] Resend advance scheduling notice: ${resendRes.error?.message}. Will rely on server scheduler.`);
+        }
+      } catch (err: any) {
+        console.warn(`[Reminder Engine] Exception attempting Resend advance scheduling:`, err?.message || err);
+      }
+    }
 
     await updateBookingInDatabase(booking, {
-      reminderStatus: finalStatus,
+      reminderStatus: 'scheduled',
       reminderScheduledFor: sched.scheduledForISO,
-      reminderSentAt: willSchedule ? null : new Date().toISOString(),
-      reminderMessageId: emailId || null,
+      reminderSentAt: null,
+      reminderMessageId: resendEmailId || null,
       reminderRecipientEmail: recipientEmail,
       reminderError: null
     });
 
-    console.log(`[Resend Reminder] Successfully ${willSchedule ? 'scheduled' : 'sent'} email for booking #${refKey}! Resend ID: ${emailId}`);
+    console.log(`[Reminder Engine] Booking #${refKey} reminder scheduled for ${sched.scheduledForISO} (${scheduledWithResend ? 'Resend Queue' : 'Local Scheduler Queue'}).`);
 
     return {
       success: true,
-      emailId,
-      status: finalStatus,
+      emailId: resendEmailId,
+      status: 'scheduled',
       recipientEmail
     };
   } catch (err: any) {
-    const errorMsg = err?.message || 'Unexpected exception calling Resend';
-    console.error(`[Resend Reminder] Exception for #${refKey}:`, err);
+    const errorMsg = err?.message || 'Unexpected exception scheduling reminder';
+    console.error(`[Reminder Engine] Exception for #${refKey}:`, err);
     await updateBookingInDatabase(booking, {
       reminderStatus: 'failed',
       reminderError: errorMsg,
@@ -615,6 +623,7 @@ export async function processPendingLessonReminders(): Promise<{
 
 /**
  * Robust dispatcher with exponential backoff retry logic and audit logging.
+ * Seamlessly routes between Gmail SMTP (Nodemailer), Custom SMTP, and Resend.
  */
 export async function sendEmailWithRetry(
   payload: {
@@ -631,79 +640,22 @@ export async function sendEmailWithRetry(
     emailType: 'confirmation' | 'receipt' | 'cancellation' | 'reminder' | 'instructor_notification';
   }
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  const resend = getResend();
-  const maxRetries = options.maxRetries ?? 3;
-  const primarySender = payload.from || getFormattedSender();
-  const recipient = Array.isArray(payload.to) ? payload.to.join(', ') : payload.to;
-
-  if (!resend) {
-    console.warn(`[Resend] RESEND_API_KEY is not configured. Email to ${recipient} simulated.`);
-    await logEmailDelivery({
-      bookingRef: options.bookingRef,
-      emailType: options.emailType,
-      recipientEmail: recipient,
-      status: 'sent',
-      messageId: `sim_${Date.now()}`,
-      error: 'RESEND_API_KEY missing - simulated delivery',
-      retryCount: 0,
-    });
-    return { success: true, id: `sim_${Date.now()}` };
-  }
-
-  let attempt = 0;
-  let lastError = '';
-  let activePayload = { ...payload, from: primarySender };
-
-  while (attempt < maxRetries) {
-    attempt++;
-    try {
-      let res = await resend.emails.send(activePayload as any);
-
-      // Handle unverified domain gracefully by retrying with onboarding domain
-      if (res.error && (res.error.message.includes('domain') || res.error.name === 'validation_error')) {
-        console.warn(`[Resend] Domain notice: ${res.error.message}. Retrying with onboarding@resend.dev...`);
-        activePayload.from = "Wallys Driving School <onboarding@resend.dev>";
-        res = await resend.emails.send(activePayload as any);
-      }
-
-      if (res.error) {
-        lastError = res.error.message || 'Unknown Resend error';
-        console.warn(`[Resend] Attempt ${attempt}/${maxRetries} failed for ${recipient}: ${lastError}`);
-        if (attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, attempt * 1000));
-          continue;
-        }
-      } else {
-        const messageId = res.data?.id;
-        await logEmailDelivery({
-          bookingRef: options.bookingRef,
-          emailType: options.emailType,
-          recipientEmail: recipient,
-          status: 'sent',
-          messageId,
-          retryCount: attempt - 1,
-        });
-        return { success: true, id: messageId };
-      }
-    } catch (err: any) {
-      lastError = err?.message || 'Network exception calling Resend';
-      console.warn(`[Resend] Attempt ${attempt}/${maxRetries} threw exception for ${recipient}: ${lastError}`);
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, attempt * 1000));
-      }
-    }
-  }
-
-  await logEmailDelivery({
-    bookingRef: options.bookingRef,
+  const result = await dispatchEmail({
+    to: payload.to,
+    subject: payload.subject,
+    text: payload.text,
+    html: payload.html,
+    replyTo: payload.reply_to,
+    from: payload.from,
     emailType: options.emailType,
-    recipientEmail: recipient,
-    status: 'failed',
-    error: lastError,
-    retryCount: maxRetries,
+    bookingRef: options.bookingRef,
   });
 
-  return { success: false, error: lastError };
+  return {
+    success: result.success,
+    id: result.messageId,
+    error: result.error,
+  };
 }
 
 /**
