@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { validateWorkingEmail } from '../lib/validation.ts';
-import { dispatchEmail } from './email-dispatcher.ts';
+import { dispatchEmail, getEmailServiceStatus, saveStoredEmailSettings } from './email-dispatcher.ts';
+
+export { getEmailServiceStatus, saveStoredEmailSettings };
 
 interface OtpEntry {
   email: string;

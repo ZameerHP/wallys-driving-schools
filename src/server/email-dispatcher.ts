@@ -125,6 +125,45 @@ export function getEmailSystemStatus(): EmailSystemStatus {
 }
 
 /**
+ * Returns a high-level status for the email verification service.
+ */
+export function getEmailServiceStatus() {
+  const status = getEmailSystemStatus();
+  return {
+    ...status,
+    configured: status.isConfigured,
+    provider: status.primaryProvider
+  };
+}
+
+/**
+ * Dynamically updates and persists email settings at runtime.
+ */
+export function saveStoredEmailSettings(settings: {
+  gmailUser?: string;
+  gmailAppPassword?: string;
+  resendApiKey?: string;
+  resendFromEmail?: string;
+}): void {
+  if (settings.gmailUser !== undefined) {
+    process.env.GMAIL_USER = settings.gmailUser;
+  }
+  if (settings.gmailAppPassword !== undefined) {
+    process.env.GMAIL_APP_PASSWORD = settings.gmailAppPassword.replace(/\s+/g, '');
+  }
+  if (settings.resendApiKey !== undefined) {
+    process.env.RESEND_API_KEY = settings.resendApiKey;
+  }
+  if (settings.resendFromEmail !== undefined) {
+    process.env.RESEND_FROM_EMAIL = settings.resendFromEmail;
+  }
+
+  // Invalidate cached transporter instances so new credentials take effect immediately
+  gmailTransporter = null;
+  resendClient = null;
+}
+
+/**
  * Creates or retrieves the Gmail Nodemailer transporter.
  */
 function getGmailTransporter(): Transporter | null {
