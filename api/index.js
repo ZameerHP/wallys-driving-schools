@@ -2001,7 +2001,50 @@ var init_centralAvailabilityService = __esm({
 // src/db/queries.ts
 import fs2 from "node:fs";
 import path2 from "node:path";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, or } from "drizzle-orm";
+function loadPersistedBookings() {
+  for (const filePath of BOOKING_PERSISTENCE_FILES) {
+    try {
+      if (fs2.existsSync(filePath)) {
+        const raw = fs2.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          for (const item of parsed) {
+            if (item && item.bookingRef) {
+              const existingIdx = inMemoryBookings.findIndex(
+                (b) => b.bookingRef && b.bookingRef.toUpperCase() === item.bookingRef.toUpperCase()
+              );
+              if (existingIdx !== -1) {
+                inMemoryBookings[existingIdx] = { ...inMemoryBookings[existingIdx], ...item };
+              } else {
+                inMemoryBookings.push(item);
+              }
+            }
+          }
+          return inMemoryBookings;
+        }
+      }
+    } catch {
+    }
+  }
+  return inMemoryBookings;
+}
+function persistBookings() {
+  try {
+    const data = JSON.stringify(inMemoryBookings, null, 2);
+    for (const filePath of BOOKING_PERSISTENCE_FILES) {
+      try {
+        const dir = path2.dirname(filePath);
+        if (!fs2.existsSync(dir)) {
+          fs2.mkdirSync(dir, { recursive: true });
+        }
+        fs2.writeFileSync(filePath, data, "utf-8");
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
 function mapSupabaseRowToBooking(row) {
   let pickup = row.pickup_address || row.pickupAddress || "";
   let ref = row.booking_ref || row.bookingRef || "";
@@ -2108,6 +2151,7 @@ async function getOrCreateUser(uid, email, displayName, photoUrl) {
   return user;
 }
 async function getBookings(filter) {
+  loadPersistedBookings();
   const mergedMap = /* @__PURE__ */ new Map();
   const supabase = getSupabaseServerClient();
   if (supabase) {
@@ -2143,7 +2187,7 @@ async function getBookings(filter) {
     }
   }
   let list = Array.from(mergedMap.values());
-  if (!filter?.includeUnpaid) {
+  if (filter?.includeUnpaid === false) {
     list = list.filter((b) => b.paymentStatus === "paid");
   }
   if (filter?.userId || filter?.email) {
@@ -2154,14 +2198,28 @@ async function getBookings(filter) {
   return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 async function getBookingByRef(bookingRef, options) {
-  const cleanRef = bookingRef.trim().toUpperCase();
+  if (!bookingRef) return null;
+  loadPersistedBookings();
+  const raw = String(bookingRef).trim().toUpperCase().replace(/^#/, "");
+  if (!raw) return null;
+  const cleanRef = raw;
+  const withPrefix = raw.startsWith("WD-") ? raw : `WD-${raw}`;
+  const digitsOnly = raw.replace(/\D/g, "");
+  const matchesRef = (b) => {
+    if (!b) return false;
+    const bRef = (b.bookingRef || b.ref || "").toString().trim().toUpperCase().replace(/^#/, "");
+    if (bRef === cleanRef || bRef === withPrefix) return true;
+    if (digitsOnly && digitsOnly.length >= 3 && bRef.replace(/\D/g, "") === digitsOnly) return true;
+    if (String(b.id) === cleanRef) return true;
+    return false;
+  };
   const supabase = getSupabaseServerClient();
   if (supabase) {
     try {
-      const { data, error } = await supabase.from("bookings").select("*, students(*), instructors(*)").ilike("notes", `%${cleanRef}%`).limit(1);
+      const { data, error } = await supabase.from("bookings").select("*, students(*), instructors(*)").or(`notes.ilike.%${cleanRef}%,notes.ilike.%${withPrefix}%,booking_ref.ilike.%${cleanRef}%`).limit(1);
       if (!error && data && data.length > 0) {
         const found2 = mapSupabaseRowToBooking(data[0]);
-        if (found2 && (options?.allowUnpaid || found2.paymentStatus === "paid")) {
+        if (found2 && (options?.allowUnpaid !== false || found2.paymentStatus === "paid")) {
           return found2;
         }
       }
@@ -2170,15 +2228,20 @@ async function getBookingByRef(bookingRef, options) {
   }
   if (isSqlConfigured && db) {
     try {
-      const result = await db.select().from(bookings).where(eq(bookings.bookingRef, bookingRef)).limit(1);
-      if (result[0] && (options?.allowUnpaid || result[0].paymentStatus === "paid")) {
+      const result = await db.select().from(bookings).where(
+        or(
+          eq(bookings.bookingRef, cleanRef),
+          eq(bookings.bookingRef, withPrefix)
+        )
+      ).limit(1);
+      if (result[0] && (options?.allowUnpaid !== false || result[0].paymentStatus === "paid")) {
         return result[0];
       }
     } catch {
     }
   }
-  const found = inMemoryBookings.find((b) => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
-  if (found && (options?.allowUnpaid || found.paymentStatus === "paid")) {
+  const found = inMemoryBookings.find((b) => matchesRef(b));
+  if (found && (options?.allowUnpaid !== false || found.paymentStatus === "paid")) {
     return found;
   }
   return null;
@@ -3393,6 +3456,7 @@ async function createBooking(data) {
     }
     const finalBooking = savedSupabaseBooking || savedSqlBooking || newBooking;
     inMemoryBookings.unshift(finalBooking);
+    persistBookings();
     return finalBooking;
   });
 }
@@ -3565,6 +3629,7 @@ async function updateBooking(id, updates) {
       ...updates,
       updatedAt: /* @__PURE__ */ new Date()
     };
+    persistBookings();
     return inMemoryBookings[idx];
   }
   return null;
@@ -3608,12 +3673,14 @@ async function updateBookingByRef(bookingRef, updates) {
       ...updates,
       updatedAt: /* @__PURE__ */ new Date()
     };
+    persistBookings();
     return inMemoryBookings[idx];
   } else {
     const existing = await getBookingByRef(cleanRef, { allowUnpaid: true });
     if (existing) {
       const merged = { ...existing, ...updates, updatedAt: /* @__PURE__ */ new Date() };
       inMemoryBookings.push(merged);
+      persistBookings();
       return merged;
     }
   }
@@ -3632,7 +3699,9 @@ async function deleteBookingById(id) {
   }
   const idx = inMemoryBookings.findIndex((b) => String(b.id) === String(id));
   if (idx !== -1) {
-    return inMemoryBookings.splice(idx, 1);
+    const deleted = inMemoryBookings.splice(idx, 1);
+    persistBookings();
+    return deleted;
   }
   return [];
 }
@@ -3647,7 +3716,9 @@ async function deleteBookingByRef(bookingRef) {
   }
   const idx = inMemoryBookings.findIndex((b) => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
   if (idx !== -1) {
-    return inMemoryBookings.splice(idx, 1);
+    const deleted = inMemoryBookings.splice(idx, 1);
+    persistBookings();
+    return deleted;
   }
   return [];
 }
@@ -3832,7 +3903,7 @@ async function recordWebhookEvent(eventId, provider, eventType) {
     }
   }
 }
-var inMemoryInstructorSettings, inMemoryUsers, inMemoryContactMessages, inMemoryAuditLogs, inMemoryEmailLogs, inMemoryWebhookEvents, inMemoryBookings, nextBookingId, nextUserId, nextContactId, BookingLockManager, bookingLock, TIME_OFF_FILE, TIME_OFF_TMP_FILE, inMemoryTimeOff, timeOffTableInitialized, settingsTableInitialized, DEFAULT_WEEKLY_DAYS_OFF, DAY_INDEX_MAP;
+var inMemoryInstructorSettings, inMemoryUsers, inMemoryContactMessages, inMemoryAuditLogs, inMemoryEmailLogs, inMemoryWebhookEvents, inMemoryBookings, BOOKING_PERSISTENCE_FILES, nextBookingId, nextUserId, nextContactId, BookingLockManager, bookingLock, TIME_OFF_FILE, TIME_OFF_TMP_FILE, inMemoryTimeOff, timeOffTableInitialized, settingsTableInitialized, DEFAULT_WEEKLY_DAYS_OFF, DAY_INDEX_MAP;
 var init_queries = __esm({
   "src/db/queries.ts"() {
     init_db();
@@ -3924,6 +3995,11 @@ var init_queries = __esm({
         updatedAt: /* @__PURE__ */ new Date("2026-06-04T09:00:00Z")
       }
     ];
+    BOOKING_PERSISTENCE_FILES = [
+      path2.join(process.cwd(), "data", "bookings.json"),
+      "/tmp/wallys_bookings.json"
+    ];
+    loadPersistedBookings();
     nextBookingId = 10;
     nextUserId = 1;
     nextContactId = 1;
@@ -6475,6 +6551,30 @@ app.post("/api/create-checkout-session", async (req, res) => {
     }
     const firstLessonDate = Array.isArray(lessons) && lessons.length > 0 ? lessons[0]?.date : bookingDate;
     const firstLessonTime = Array.isArray(lessons) && lessons.length > 0 ? lessons[0]?.time : bookingTime;
+    try {
+      const existingPreBooking = await getBookingByRef(targetRef, { allowUnpaid: true });
+      if (!existingPreBooking) {
+        await createBooking({
+          bookingRef: targetRef,
+          userId: null,
+          studentName: sanitizeText(studentName || "Student Driver"),
+          phone: sanitizeText(studentPhone || ""),
+          email: sanitizeText(studentEmail || ""),
+          suburb: sanitizeText(req.body.suburb || "Rooty Hill, NSW"),
+          pickupAddress: sanitizeText(pickupAddress || null),
+          packageTitle: sanitizeText(serviceTitle || verified.verifiedItems[0]?.name || "Driving Lesson"),
+          packagePrice: effectiveTotal,
+          date: sanitizeText(firstLessonDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0]),
+          time: sanitizeText(firstLessonTime || "09:00 AM"),
+          status: "Pending",
+          notes: `Awaiting payment via Stripe Checkout. Instructor: ${instructorName || "Wally"}`,
+          paymentStatus: "unpaid",
+          stripeSessionId: null
+        });
+      }
+    } catch (preErr) {
+      console.warn("[Checkout] Notice on pre-creating booking:", preErr);
+    }
     if (!process.env.STRIPE_SECRET_KEY) {
       const simSessionId = `cs_sim_${Date.now()}_${targetRef}`;
       simulatedCheckoutSessions.set(simSessionId, {
@@ -6617,6 +6717,21 @@ app.get("/api/verify-checkout-session", async (req, res) => {
             });
           }
           if (lessonBooking) {
+            if (i === 0) {
+              sendBookingConfirmationEmail(lessonBooking).catch((err) => {
+                console.error(`[Email] Error sending confirmation for package ${lessonRef}:`, err);
+              });
+              sendPaymentReceiptEmail(lessonBooking, {
+                method: "card",
+                transactionId: sessionData.id,
+                amount: sessionData.amount_total ? sessionData.amount_total / 100 : Number(lessonPrice) || 620
+              }).catch((err) => {
+                console.error(`[Email] Error sending receipt for ${lessonRef}:`, err);
+              });
+              sendInstructorNotificationEmail(lessonBooking).catch((err) => {
+                console.error(`[Email] Error notifying instructor for ${lessonRef}:`, err);
+              });
+            }
             handleBookingConfirmed(lessonBooking).catch((err) => {
               console.error(`[Resend Reminder] Error in handleBookingConfirmed for ${lessonRef}:`, err);
             });
@@ -6632,7 +6747,8 @@ app.get("/api/verify-checkout-session", async (req, res) => {
             status: "Confirmed",
             paymentStatus: "paid",
             stripeSessionId: sessionData.id,
-            packagePrice: sessionData.amount_total ? sessionData.amount_total / 100 : existing.packagePrice
+            packagePrice: sessionData.amount_total ? sessionData.amount_total / 100 : existing.packagePrice,
+            notes: existing.notes ? `${existing.notes} [Verified via Stripe Checkout: ${sessionData.id}]` : `[Verified via Stripe Checkout: ${sessionData.id}]`
           });
         } else {
           finalBooking = await createBooking({
@@ -6654,6 +6770,28 @@ app.get("/api/verify-checkout-session", async (req, res) => {
           });
         }
         if (finalBooking) {
+          const paidTotal = sessionData.amount_total ? sessionData.amount_total / 100 : Number(finalBooking.packagePrice) || 65;
+          logBookingAudit({
+            bookingRef: targetRef,
+            action: "payment_verified",
+            performedBy: "stripe_checkout_verify",
+            previousState: "Pending",
+            newState: "Confirmed",
+            notes: `Verified $${paidTotal.toFixed(2)} AUD via Stripe Checkout (${sessionData.id})`
+          }).catch((e) => console.error("[Audit] Error logging verify audit:", e));
+          sendBookingConfirmationEmail(finalBooking).catch((err) => {
+            console.error("[Email] Error sending confirmation on checkout verification:", err);
+          });
+          sendPaymentReceiptEmail(finalBooking, {
+            method: "card",
+            transactionId: sessionData.id,
+            amount: paidTotal
+          }).catch((err) => {
+            console.error("[Email] Error sending receipt on checkout verification:", err);
+          });
+          sendInstructorNotificationEmail(finalBooking).catch((err) => {
+            console.error("[Email] Error notifying instructor on checkout verification:", err);
+          });
           handleBookingConfirmed(finalBooking).catch((err) => {
             console.error("[Resend Reminder] Error in handleBookingConfirmed on checkout verification:", err);
           });
@@ -7196,30 +7334,50 @@ async function handleStripeWebhookEvent(req, res) {
         const ref = session.metadata?.bookingRef;
         if (session.payment_status === "paid" && ref) {
           const existing = await getBookingByRef(ref, { allowUnpaid: true });
+          let updated = null;
           if (existing) {
-            const updated = await updateBookingByRef(ref, {
+            updated = await updateBookingByRef(ref, {
               status: "Confirmed",
               paymentStatus: "paid",
               stripeSessionId: session.id
             });
+          } else {
+            const meta = session.metadata || {};
+            updated = await createBooking({
+              bookingRef: ref,
+              userId: null,
+              studentName: sanitizeText(meta.studentName || session.customer_details?.name || "Student Driver"),
+              phone: sanitizeText(meta.studentPhone || ""),
+              email: sanitizeText(session.customer_details?.email || ""),
+              suburb: sanitizeText(meta.suburb || "Rooty Hill, NSW"),
+              pickupAddress: sanitizeText(meta.pickupAddress || null),
+              packageTitle: sanitizeText(meta.serviceTitle || "Driving Lesson"),
+              packagePrice: session.amount_total ? session.amount_total / 100 : 65,
+              date: sanitizeText(meta.bookingDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0]),
+              time: sanitizeText(meta.bookingTime || "09:00 AM"),
+              status: "Confirmed",
+              notes: `[Verified via Stripe Checkout Webhook: ${session.id}]`,
+              paymentStatus: "paid",
+              stripeSessionId: session.id
+            });
+          }
+          if (updated) {
             await logBookingAudit({
               bookingRef: ref,
               action: "payment_verified",
               performedBy: "stripe_webhook",
-              previousState: existing.status,
+              previousState: existing ? existing.status : "Pending",
               newState: "Confirmed",
               notes: `Checkout Session completed (${session.id})`
             });
-            if (updated) {
-              sendBookingConfirmationEmail(updated).catch((e) => console.error("[Resend] Error sending confirmation:", e));
-              sendPaymentReceiptEmail(updated, {
-                method: "card",
-                transactionId: session.id,
-                amount: session.amount_total ? session.amount_total / 100 : Number(updated.packagePrice) || 70
-              }).catch((e) => console.error("[Resend] Error sending receipt:", e));
-              sendInstructorNotificationEmail(updated).catch((e) => console.error("[Resend] Error notifying instructor:", e));
-              handleBookingConfirmed(updated).catch((e) => console.error("[Resend] Error scheduling reminder:", e));
-            }
+            sendBookingConfirmationEmail(updated).catch((e) => console.error("[Resend] Error sending confirmation:", e));
+            sendPaymentReceiptEmail(updated, {
+              method: "card",
+              transactionId: session.id,
+              amount: session.amount_total ? session.amount_total / 100 : Number(updated.packagePrice) || 70
+            }).catch((e) => console.error("[Resend] Error sending receipt:", e));
+            sendInstructorNotificationEmail(updated).catch((e) => console.error("[Resend] Error notifying instructor:", e));
+            handleBookingConfirmed(updated).catch((e) => console.error("[Resend] Error scheduling reminder:", e));
             console.log(`[Stripe Webhook] Checkout session completed for booking ${ref}`);
           }
         }
@@ -8501,6 +8659,17 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {
         });
       } else if (req.body.status === "Confirmed") {
+        logBookingAudit({
+          bookingRef: ref,
+          action: "status_confirmed",
+          performedBy: req.instructor ? "instructor" : "system",
+          newState: "Confirmed",
+          notes: "Booking marked as Confirmed and confirmation email dispatched to student"
+        }).catch(() => {
+        });
+        sendBookingConfirmationEmail(updated).catch((e) => {
+          console.error("[Email] Error sending confirmation on status Confirmed by instructor:", e);
+        });
         handleBookingConfirmed(updated).catch(() => {
         });
       }
@@ -8593,6 +8762,17 @@ app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => 
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {
         });
       } else if (req.body.status === "Confirmed") {
+        logBookingAudit({
+          bookingRef: ref,
+          action: "status_confirmed",
+          performedBy: req.instructor ? "instructor" : "system",
+          newState: "Confirmed",
+          notes: "Booking marked as Confirmed and confirmation email dispatched to student"
+        }).catch(() => {
+        });
+        sendBookingConfirmationEmail(updated).catch((e) => {
+          console.error("[Email] Error sending confirmation on status Confirmed by instructor:", e);
+        });
         handleBookingConfirmed(updated).catch(() => {
         });
       }

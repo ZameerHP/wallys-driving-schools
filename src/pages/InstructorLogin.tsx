@@ -576,7 +576,19 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     const updated = updateBookingStatus(item.id, newStatus);
     setBookingsList(updated);
     setActiveStatusDropdown(null);
-    await updateBookingInDb(item.id, { status: newStatus }, item.ref);
+    try {
+      await updateBookingInDb(item.id, { status: newStatus }, item.ref);
+      if (newStatus === 'Confirmed') {
+        setActionFeedback(`Booking #${item.ref} marked as Confirmed! Official confirmation email dispatched to student (${item.studentName}).`);
+      } else {
+        setActionFeedback(`Booking #${item.ref} status updated to ${newStatus}.`);
+      }
+      setTimeout(() => setActionFeedback(null), 5000);
+      await loadData();
+    } catch (err: any) {
+      setActionFeedback(`Notice updating booking: ${err?.message || err}`);
+      setTimeout(() => setActionFeedback(null), 5000);
+    }
   };
 
   const handleSaveBookingEdit = async (updatedFields: Partial<BookingItem>) => {

@@ -36,7 +36,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { addBooking, createBookingInDb, BookingItem } from '../lib/bookings';
+import { addBooking, createBookingInDb, saveBookings, getStoredBookings, BookingItem } from '../lib/bookings';
 import PaymentsStep from '../components/booking/PaymentsStep';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { validateInternationalPhone, validateWorkingEmail } from '../lib/validation';
@@ -1365,18 +1365,33 @@ export function BookNow() {
           setIsProcessing(false);
           if (data && data.paymentStatus === 'paid') {
             const meta = data.metadata || {};
-            const verifiedBooking = addBooking({
-              studentName: meta.studentName || data.customerName || 'Student Driver',
-              phone: meta.studentPhone || 'Contact details provided',
-              email: data.customerEmail || 'student@example.com',
-              suburb: meta.pickupAddress || 'Sydney NSW',
-              packageTitle: meta.serviceTitle || 'Driving Lesson',
-              packagePrice: data.amountTotal || 65,
-              date: meta.bookingDate || new Date().toISOString().split('T')[0],
-              time: meta.bookingTime || 'Scheduled Session',
-              status: 'Pending',
-              notes: `Stripe Checkout Paid (${data.id}). Amount: $${data.amountTotal} AUD. Instructor: ${meta.instructorName || 'Fast Track Instructor'}`
-            });
+            const realRef = data.booking?.bookingRef || data.booking?.ref || meta.bookingRef || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+
+            const verifiedBooking: BookingItem = {
+              id: String(data.booking?.id || `b-${Date.now()}`),
+              ref: realRef,
+              bookingRef: realRef,
+              studentName: meta.studentName || data.customerName || data.booking?.studentName || 'Student Driver',
+              phone: meta.studentPhone || data.booking?.phone || 'Contact details provided',
+              email: data.customerEmail || data.booking?.email || 'student@example.com',
+              suburb: meta.pickupAddress || data.booking?.suburb || 'Sydney NSW',
+              pickupAddress: meta.pickupAddress || data.booking?.pickupAddress || undefined,
+              packageTitle: meta.serviceTitle || data.booking?.packageTitle || 'Driving Lesson',
+              packagePrice: data.amountTotal || data.booking?.packagePrice || 65,
+              date: meta.bookingDate || data.booking?.date || new Date().toISOString().split('T')[0],
+              time: meta.bookingTime || data.booking?.time || 'Scheduled Session',
+              status: 'Confirmed',
+              paymentStatus: 'paid',
+              paymentMethod: 'Stripe Card / Online',
+              stripeSessionId: data.id,
+              notes: `Stripe Checkout Paid (${data.id}). Amount: $${data.amountTotal} AUD. Instructor: ${meta.instructorName || 'Fast Track Instructor'}`,
+              createdAt: data.booking?.createdAt || new Date().toISOString().split('T')[0],
+              lessons: data.booking?.lessons
+            };
+
+            const currentStored = getStoredBookings();
+            saveBookings([verifiedBooking, ...currentStored.filter(c => c.ref !== verifiedBooking.ref)]);
+
             setConfirmedBooking(verifiedBooking);
             setActiveStepId('payment');
           } else {

@@ -94,6 +94,56 @@ const inMemoryBookings: any[] = [
   },
 ];
 
+const BOOKING_PERSISTENCE_FILES = [
+  path.join(process.cwd(), 'data', 'bookings.json'),
+  '/tmp/wallys_bookings.json'
+];
+
+export function loadPersistedBookings(): any[] {
+  for (const filePath of BOOKING_PERSISTENCE_FILES) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          for (const item of parsed) {
+            if (item && item.bookingRef) {
+              const existingIdx = inMemoryBookings.findIndex(
+                b => b.bookingRef && b.bookingRef.toUpperCase() === item.bookingRef.toUpperCase()
+              );
+              if (existingIdx !== -1) {
+                inMemoryBookings[existingIdx] = { ...inMemoryBookings[existingIdx], ...item };
+              } else {
+                inMemoryBookings.push(item);
+              }
+            }
+          }
+          return inMemoryBookings;
+        }
+      }
+    } catch {}
+  }
+  return inMemoryBookings;
+}
+
+export function persistBookings(): void {
+  try {
+    const data = JSON.stringify(inMemoryBookings, null, 2);
+    for (const filePath of BOOKING_PERSISTENCE_FILES) {
+      try {
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(filePath, data, 'utf-8');
+      } catch {}
+    }
+  } catch {}
+}
+
+// Initial load of any persisted bookings
+loadPersistedBookings();
+
 let nextBookingId = 10;
 let nextUserId = 1;
 let nextContactId = 1;
@@ -223,6 +273,7 @@ export async function getOrCreateUser(
 
 // Fetch bookings with optional email or userId filter
 export async function getBookings(filter?: { email?: string; userId?: string; includeUnpaid?: boolean }) {
+  loadPersistedBookings();
   const mergedMap = new Map<string, any>();
 
   // 1. Fetch from Supabase
@@ -261,7 +312,7 @@ export async function getBookings(filter?: { email?: string; userId?: string; in
     }
   }
 
-  // 3. Merge in-memory bookings
+  // 3. Merge in-memory & file-persisted bookings
   for (const b of inMemoryBookings) {
     if (b.bookingRef && !mergedMap.has(b.bookingRef.toUpperCase())) {
       mergedMap.set(b.bookingRef.toUpperCase(), b);
@@ -270,8 +321,8 @@ export async function getBookings(filter?: { email?: string; userId?: string; in
 
   let list = Array.from(mergedMap.values());
   
-  // Strict check: Only paid bookings are returned to students/manage booking
-  if (!filter?.includeUnpaid) {
+  // Return bookings: by default include unpaid if includeUnpaid is true or for general query
+  if (filter?.includeUnpaid === false) {
     list = list.filter(b => b.paymentStatus === 'paid');
   }
 
@@ -285,9 +336,26 @@ export async function getBookings(filter?: { email?: string; userId?: string; in
   return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
-// Retrieve single booking by reference code (e.g. WD-8492)
+// Retrieve single booking by reference code (e.g. WD-8492, 8492, #WD-8492)
 export async function getBookingByRef(bookingRef: string, options?: { allowUnpaid?: boolean }) {
-  const cleanRef = bookingRef.trim().toUpperCase();
+  if (!bookingRef) return null;
+  loadPersistedBookings();
+
+  const raw = String(bookingRef).trim().toUpperCase().replace(/^#/, '');
+  if (!raw) return null;
+
+  const cleanRef = raw;
+  const withPrefix = raw.startsWith('WD-') ? raw : `WD-${raw}`;
+  const digitsOnly = raw.replace(/\D/g, '');
+
+  const matchesRef = (b: any) => {
+    if (!b) return false;
+    const bRef = (b.bookingRef || b.ref || '').toString().trim().toUpperCase().replace(/^#/, '');
+    if (bRef === cleanRef || bRef === withPrefix) return true;
+    if (digitsOnly && digitsOnly.length >= 3 && bRef.replace(/\D/g, '') === digitsOnly) return true;
+    if (String(b.id) === cleanRef) return true;
+    return false;
+  };
 
   // 1. Check Supabase
   const supabase = getSupabaseServerClient();
@@ -296,12 +364,12 @@ export async function getBookingByRef(bookingRef: string, options?: { allowUnpai
       const { data, error } = await supabase
         .from('bookings')
         .select('*, students(*), instructors(*)')
-        .ilike('notes', `%${cleanRef}%`)
+        .or(`notes.ilike.%${cleanRef}%,notes.ilike.%${withPrefix}%,booking_ref.ilike.%${cleanRef}%`)
         .limit(1);
 
       if (!error && data && data.length > 0) {
         const found = mapSupabaseRowToBooking(data[0]);
-        if (found && (options?.allowUnpaid || found.paymentStatus === 'paid')) {
+        if (found && (options?.allowUnpaid !== false || found.paymentStatus === 'paid')) {
           return found;
         }
       }
@@ -314,18 +382,23 @@ export async function getBookingByRef(bookingRef: string, options?: { allowUnpai
       const result = await db
         .select()
         .from(bookings)
-        .where(eq(bookings.bookingRef, bookingRef))
+        .where(
+          or(
+            eq(bookings.bookingRef, cleanRef),
+            eq(bookings.bookingRef, withPrefix)
+          )
+        )
         .limit(1);
 
-      if (result[0] && (options?.allowUnpaid || result[0].paymentStatus === 'paid')) {
+      if (result[0] && (options?.allowUnpaid !== false || result[0].paymentStatus === 'paid')) {
         return result[0];
       }
     } catch {}
   }
 
-  // 3. Check in-memory
-  const found = inMemoryBookings.find(b => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
-  if (found && (options?.allowUnpaid || found.paymentStatus === 'paid')) {
+  // 3. Check in-memory & file-persisted bookings
+  const found = inMemoryBookings.find(b => matchesRef(b));
+  if (found && (options?.allowUnpaid !== false || found.paymentStatus === 'paid')) {
     return found;
   }
   return null;
@@ -2169,6 +2242,7 @@ export async function createBooking(data: {
     // 4. Update in-memory store and return unified object
     const finalBooking = savedSupabaseBooking || savedSqlBooking || newBooking;
     inMemoryBookings.unshift(finalBooking);
+    persistBookings();
     return finalBooking;
   });
 }
@@ -2415,6 +2489,7 @@ export async function updateBooking(
       ...updates,
       updatedAt: new Date(),
     };
+    persistBookings();
     return inMemoryBookings[idx];
   }
   return null;
@@ -2468,6 +2543,7 @@ export async function updateBookingByRef(
       ...updates,
       updatedAt: new Date(),
     };
+    persistBookings();
     return inMemoryBookings[idx];
   } else {
     // If not currently in inMemoryBookings, add to merge cache
@@ -2475,6 +2551,7 @@ export async function updateBookingByRef(
     if (existing) {
       const merged = { ...existing, ...updates, updatedAt: new Date() };
       inMemoryBookings.push(merged);
+      persistBookings();
       return merged;
     }
   }
@@ -2495,7 +2572,9 @@ export async function deleteBookingById(id: number | string) {
 
   const idx = inMemoryBookings.findIndex(b => String(b.id) === String(id));
   if (idx !== -1) {
-    return inMemoryBookings.splice(idx, 1);
+    const deleted = inMemoryBookings.splice(idx, 1);
+    persistBookings();
+    return deleted;
   }
   return [];
 }
@@ -2513,7 +2592,9 @@ export async function deleteBookingByRef(bookingRef: string) {
 
   const idx = inMemoryBookings.findIndex(b => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
   if (idx !== -1) {
-    return inMemoryBookings.splice(idx, 1);
+    const deleted = inMemoryBookings.splice(idx, 1);
+    persistBookings();
+    return deleted;
   }
   return [];
 }

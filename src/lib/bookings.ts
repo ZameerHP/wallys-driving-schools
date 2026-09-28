@@ -301,13 +301,13 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
 
   // 2. Query all backend API bookings to match by email, phone, or digits
   try {
-    const res = await fetch('/api/bookings');
+    const res = await fetch('/api/bookings?includeUnpaid=true');
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data)) {
         const qLower = clean.toLowerCase();
         const matches = data.filter((b: any) => {
-          const ref = (b.bookingRef || b.booking_ref || '').toLowerCase();
+          const ref = (b.bookingRef || b.booking_ref || b.ref || '').toLowerCase();
           const email = (b.email || '').toLowerCase();
           const phone = (b.phone || '').toLowerCase();
           const name = (b.studentName || b.student_name || '').toLowerCase();
