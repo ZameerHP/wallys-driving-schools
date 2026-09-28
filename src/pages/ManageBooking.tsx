@@ -258,6 +258,14 @@ export function ManageBooking() {
 
     setRescheduleError(null);
 
+    // 24-Hour Restriction Check
+    const bookingTimestamp = parseBookingDateTime(selectedBooking.date, selectedBooking.time);
+    const hoursUntil = (bookingTimestamp - Date.now()) / (1000 * 60 * 60);
+    if (hoursUntil < 24) {
+      setRescheduleError('Changes are no longer available because the booking is within 24 hours. Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.');
+      return;
+    }
+
     // Frontend pre-check
     if (!isRescheduleSlotAvailable(newTime)) {
       setRescheduleError('This time slot is no longer available. Please select another time.');
@@ -338,6 +346,13 @@ export function ManageBooking() {
 
     const bookingTimestamp = parseBookingDateTime(selectedBooking.date, selectedBooking.time);
     const hoursUntil = (bookingTimestamp - Date.now()) / (1000 * 60 * 60);
+
+    if (hoursUntil < 24) {
+      setCancelError('Changes are no longer available because the booking is within 24 hours. Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.');
+      setIsSavingCancel(false);
+      return;
+    }
+
     const isOver24Hours = hoursUntil > 24;
     const isPaid = selectedBooking.paymentStatus === 'paid';
 
@@ -405,7 +420,7 @@ export function ManageBooking() {
         </div>
 
         {/* Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-red/10 text-brand-red text-xs font-bold uppercase tracking-wider mb-2">
             <Sparkles className="w-3.5 h-3.5" />
             <span>Customer Self-Service</span>
@@ -415,6 +430,14 @@ export function ManageBooking() {
           </h1>
           <p className="text-sm text-black/60 max-w-md mx-auto">
             Enter your booking code or number to view your lesson, reschedule dates, or update your pickup address.
+          </p>
+        </div>
+
+        {/* 24-Hour Policy Disclaimer Banner */}
+        <div className="bg-amber-50 border border-amber-200/90 rounded-2xl p-4 mb-6 flex items-start gap-3 text-amber-950 text-xs sm:text-sm shadow-sm">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <strong>Please note:</strong> Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
           </p>
         </div>
 
@@ -528,7 +551,12 @@ export function ManageBooking() {
         )}
 
         {/* Booking Details Card */}
-        {selectedBooking ? (
+        {selectedBooking ? (() => {
+          const bookingTimestamp = parseBookingDateTime(selectedBooking.date, selectedBooking.time);
+          const hoursUntil = (bookingTimestamp - Date.now()) / (1000 * 60 * 60);
+          const isWithin24Hours = hoursUntil < 24;
+
+          return (
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
@@ -647,6 +675,27 @@ export function ManageBooking() {
               </div>
             ) : null}
 
+            {/* 24-Hour Restriction Warning Banner */}
+            {isWithin24Hours && selectedBooking.status !== 'Cancelled' && (
+              <div className="mt-4 bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex items-start gap-3 text-amber-950">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-xs sm:text-sm block text-amber-900">
+                    Changes & Cancellations Disabled (Within 24 Hours)
+                  </span>
+                  <p className="text-[11px] sm:text-xs text-amber-800/90 mt-1 leading-relaxed">
+                    Changes are no longer available because this booking is within 24 hours of your scheduled lesson start time ({Math.max(0, Math.round(hoursUntil))} hours remaining).
+                  </p>
+                  <p className="text-[11px] sm:text-xs text-amber-900 font-bold mt-1.5 leading-relaxed bg-amber-100/70 p-2.5 rounded-xl border border-amber-200">
+                    Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
+                  </p>
+                  <p className="text-[11px] sm:text-xs text-amber-800/90 mt-1.5 leading-relaxed">
+                    If you have an urgent inquiry or emergency, please contact instructor Wally directly on WhatsApp.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Main Lesson Details */}
             <div className="py-6 space-y-4">
               <div>
@@ -669,7 +718,7 @@ export function ManageBooking() {
                   <Calendar className="w-5 h-5 text-brand-red shrink-0 mt-0.5" />
                   <div>
                     <span className="text-[11px] font-bold uppercase tracking-wider text-black/50 block">
-                      Scheduled Date
+                      Booking Date
                     </span>
                     <span className="text-sm sm:text-base font-bold text-brand-black">
                       {selectedBooking.date}
@@ -681,7 +730,7 @@ export function ManageBooking() {
                   <Clock className="w-5 h-5 text-brand-red shrink-0 mt-0.5" />
                   <div>
                     <span className="text-[11px] font-bold uppercase tracking-wider text-black/50 block">
-                      Lesson Time Slot
+                      Booking Time
                     </span>
                     <span className="text-sm sm:text-base font-bold text-brand-black">
                       {selectedBooking.time}
@@ -791,28 +840,44 @@ export function ManageBooking() {
                   {/* Reschedule Button */}
                   <button
                     type="button"
+                    disabled={isWithin24Hours}
                     onClick={() => {
+                      if (isWithin24Hours) return;
                       setNewDate(selectedBooking.date);
                       setNewTime(selectedBooking.time || AVAILABLE_TIMES[0]);
                       setShowRescheduleModal(true);
                     }}
-                    className="flex-1 bg-brand-red hover:bg-[#c41a21] text-white font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-red/20 transition-all cursor-pointer"
+                    className={cn(
+                      "flex-1 font-bold py-3 px-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 transition-all",
+                      isWithin24Hours
+                        ? "bg-black/5 text-black/40 border border-black/10 cursor-not-allowed opacity-60"
+                        : "bg-brand-red hover:bg-[#c41a21] text-white shadow-md shadow-brand-red/20 cursor-pointer"
+                    )}
+                    title={isWithin24Hours ? "Changes and rescheduling are no longer available because the booking is within 24 hours" : "Reschedule your booking"}
                   >
                     <Calendar className="w-4 h-4" />
-                    <span>Reschedule Date & Time</span>
+                    <span>Reschedule Date & Time {isWithin24Hours && "(Locked)"}</span>
                   </button>
 
                   {/* Cancel Booking Button */}
                   <button
                     type="button"
+                    disabled={isWithin24Hours}
                     onClick={() => {
+                      if (isWithin24Hours) return;
                       setCancelError(null);
                       setShowCancelModal(true);
                     }}
-                    className="px-4 py-3 bg-red-50 hover:bg-red-100 text-red-700 font-bold rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 border border-red-200 transition-all cursor-pointer"
+                    className={cn(
+                      "px-4 py-3 font-bold rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-2 border transition-all",
+                      isWithin24Hours
+                        ? "bg-black/5 text-black/30 border-black/10 cursor-not-allowed opacity-60"
+                        : "bg-red-50 hover:bg-red-100 text-red-700 border-red-200 cursor-pointer"
+                    )}
+                    title={isWithin24Hours ? "Cancellations are no longer available because the booking is within 24 hours" : "Cancel your booking"}
                   >
                     <Trash2 className="w-4 h-4 text-red-600" />
-                    <span>Cancel Booking</span>
+                    <span>Cancel Booking {isWithin24Hours && "(Locked)"}</span>
                   </button>
 
                   {/* WhatsApp Instructor */}
@@ -828,8 +893,14 @@ export function ManageBooking() {
                 </>
               )}
             </div>
+            {isWithin24Hours && selectedBooking.status !== 'Cancelled' && (
+              <div className="mt-3 pt-2 border-t border-black/5 text-[11px] text-amber-800/90 text-center font-medium">
+                Changes or cancellations are not permitted within 24 hours of your booking time.
+              </div>
+            )}
           </motion.div>
-        ) : hasSearched && !isSearching ? (
+          );
+        })() : hasSearched && !isSearching ? (
           /* Empty / Not Found State */
           <motion.div
             initial={{ opacity: 0 }}

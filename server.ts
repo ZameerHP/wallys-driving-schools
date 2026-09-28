@@ -72,6 +72,7 @@ import {
   cancelScheduledLessonReminder,
   generateReminderEmailContent,
   sendBookingConfirmationEmail,
+  sendBookingRescheduledEmail,
   sendPaymentReceiptEmail,
   sendBookingCancellationNoticeEmail,
   sendInstructorNotificationEmail,
@@ -3113,17 +3114,42 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
       return res.status(400).json({ error: "Invalid booking ID" });
     }
 
+    const isInstructor = !!(req as any).instructor;
+    const bookings = await getBookings({ includeUnpaid: true });
+    const existing = bookings.find(b => b.id === id);
+
+    if (!existing) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // 24-HOUR CANCELLATION & RESCHEDULING RESTRICTION FOR CUSTOMERS
+    const isCancellationAttempt = req.body.status === 'Cancelled';
+    const isRescheduleAttempt = Boolean(
+      (req.body.date && req.body.date !== existing.date) ||
+      (req.body.time && req.body.time !== existing.time) ||
+      req.body.isRescheduled
+    );
+
+    if (!isInstructor && (isCancellationAttempt || isRescheduleAttempt)) {
+      const timestamp = getBookingTimestamp(existing.date, existing.time);
+      const hoursUntilBooking = (timestamp - Date.now()) / (1000 * 60 * 60);
+
+      if (hoursUntilBooking < 24) {
+        return res.status(400).json({
+          error: "CHANGES_RESTRICTED_WITHIN_24_HOURS",
+          message: "Changes are no longer available because the booking is within 24 hours. Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking."
+        });
+      }
+    }
+
     if (req.body.status === 'Cancelled') {
       req.body.reminderStatus = 'cancelled';
       req.body.reminderError = 'Lesson was cancelled';
-      // Need to fetch existing first
-      const bookings = await getBookings({ includeUnpaid: true });
-      const existing = bookings.find(b => b.id === id);
-      if (existing && existing.status !== 'Cancelled') {
+      if (existing.status !== 'Cancelled') {
         const timestamp = getBookingTimestamp(existing.date, existing.time);
         const hoursUntilBooking = (timestamp - Date.now()) / (1000 * 60 * 60);
         
-        if (hoursUntilBooking > 24) {
+        if (hoursUntilBooking >= 24) {
           // Process Stripe refund
           if (existing.stripeSessionId && process.env.STRIPE_SECRET_KEY) {
             const stripe = getStripe();
@@ -3147,7 +3173,7 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
             req.body.paymentStatus = 'refunded';
           }
         } else {
-          // Within 24 hours
+          // Within 24 hours (instructor administrative override)
           req.body.notes = (req.body.notes || existing.notes || '') + ' [Late cancellation - no refund]';
         }
       }
@@ -3203,6 +3229,19 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
         }).catch(e => console.error("[Audit] Error logging reschedule:", e));
 
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {});
+
+        sendBookingRescheduledEmail({
+          bookingRef: ref,
+          studentName: updated.studentName,
+          email: updated.email,
+          newDate: updated.date,
+          newTime: updated.time,
+          oldDate: existing.date,
+          oldTime: existing.time,
+          packageTitle: updated.packageTitle,
+          pickupAddress: updated.pickupAddress,
+          suburb: updated.suburb
+        }).catch(e => console.error("[Resend] Error sending reschedule notice:", e));
       } else if (req.body.status === 'Confirmed') {
         logBookingAudit({
           bookingRef: ref,
@@ -3230,22 +3269,46 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
 app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => {
   try {
     const ref = sanitizeText(req.params.ref);
+    const isInstructor = !!(req as any).instructor;
+    const existing = await getBookingByRef(ref, { allowUnpaid: true });
+
+    if (!existing) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // 24-HOUR CANCELLATION & RESCHEDULING RESTRICTION FOR CUSTOMERS
+    const isCancellationAttempt = req.body.status === 'Cancelled';
+    const isRescheduleAttempt = Boolean(
+      (req.body.date && req.body.date !== existing.date) ||
+      (req.body.time && req.body.time !== existing.time) ||
+      req.body.isRescheduled
+    );
+
+    if (!isInstructor && (isCancellationAttempt || isRescheduleAttempt)) {
+      const timestamp = getBookingTimestamp(existing.date, existing.time);
+      const hoursUntilBooking = (timestamp - Date.now()) / (1000 * 60 * 60);
+
+      if (hoursUntilBooking < 24) {
+        return res.status(400).json({
+          error: "CHANGES_RESTRICTED_WITHIN_24_HOURS",
+          message: "Changes are no longer available because the booking is within 24 hours. Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking."
+        });
+      }
+    }
     
     // Check if it's a cancellation
     if (req.body.status === 'Cancelled') {
       req.body.reminderStatus = 'cancelled';
       req.body.reminderError = 'Lesson was cancelled';
-      const existing = await getBookingByRef(ref, { allowUnpaid: true });
-      if (existing && existing.status !== 'Cancelled') {
+      if (existing.status !== 'Cancelled') {
         const timestamp = getBookingTimestamp(existing.date, existing.time);
         const hoursUntilBooking = (timestamp - Date.now()) / (1000 * 60 * 60);
         
-        if (hoursUntilBooking > 24) {
+        if (hoursUntilBooking >= 24) {
           // Process Stripe refund if there is a session/intent id
           if (existing.stripeSessionId && process.env.STRIPE_SECRET_KEY) {
             const stripe = getStripe();
             try {
-              // Note: stripeSessionId could be a checkout session or a payment intent
               if (existing.stripeSessionId.startsWith('pi_')) {
                 await stripe.refunds.create({ payment_intent: existing.stripeSessionId });
               } else if (existing.stripeSessionId.startsWith('cs_')) {
@@ -3265,7 +3328,7 @@ app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => 
             req.body.paymentStatus = 'refunded';
           }
         } else {
-          // Within 24 hours, no refund
+          // Within 24 hours, no refund (instructor override)
           req.body.notes = (req.body.notes || existing.notes || '') + ' [Late cancellation - no refund]';
         }
       }
@@ -3320,6 +3383,19 @@ app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => 
         }).catch(e => console.error("[Audit] Error logging reschedule:", e));
 
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {});
+
+        sendBookingRescheduledEmail({
+          bookingRef: ref,
+          studentName: updated.studentName,
+          email: updated.email,
+          newDate: updated.date,
+          newTime: updated.time,
+          oldDate: existing.date,
+          oldTime: existing.time,
+          packageTitle: updated.packageTitle,
+          pickupAddress: updated.pickupAddress,
+          suburb: updated.suburb
+        }).catch(e => console.error("[Resend] Error sending reschedule notice:", e));
       } else if (req.body.status === 'Confirmed') {
         logBookingAudit({
           bookingRef: ref,

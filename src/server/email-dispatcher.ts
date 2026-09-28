@@ -34,7 +34,7 @@ export interface EmailDispatchOptions {
   html?: string;
   replyTo?: string;
   from?: string;
-  emailType?: 'confirmation' | 'receipt' | 'cancellation' | 'reminder' | 'instructor_notification' | 'verification' | 'direct';
+  emailType?: 'confirmation' | 'receipt' | 'cancellation' | 'reminder' | 'instructor_notification' | 'verification' | 'direct' | 'reschedule';
   bookingRef?: string | null;
 }
 

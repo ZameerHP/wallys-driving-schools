@@ -1967,10 +1967,16 @@ export function BookNow() {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex justify-between items-center">
-                    <span className="text-brand-black/60">Scheduled Date & Time:</span>
-                    <span className="font-bold text-brand-black">{confirmedBooking.date} · {confirmedBooking.time}</span>
-                  </div>
+                  <>
+                    <div className="flex justify-between items-center py-0.5">
+                      <span className="text-brand-black/60 font-medium">Booking Date:</span>
+                      <span className="font-bold text-brand-black">{confirmedBooking.date}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-0.5">
+                      <span className="text-brand-black/60 font-medium">Booking Time:</span>
+                      <span className="font-bold text-brand-black">{confirmedBooking.time}</span>
+                    </div>
+                  </>
                 )}
                 <div className="flex justify-between items-center">
                   <span className="text-brand-black/60">Service Suburb:</span>
@@ -1986,6 +1992,14 @@ export function BookNow() {
                   <span className="text-brand-black/60">Total Amount:</span>
                   <span className="font-display font-black text-brand-red text-base sm:text-lg">${Number(confirmedBooking.packagePrice || 0).toFixed(2)} AUD</span>
                 </div>
+              </div>
+
+              {/* 24-Hour Policy Notice */}
+              <div className="bg-amber-50 border border-amber-200/90 rounded-2xl p-4 text-left mb-6 text-xs sm:text-sm text-amber-950 flex items-start gap-3 shadow-sm">
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <p className="leading-relaxed">
+                  <strong>Please note:</strong> Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
+                </p>
               </div>
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -2826,6 +2840,14 @@ export function BookNow() {
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                             <span>Instructor Wally operates everyday 8:00 AM – 6:00 PM.</span>
                           </div>
+
+                          {/* 24-Hour Policy Notice */}
+                          <div className="mt-2.5 p-3 bg-amber-50/90 rounded-xl border border-amber-200/90 text-xs text-amber-950 flex items-start gap-2.5">
+                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                            <span className="leading-relaxed">
+                              <strong>Please note:</strong> Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
+                            </span>
+                          </div>
                         </div>
 
                       </div>
@@ -3531,6 +3553,14 @@ export function BookNow() {
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
                     >
+                      {/* 24-Hour Policy Notice */}
+                      <div className="mb-4 p-3 bg-amber-50/90 rounded-2xl border border-amber-200/90 text-xs text-amber-950 flex items-start gap-2.5 shadow-sm">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <span className="leading-relaxed">
+                          <strong>Please note:</strong> Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
+                        </span>
+                      </div>
+
                       <ErrorBoundary
                         title="Payment Form Ready"
                         message="Unable to render payment elements in this browser session. You can safely return to the previous step or reload."

@@ -5208,11 +5208,13 @@ function generateReminderEmailContent(booking) {
     ``,
     `This is a friendly reminder from Wallys Driving School that your driving lesson is scheduled for today.`,
     ``,
-    `Date: ${booking.date.trim()}`,
-    `Time: ${booking.time.trim()}`,
+    `Booking Date: ${booking.date.trim()}`,
+    `Booking Time: ${booking.time.trim()}`,
     `Location: ${location}`,
     ``,
     `Please be ready a few minutes before your lesson.`,
+    ``,
+    `Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.`,
     ``,
     `Thank you,`,
     `Wallys Driving School`
@@ -5572,11 +5574,23 @@ async function sendBookingConfirmationEmail(booking) {
         <tr>
           <td style="padding: 32px 24px;">
             <h2 style="font-size: 18px; margin: 0 0 12px; color: #111111;">Your booking is confirmed, ${safeName}!</h2>
-            <p style="font-size: 14px; line-height: 1.6; color: #444444; margin: 0 0 24px;">
+            <p style="font-size: 14px; line-height: 1.6; color: #444444; margin: 0 0 20px;">
               Thank you for booking with Wallys Driving School. Your session is locked in with accredited RMS instructor Wally.
             </p>
 
-            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #eeeeee; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <!-- Prominent Booking Date and Time Section -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fff1f2; border: 2px solid #E3222A; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px;">
+              <tr>
+                <td style="padding: 6px 0; font-size: 15px; color: #111111;"><strong>Booking Date:</strong></td>
+                <td style="padding: 6px 0; font-size: 16px; font-weight: bold; color: #E3222A; text-align: right;">${safeDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 15px; color: #111111;"><strong>Booking Time:</strong></td>
+                <td style="padding: 6px 0; font-size: 16px; font-weight: bold; color: #E3222A; text-align: right;">${safeTime}</td>
+              </tr>
+            </table>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #eeeeee; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
               <tr>
                 <td style="padding: 8px 0; color: #555555; font-size: 14px;">Booking Reference:</td>
                 <td style="padding: 8px 0; font-weight: bold; color: #E3222A; font-size: 14px; text-align: right; font-family: monospace;">${safeRef}</td>
@@ -5590,11 +5604,11 @@ async function sendBookingConfirmationEmail(booking) {
                 <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safePackage}</td>
               </tr>
               <tr>
-                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Date:</td>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;"><strong>Booking Date:</strong></td>
                 <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeDate}</td>
               </tr>
               <tr>
-                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Time Slot:</td>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;"><strong>Booking Time:</strong></td>
                 <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeTime}</td>
               </tr>
               <tr>
@@ -5608,16 +5622,20 @@ async function sendBookingConfirmationEmail(booking) {
               </tr>
             </table>
 
-            <div style="background-color: #fff8f8; border-left: 4px solid #E3222A; padding: 14px 16px; margin-bottom: 24px; border-radius: 4px;">
+            <div style="background-color: #fff8f8; border-left: 4px solid #E3222A; padding: 14px 16px; margin-bottom: 20px; border-radius: 4px;">
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #333333;">
                 <strong>What to prepare:</strong> Please ensure you have your physical or digital NSW Learner Licence, your logbook (or app), and wear comfortable flat closed-toe shoes.
               </p>
             </div>
 
+            <!-- 24-Hour Policy Notice Banner -->
+            <div style="background-color: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; padding: 14px 16px; margin-bottom: 24px; border-radius: 6px;">
+              <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #92400e;">
+                <strong>Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.</strong>
+              </p>
+            </div>
+
             <p style="font-size: 12px; line-height: 1.5; color: #777777; margin: 0 0 8px;">
-              <strong>Cancellation & Rescheduling Policy:</strong> Free rescheduling or cancellation is available with at least 24 hours notice.
-            </p>
-            <p style="font-size: 12px; line-height: 1.5; color: #777777; margin: 0;">
               Questions? Call Wally directly at <a href="tel:0412345678" style="color: #E3222A; text-decoration: none;">0412 345 678</a> or reply to this email.
             </p>
           </td>
@@ -5639,13 +5657,17 @@ Your booking with Wallys Driving School is confirmed!
 Booking Reference: ${booking.bookingRef}
 Instructor: Wally (Accredited RMS Instructor)
 Lesson Package: ${booking.packageTitle}
-Date: ${booking.date}
-Time: ${booking.time}
+
+Booking Date: ${booking.date}
+Booking Time: ${booking.time}
 Pickup: ${booking.pickupAddress || booking.suburb}
 Amount: ${safePrice}
 
 Please have your NSW Learner Licence and logbook ready.
-If you need to reschedule or have questions, contact Wally on 0412 345 678.
+
+Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
+
+If you have questions, contact Wally on 0412 345 678.
   `.trim();
   return await sendEmailWithRetry(
     { to: recipient, subject, html, text: text2 },
@@ -5657,6 +5679,8 @@ async function sendPaymentReceiptEmail(booking, payment) {
   if (!recipient) return { success: false, error: "Recipient email missing" };
   const safeName = escapeHtml(booking.studentName || "Customer");
   const safeRef = escapeHtml(booking.bookingRef);
+  const safeDate = escapeHtml(booking.date || "");
+  const safeTime = escapeHtml(booking.time || "");
   const safeMethod = escapeHtml(
     payment.method === "google_pay" ? "Google Pay" : payment.method === "link" ? "Stripe Link" : payment.method === "paypal" ? "PayPal" : "Credit / Debit Card"
   );
@@ -5704,6 +5728,14 @@ async function sendPaymentReceiptEmail(booking, payment) {
                 <td style="font-weight: bold; color: #111111;">${safeRef}</td>
               </tr>
               <tr>
+                <td><strong>Booking Date:</strong></td>
+                <td style="font-weight: bold; color: #111111;">${safeDate}</td>
+              </tr>
+              <tr>
+                <td><strong>Booking Time:</strong></td>
+                <td style="font-weight: bold; color: #111111;">${safeTime}</td>
+              </tr>
+              <tr>
                 <td>Payment Method:</td>
                 <td style="font-weight: bold; color: #111111;">${safeMethod}</td>
               </tr>
@@ -5716,6 +5748,11 @@ async function sendPaymentReceiptEmail(booking, payment) {
                 <td>${(/* @__PURE__ */ new Date()).toLocaleDateString("en-AU")}</td>
               </tr>
             </table>
+
+            <!-- 24-Hour Policy Notice -->
+            <div style="background-color: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; padding: 12px 14px; margin-top: 20px; border-radius: 6px; color: #92400e; font-size: 12px; line-height: 1.5;">
+              <strong>Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.</strong>
+            </div>
           </td>
         </tr>
         <tr>
@@ -5728,7 +5765,7 @@ async function sendPaymentReceiptEmail(booking, payment) {
     </html>
   `;
   return await sendEmailWithRetry(
-    { to: recipient, subject, html, text: `Receipt for ${safeAmount}. Ref: ${booking.bookingRef}, Tx: ${safeTxId}` },
+    { to: recipient, subject, html, text: `Receipt for ${safeAmount}. Ref: ${booking.bookingRef}, Booking Date: ${booking.date}, Booking Time: ${booking.time}, Tx: ${safeTxId}. Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.` },
     { bookingRef: booking.bookingRef, emailType: "receipt" }
   );
 }
@@ -5759,8 +5796,20 @@ async function sendBookingCancellationNoticeEmail(booking, details) {
           <td style="padding: 24px;">
             <p style="font-size: 14px;">Hi ${safeName},</p>
             <p style="font-size: 14px; line-height: 1.6; color: #444444;">
-              This email confirms that your driving lesson booking (<strong>${safeRef}</strong>) scheduled for <strong>${safeDate} at ${safeTime}</strong> has been cancelled.
+              This email confirms that your driving lesson booking (<strong>${safeRef}</strong>) has been cancelled.
             </p>
+
+            <!-- Prominent Booking Date and Time Section -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fff1f2; border: 2px solid #E3222A; border-radius: 8px; padding: 12px 16px; margin: 16px 0;">
+              <tr>
+                <td style="padding: 4px 0; font-size: 14px; color: #111111;"><strong>Booking Date:</strong></td>
+                <td style="padding: 4px 0; font-size: 15px; font-weight: bold; color: #E3222A; text-align: right;">${safeDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 0; font-size: 14px; color: #111111;"><strong>Booking Time:</strong></td>
+                <td style="padding: 4px 0; font-size: 15px; font-weight: bold; color: #E3222A; text-align: right;">${safeTime}</td>
+              </tr>
+            </table>
 
             <div style="background-color: #f9f9f9; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #555555;">
               <div><strong>Reason:</strong> ${safeReason}</div>
@@ -5769,6 +5818,11 @@ async function sendBookingCancellationNoticeEmail(booking, details) {
                   Refund Status: A refund of ${refundAmount} has been initiated to your original payment method.
                 </div>
               ` : ""}
+            </div>
+
+            <!-- 24-Hour Policy Notice -->
+            <div style="background-color: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; padding: 12px 14px; margin: 16px 0; border-radius: 6px; color: #92400e; font-size: 12px; line-height: 1.5;">
+              <strong>Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.</strong>
             </div>
 
             <p style="font-size: 13px; color: #666666;">
@@ -5780,8 +5834,22 @@ async function sendBookingCancellationNoticeEmail(booking, details) {
     </body>
     </html>
   `;
+  const text2 = `
+Hi ${booking.studentName || "Student"},
+
+This email confirms that your driving lesson booking (${booking.bookingRef}) has been cancelled.
+
+Booking Date: ${booking.date}
+Booking Time: ${booking.time}
+Reason: ${details?.reason || "Lesson cancellation requested"}
+${isRefunded ? `Refund Status: A refund of ${refundAmount} has been initiated.
+` : ""}
+Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
+
+If you have questions, please contact Wallys Driving School.
+  `.trim();
   return await sendEmailWithRetry(
-    { to: recipient, subject, html, text: `Booking ${booking.bookingRef} has been cancelled.` },
+    { to: recipient, subject, html, text: text2 },
     { bookingRef: booking.bookingRef, emailType: "cancellation" }
   );
 }
@@ -5816,8 +5884,8 @@ async function sendInstructorNotificationEmail(booking) {
               <tr><td style="color: #666;">Student Name:</td><td><strong>${safeName}</strong></td></tr>
               <tr><td style="color: #666;">Phone:</td><td><a href="tel:${safePhone}">${safePhone}</a></td></tr>
               <tr><td style="color: #666;">Email:</td><td><a href="mailto:${safeEmail}">${safeEmail}</a></td></tr>
-              <tr><td style="color: #666;">Date:</td><td><strong>${safeDate}</strong></td></tr>
-              <tr><td style="color: #666;">Time Slot:</td><td><strong>${safeTime}</strong></td></tr>
+              <tr><td style="color: #666;"><strong>Booking Date:</strong></td><td><strong>${safeDate}</strong></td></tr>
+              <tr><td style="color: #666;"><strong>Booking Time:</strong></td><td><strong>${safeTime}</strong></td></tr>
               <tr><td style="color: #666;">Package:</td><td>${safePackage}</td></tr>
               <tr><td style="color: #666;">Pickup Address:</td><td><strong>${safeAddress}</strong></td></tr>
               <tr><td style="color: #666;">Notes:</td><td>${safeNotes}</td></tr>
@@ -5829,8 +5897,128 @@ async function sendInstructorNotificationEmail(booking) {
     </html>
   `;
   return await sendEmailWithRetry(
-    { to: instructorEmail, subject, html, text: `New Booking: ${booking.studentName} on ${booking.date} at ${booking.time}. Ref: ${booking.bookingRef}` },
+    { to: instructorEmail, subject, html, text: `New Booking: ${booking.studentName}. Booking Date: ${booking.date}, Booking Time: ${booking.time}. Ref: ${booking.bookingRef}` },
     { bookingRef: booking.bookingRef, emailType: "instructor_notification" }
+  );
+}
+async function sendBookingRescheduledEmail(booking) {
+  const recipient = (booking.email || "").trim();
+  if (!recipient) return { success: false, error: "Recipient email missing" };
+  const safeName = escapeHtml(booking.studentName || "Student");
+  const safeRef = escapeHtml(booking.bookingRef);
+  const safeNewDate = escapeHtml(booking.newDate);
+  const safeNewTime = escapeHtml(booking.newTime);
+  const safeOldDate = booking.oldDate ? escapeHtml(booking.oldDate) : null;
+  const safeOldTime = booking.oldTime ? escapeHtml(booking.oldTime) : null;
+  const safePackage = escapeHtml(booking.packageTitle || "Driving Lesson");
+  const safeAddress = escapeHtml(booking.pickupAddress || `${booking.suburb || "Rooty Hill"}, NSW`);
+  const subject = `Lesson Rescheduled: ${booking.bookingRef} \u2013 Wallys Driving School`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f7f7f9; margin: 0; padding: 24px; color: #111111;">
+      <table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e5e7;">
+        <tr>
+          <td style="background-color: #E3222A; padding: 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold;">Wallys Driving School</h1>
+            <p style="color: rgba(255,255,255,0.9); margin: 4px 0 0; font-size: 13px;">Lesson Reschedule Confirmation</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 24px;">
+            <h2 style="font-size: 18px; margin: 0 0 12px; color: #111111;">Your lesson has been rescheduled, ${safeName}!</h2>
+            <p style="font-size: 14px; line-height: 1.6; color: #444444; margin: 0 0 20px;">
+              Your driving lesson with accredited instructor Wally has been successfully rescheduled to your new date and time:
+            </p>
+
+            <!-- Prominent New Booking Date and Time Section -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fff1f2; border: 2px solid #E3222A; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px;">
+              <tr>
+                <td style="padding: 6px 0; font-size: 15px; color: #111111;"><strong>Booking Date:</strong></td>
+                <td style="padding: 6px 0; font-size: 16px; font-weight: bold; color: #E3222A; text-align: right;">${safeNewDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 15px; color: #111111;"><strong>Booking Time:</strong></td>
+                <td style="padding: 6px 0; font-size: 16px; font-weight: bold; color: #E3222A; text-align: right;">${safeNewTime}</td>
+              </tr>
+            </table>
+
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #eeeeee; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Booking Reference:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #E3222A; font-size: 14px; text-align: right; font-family: monospace;">${safeRef}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Instructor:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">Wally (Accredited RMS Instructor)</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Lesson Package:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safePackage}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;"><strong>Booking Date:</strong></td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeNewDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;"><strong>Booking Time:</strong></td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeNewTime}</td>
+              </tr>
+              ${safeOldDate && safeOldTime ? `
+              <tr>
+                <td style="padding: 8px 0; color: #888888; font-size: 13px;">Previous Time:</td>
+                <td style="padding: 8px 0; color: #888888; font-size: 13px; text-align: right; text-decoration: line-through;">${safeOldDate} at ${safeOldTime}</td>
+              </tr>
+              ` : ""}
+              <tr>
+                <td style="padding: 8px 0; color: #555555; font-size: 14px;">Pickup Location:</td>
+                <td style="padding: 8px 0; font-weight: bold; color: #111111; font-size: 14px; text-align: right;">${safeAddress}</td>
+              </tr>
+            </table>
+
+            <!-- 24-Hour Policy Notice Banner -->
+            <div style="background-color: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; padding: 14px 16px; margin-bottom: 24px; border-radius: 6px;">
+              <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #92400e;">
+                <strong>Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.</strong>
+              </p>
+            </div>
+
+            <p style="font-size: 12px; line-height: 1.5; color: #777777; margin: 0;">
+              Questions? Call Wally directly at <a href="tel:0412345678" style="color: #E3222A; text-decoration: none;">0412 345 678</a> or reply to this email.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #f7f7f9; padding: 16px 24px; text-align: center; border-top: 1px solid #eeeeee; font-size: 11px; color: #888888;">
+            Wallys Driving School \u2022 Rooty Hill NSW 2766 \u2022 Australia
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+  const text2 = `
+Hi ${booking.studentName || "Student"},
+
+Your driving lesson with Wallys Driving School has been rescheduled!
+
+Booking Reference: ${booking.bookingRef}
+Instructor: Wally (Accredited RMS Instructor)
+Lesson Package: ${booking.packageTitle || "Driving Lesson"}
+
+Booking Date: ${booking.newDate}
+Booking Time: ${booking.newTime}
+${booking.oldDate && booking.oldTime ? `(Previously scheduled: ${booking.oldDate} at ${booking.oldTime})
+` : ""}Pickup: ${booking.pickupAddress || booking.suburb || "Rooty Hill, NSW"}
+
+Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking.
+
+If you have questions, contact Wally on 0412 345 678.
+  `.trim();
+  return await sendEmailWithRetry(
+    { to: recipient, subject, html, text: text2 },
+    { bookingRef: booking.bookingRef, emailType: "reschedule" }
   );
 }
 
@@ -8578,15 +8766,33 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
     if (isNaN(id)) {
       return res.status(400).json({ error: "Invalid booking ID" });
     }
+    const isInstructor = !!req.instructor;
+    const bookings2 = await getBookings({ includeUnpaid: true });
+    const existing = bookings2.find((b) => b.id === id);
+    if (!existing) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+    const isCancellationAttempt = req.body.status === "Cancelled";
+    const isRescheduleAttempt = Boolean(
+      req.body.date && req.body.date !== existing.date || req.body.time && req.body.time !== existing.time || req.body.isRescheduled
+    );
+    if (!isInstructor && (isCancellationAttempt || isRescheduleAttempt)) {
+      const timestamp2 = getBookingTimestamp(existing.date, existing.time);
+      const hoursUntilBooking = (timestamp2 - Date.now()) / (1e3 * 60 * 60);
+      if (hoursUntilBooking < 24) {
+        return res.status(400).json({
+          error: "CHANGES_RESTRICTED_WITHIN_24_HOURS",
+          message: "Changes are no longer available because the booking is within 24 hours. Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking."
+        });
+      }
+    }
     if (req.body.status === "Cancelled") {
       req.body.reminderStatus = "cancelled";
       req.body.reminderError = "Lesson was cancelled";
-      const bookings2 = await getBookings({ includeUnpaid: true });
-      const existing = bookings2.find((b) => b.id === id);
-      if (existing && existing.status !== "Cancelled") {
+      if (existing.status !== "Cancelled") {
         const timestamp2 = getBookingTimestamp(existing.date, existing.time);
         const hoursUntilBooking = (timestamp2 - Date.now()) / (1e3 * 60 * 60);
-        if (hoursUntilBooking > 24) {
+        if (hoursUntilBooking >= 24) {
           if (existing.stripeSessionId && process.env.STRIPE_SECRET_KEY) {
             const stripe = getStripe();
             try {
@@ -8658,6 +8864,18 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
         }).catch((e) => console.error("[Audit] Error logging reschedule:", e));
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {
         });
+        sendBookingRescheduledEmail({
+          bookingRef: ref,
+          studentName: updated.studentName,
+          email: updated.email,
+          newDate: updated.date,
+          newTime: updated.time,
+          oldDate: existing.date,
+          oldTime: existing.time,
+          packageTitle: updated.packageTitle,
+          pickupAddress: updated.pickupAddress,
+          suburb: updated.suburb
+        }).catch((e) => console.error("[Resend] Error sending reschedule notice:", e));
       } else if (req.body.status === "Confirmed") {
         logBookingAudit({
           bookingRef: ref,
@@ -8683,14 +8901,32 @@ app.patch("/api/bookings/:id", attachInstructorOrAuth, async (req, res) => {
 app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => {
   try {
     const ref = sanitizeText(req.params.ref);
+    const isInstructor = !!req.instructor;
+    const existing = await getBookingByRef(ref, { allowUnpaid: true });
+    if (!existing) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+    const isCancellationAttempt = req.body.status === "Cancelled";
+    const isRescheduleAttempt = Boolean(
+      req.body.date && req.body.date !== existing.date || req.body.time && req.body.time !== existing.time || req.body.isRescheduled
+    );
+    if (!isInstructor && (isCancellationAttempt || isRescheduleAttempt)) {
+      const timestamp2 = getBookingTimestamp(existing.date, existing.time);
+      const hoursUntilBooking = (timestamp2 - Date.now()) / (1e3 * 60 * 60);
+      if (hoursUntilBooking < 24) {
+        return res.status(400).json({
+          error: "CHANGES_RESTRICTED_WITHIN_24_HOURS",
+          message: "Changes are no longer available because the booking is within 24 hours. Please note: Any changes, cancellations, or rescheduling must be made at least 24 hours before your booking time. Changes or cancellations are not permitted within 24 hours of the booking."
+        });
+      }
+    }
     if (req.body.status === "Cancelled") {
       req.body.reminderStatus = "cancelled";
       req.body.reminderError = "Lesson was cancelled";
-      const existing = await getBookingByRef(ref, { allowUnpaid: true });
-      if (existing && existing.status !== "Cancelled") {
+      if (existing.status !== "Cancelled") {
         const timestamp2 = getBookingTimestamp(existing.date, existing.time);
         const hoursUntilBooking = (timestamp2 - Date.now()) / (1e3 * 60 * 60);
-        if (hoursUntilBooking > 24) {
+        if (hoursUntilBooking >= 24) {
           if (existing.stripeSessionId && process.env.STRIPE_SECRET_KEY) {
             const stripe = getStripe();
             try {
@@ -8761,6 +8997,18 @@ app.patch("/api/bookings/ref/:ref", attachInstructorOrAuth, async (req, res) => 
         }).catch((e) => console.error("[Audit] Error logging reschedule:", e));
         handleBookingRescheduled(updated, updated.date, updated.time).catch(() => {
         });
+        sendBookingRescheduledEmail({
+          bookingRef: ref,
+          studentName: updated.studentName,
+          email: updated.email,
+          newDate: updated.date,
+          newTime: updated.time,
+          oldDate: existing.date,
+          oldTime: existing.time,
+          packageTitle: updated.packageTitle,
+          pickupAddress: updated.pickupAddress,
+          suburb: updated.suburb
+        }).catch((e) => console.error("[Resend] Error sending reschedule notice:", e));
       } else if (req.body.status === "Confirmed") {
         logBookingAudit({
           bookingRef: ref,
