@@ -3269,7 +3269,7 @@ export function BookNow() {
                               <div className="p-3.5 bg-neutral-50 border border-neutral-200 rounded-xl space-y-3 shadow-2xs">
                                 <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800">
                                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                  <span>{verificationSuccessMsg || "Verification code sent to your email."}</span>
+                                  <span>{verificationSuccessMsg || "Verification code sent to your email (valid for 1 minute)."}</span>
                                 </div>
 
                                 <div>
@@ -3331,7 +3331,19 @@ export function BookNow() {
                                   </div>
                                 </div>
 
-                                <div className="flex items-center justify-end text-xs pt-1 border-t border-neutral-200/60">
+                                <div className="flex items-center justify-between text-xs pt-1 border-t border-neutral-200/60">
+                                  <div className="text-[11px] font-medium flex items-center gap-1.5">
+                                    <Clock className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                                    {resendCooldown > 0 ? (
+                                      <span className="text-neutral-600">
+                                        Code expires in <strong className="font-bold text-neutral-800 font-mono">{resendCooldown}s</strong>
+                                      </span>
+                                    ) : (
+                                      <span className="text-amber-700 font-semibold">
+                                        Code expired (1 min limit)
+                                      </span>
+                                    )}
+                                  </div>
                                   {resendCooldown > 0 ? (
                                     <span className="text-[11px] font-semibold text-neutral-400">
                                       Resend in {resendCooldown}s

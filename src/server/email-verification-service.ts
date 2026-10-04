@@ -7,7 +7,7 @@ export { getEmailServiceStatus, saveStoredEmailSettings };
 interface OtpEntry {
   email: string;
   otp: string;
-  expiresAt: number; // 10 minutes from creation
+  expiresAt: number; // 1 minute from creation
   attempts: number; // max 5 incorrect tries
   lastSentAt: number;
   sendCountLastHour: number;
@@ -160,7 +160,7 @@ Valid for 1 minute.
 
   return {
     success: true,
-    message: 'Verification code sent to your email.',
+    message: 'Verification code sent to your email (valid for 1 minute).',
     cooldownSeconds: 60
   };
 }
@@ -197,7 +197,7 @@ export function verifyVerificationOtp(rawEmail: string, rawCode: string): {
     return {
       success: false,
       error: 'EXPIRED_OTP',
-      message: 'This verification code has expired. Please request a new code.'
+      message: 'This verification code has expired (codes are valid for 1 minute). Please request a new code.'
     };
   }
 
@@ -208,7 +208,7 @@ export function verifyVerificationOtp(rawEmail: string, rawCode: string): {
       return {
         success: false,
         error: 'EXPIRED_OTP',
-        message: 'This verification code has expired. Please request a new code.'
+        message: 'This verification code has expired (codes are valid for 1 minute). Please request a new code.'
       };
     }
 
