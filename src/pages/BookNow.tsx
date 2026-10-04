@@ -367,16 +367,32 @@ export function BookNow() {
   const [verificationCode, setVerificationCode] = useState('');
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [verificationSuccessMsg, setVerificationSuccessMsg] = useState<string | null>(null);
-  const [resendCooldown, setResendCooldown] = useState(0);
+  // Verification Code Expiration (60s) & Resend Cooldown (15s)
+  const [codeExpiresAt, setCodeExpiresAt] = useState<number | null>(null);
+  const [resendAvailableAt, setResendAvailableAt] = useState<number | null>(null);
+  const [codeSecondsRemaining, setCodeSecondsRemaining] = useState<number>(0);
+  const [resendSecondsRemaining, setResendSecondsRemaining] = useState<number>(0);
 
-  // 60-second cooldown timer for code resend
+  // Accurate timestamp-based timer that cannot desync or run fast
   useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => (prev > 1 ? prev - 1 : 0));
-    }, 1000);
+    if (!codeExpiresAt && !resendAvailableAt) return;
+
+    const tick = () => {
+      const now = Date.now();
+      if (codeExpiresAt) {
+        const remaining = Math.max(0, Math.ceil((codeExpiresAt - now) / 1000));
+        setCodeSecondsRemaining(remaining);
+      }
+      if (resendAvailableAt) {
+        const remaining = Math.max(0, Math.ceil((resendAvailableAt - now) / 1000));
+        setResendSecondsRemaining(remaining);
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 250);
     return () => clearInterval(interval);
-  }, [resendCooldown]);
+  }, [codeExpiresAt, resendAvailableAt]);
 
   const handleSendVerificationCode = async () => {
     const cleanEmail = email.trim();
@@ -410,15 +426,25 @@ export function BookNow() {
       if (!res.ok || !data.success) {
         setVerificationError(data.message || 'Unable to send the verification code. Please try again.');
         if (data.cooldownSeconds) {
-          setResendCooldown(data.cooldownSeconds);
+          const now = Date.now();
+          setResendAvailableAt(now + data.cooldownSeconds * 1000);
+          setResendSecondsRemaining(data.cooldownSeconds);
         }
         return;
       }
 
       setCodeSent(true);
       setVerificationCode('');
-      setVerificationSuccessMsg(data.message || 'Verification code sent to your email.');
-      setResendCooldown(data.cooldownSeconds || 60);
+      setVerificationSuccessMsg(data.message || 'Verification code sent to your email (valid for 1 minute).');
+      
+      const now = Date.now();
+      const expirySec = Number(data.expiresInSeconds) || 60; // 60 seconds (1 minute)
+      const cooldownSec = Number(data.cooldownSeconds) || 15; // 15 seconds resend cooldown
+      
+      setCodeExpiresAt(now + expirySec * 1000);
+      setResendAvailableAt(now + cooldownSec * 1000);
+      setCodeSecondsRemaining(expirySec);
+      setResendSecondsRemaining(cooldownSec);
     } catch (err: any) {
       setVerificationError('Unable to send the verification code. Please try again.');
     } finally {
@@ -459,6 +485,10 @@ export function BookNow() {
       setVerificationSuccessMsg('✓ Email verified successfully');
       setVerificationError(null);
       setCodeSent(false);
+      setCodeExpiresAt(null);
+      setResendAvailableAt(null);
+      setCodeSecondsRemaining(0);
+      setResendSecondsRemaining(0);
     } catch (err: any) {
       setVerificationError('An error occurred during verification. Please try again.');
     } finally {
@@ -3111,6 +3141,10 @@ export function BookNow() {
                                   setVerificationCode('');
                                   setVerificationSuccessMsg(null);
                                   setVerificationError(null);
+                                  setCodeExpiresAt(null);
+                                  setResendAvailableAt(null);
+                                  setCodeSecondsRemaining(0);
+                                  setResendSecondsRemaining(0);
                                 }
                                 if (!val.trim()) {
                                   setEmailSuggestion(null);
@@ -3334,9 +3368,9 @@ export function BookNow() {
                                 <div className="flex items-center justify-between text-xs pt-1 border-t border-neutral-200/60">
                                   <div className="text-[11px] font-medium flex items-center gap-1.5">
                                     <Clock className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-                                    {resendCooldown > 0 ? (
+                                    {codeSecondsRemaining > 0 ? (
                                       <span className="text-neutral-600">
-                                        Code expires in <strong className="font-bold text-neutral-800 font-mono">{resendCooldown}s</strong>
+                                        Code expires in <strong className="font-bold text-neutral-800 font-mono">{codeSecondsRemaining}s</strong>
                                       </span>
                                     ) : (
                                       <span className="text-amber-700 font-semibold">
@@ -3344,9 +3378,9 @@ export function BookNow() {
                                       </span>
                                     )}
                                   </div>
-                                  {resendCooldown > 0 ? (
+                                  {resendSecondsRemaining > 0 ? (
                                     <span className="text-[11px] font-semibold text-neutral-400">
-                                      Resend in {resendCooldown}s
+                                      Resend in {resendSecondsRemaining}s
                                     </span>
                                   ) : (
                                     <button

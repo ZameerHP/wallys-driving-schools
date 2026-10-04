@@ -26,8 +26,9 @@ const otpStore = new Map<string, OtpEntry>();
 const verifiedTokensStore = new Map<string, VerifiedTokenEntry>();
 
 // Configuration constants
-const OTP_EXPIRY_MS = 1 * 60 * 1000; // 1 minute validity
-const COOLDOWN_MS = 60 * 1000; // 60 seconds
+const OTP_EXPIRY_MS = 60 * 1000; // 1 minute validity (customer countdown)
+const OTP_SERVER_GRACE_MS = 60 * 1000; // 60s network/email transit buffer so user gets full 1 minute
+const RESEND_COOLDOWN_MS = 15 * 1000; // 15 seconds cooldown for resend button
 const MAX_SENDS_PER_HOUR = 10;
 const MAX_ATTEMPTS = 5;
 const TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 60 minutes for booking completion
@@ -50,6 +51,7 @@ setInterval(() => {
 export async function sendVerificationOtp(rawEmail: string): Promise<{
   success: boolean;
   message: string;
+  expiresInSeconds?: number;
   cooldownSeconds?: number;
   error?: string;
 }> {
@@ -69,8 +71,8 @@ export async function sendVerificationOtp(rawEmail: string): Promise<{
   if (existing) {
     // Check cooldown
     const timeSinceLastSend = now - existing.lastSentAt;
-    if (timeSinceLastSend < COOLDOWN_MS) {
-      const waitSec = Math.ceil((COOLDOWN_MS - timeSinceLastSend) / 1000);
+    if (timeSinceLastSend < RESEND_COOLDOWN_MS) {
+      const waitSec = Math.ceil((RESEND_COOLDOWN_MS - timeSinceLastSend) / 1000);
       return {
         success: false,
         error: 'COOLDOWN',
@@ -96,19 +98,6 @@ export async function sendVerificationOtp(rawEmail: string): Promise<{
 
   // Generate cryptographically secure 6-digit random OTP
   const otp = crypto.randomInt(100000, 1000000).toString();
-
-  // Save OTP in store
-  otpStore.set(email, {
-    email,
-    otp,
-    expiresAt: now + OTP_EXPIRY_MS,
-    attempts: 0,
-    lastSentAt: now,
-    sendCountLastHour: (existing?.sendCountLastHour || 0) + 1,
-    hourWindowStart: existing?.hourWindowStart && (now - existing.hourWindowStart < 60 * 60 * 1000)
-      ? existing.hourWindowStart
-      : now
-  });
 
   // Send email using unified dispatcher (Gmail SMTP, Custom SMTP, Resend, or Simulation)
   const subject = `Your Wally's Driving School verification code is: ${otp}`;
@@ -154,14 +143,29 @@ Valid for 1 minute.
       success: false,
       error: 'DELIVERY_FAILED',
       message: msg,
-      cooldownSeconds: 15
+      cooldownSeconds: 10
     };
   }
+
+  // Save OTP in store AFTER successful dispatch so transmission latency doesn't burn customer time
+  const issuedAt = Date.now();
+  otpStore.set(email, {
+    email,
+    otp,
+    expiresAt: issuedAt + OTP_EXPIRY_MS + OTP_SERVER_GRACE_MS,
+    attempts: 0,
+    lastSentAt: issuedAt,
+    sendCountLastHour: (existing?.sendCountLastHour || 0) + 1,
+    hourWindowStart: existing?.hourWindowStart && (issuedAt - existing.hourWindowStart < 60 * 60 * 1000)
+      ? existing.hourWindowStart
+      : issuedAt
+  });
 
   return {
     success: true,
     message: 'Verification code sent to your email (valid for 1 minute).',
-    cooldownSeconds: 60
+    expiresInSeconds: 60,
+    cooldownSeconds: 15
   };
 }
 
