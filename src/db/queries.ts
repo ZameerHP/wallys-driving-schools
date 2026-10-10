@@ -148,10 +148,41 @@ let nextBookingId = 10;
 let nextUserId = 1;
 let nextContactId = 1;
 
+// Production schema adapters: public.bookings uses booking_reference, pickup_location and lowercase statuses.
+function normalizeBookingStatusForUi(status: any): 'Confirmed' | 'Pending' | 'Completed' | 'Cancelled' {
+  const s = String(status || '').trim().toLowerCase();
+  if (s === 'confirmed' || s === 'rescheduled') return 'Confirmed';
+  if (s === 'completed') return 'Completed';
+  if (s === 'cancelled' || s === 'canceled') return 'Cancelled';
+  return 'Pending';
+}
+
+function normalizeBookingStatusForDb(status: any): 'confirmed' | 'pending' | 'rescheduled' | 'completed' | 'cancelled' {
+  const s = String(status || '').trim().toLowerCase();
+  if (s === 'confirmed') return 'confirmed';
+  if (s === 'rescheduled') return 'rescheduled';
+  if (s === 'completed') return 'completed';
+  if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+  return 'pending';
+}
+
+function minutesToDbTime(totalMinutes: number): string {
+  const safe = ((totalMinutes % 1440) + 1440) % 1440;
+  const h = Math.floor(safe / 60);
+  const m = safe % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+}
+
+function toDbTimeRange(time: string, defaultDurationMinutes = 60): { start: string; end: string } {
+  const parsed = parseTimeInterval(time, defaultDurationMinutes);
+  if (parsed) return { start: minutesToDbTime(parsed.start), end: minutesToDbTime(parsed.end) };
+  return { start: '09:00:00', end: '10:00:00' };
+}
+
 // Helper to convert Supabase row to normalized Booking item
 function mapSupabaseRowToBooking(row: any): any {
-  let pickup = row.pickup_address || row.pickupAddress || '';
-  let ref = row.booking_ref || row.bookingRef || '';
+  let pickup = row.pickup_location || row.pickup_address || row.pickupAddress || '';
+  let ref = row.booking_reference || row.booking_ref || row.bookingRef || '';
   let suburb = row.suburb || '';
   let price = Number(row.package_price || row.packagePrice || 0);
   let payment = row.payment_status || row.paymentStatus || 'unpaid';
@@ -195,7 +226,7 @@ function mapSupabaseRowToBooking(row: any): any {
     packagePrice: price,
     date: row.lesson_date || row.date || '',
     time: row.start_time || row.time || '',
-    status: row.status || 'Pending',
+    status: normalizeBookingStatusForUi(row.status),
     notes: row.notes || null,
     paymentStatus: payment,
     stripeSessionId: row.stripe_session_id || row.stripeSessionId || null,
@@ -364,7 +395,7 @@ export async function getBookingByRef(bookingRef: string, options?: { allowUnpai
       const { data, error } = await supabase
         .from('bookings')
         .select('*, students(*), instructors(*)')
-        .or(`notes.ilike.%${cleanRef}%,notes.ilike.%${withPrefix}%,booking_ref.ilike.%${cleanRef}%`)
+        .or(`booking_reference.eq.${cleanRef},booking_reference.eq.${withPrefix},notes.ilike.%${cleanRef}%,notes.ilike.%${withPrefix}%`)
         .limit(1);
 
       if (!error && data && data.length > 0) {
@@ -2176,6 +2207,7 @@ export async function createBooking(data: {
 
     // 2. Save to Supabase (Priority Data Store for User)
     let savedSupabaseBooking: any = null;
+    let supabaseSaveError: string | null = null;
     try {
       const sbResult = await saveBookingToSupabase({
         bookingRef: data.bookingRef,
@@ -2194,9 +2226,12 @@ export async function createBooking(data: {
       });
       if (sbResult.success && sbResult.data) {
         savedSupabaseBooking = sbResult.data;
+      } else {
+        supabaseSaveError = sbResult.error || 'Unknown Supabase persistence error';
       }
     } catch (err: any) {
-      console.warn('[Supabase Server] createBooking note:', err?.message || err);
+      supabaseSaveError = err?.message || String(err);
+      console.warn('[Supabase Server] createBooking note:', supabaseSaveError);
     }
 
     // 3. Save to Cloud SQL if configured
@@ -2240,6 +2275,17 @@ export async function createBooking(data: {
     }
 
     // 4. Update in-memory store and return unified object
+    if (!savedSupabaseBooking && !savedSqlBooking && process.env.NODE_ENV === 'production') {
+      const err: any = new Error(
+        supabaseSaveError
+          ? `Booking database save failed: ${supabaseSaveError}`
+          : 'Booking database is unavailable. Please try again or contact Wally.'
+      );
+      err.code = 'BOOKING_PERSISTENCE_FAILED';
+      err.status = 503;
+      throw err;
+    }
+
     const finalBooking = savedSupabaseBooking || savedSqlBooking || newBooking;
     inMemoryBookings.unshift(finalBooking);
     persistBookings();
@@ -2248,151 +2294,108 @@ export async function createBooking(data: {
 }
 
 // Helper to persist a single booking to Supabase
-export async function saveBookingToSupabase(data: {
-  bookingRef: string;
-  studentName: string;
-  phone: string;
-  email: string;
-  suburb: string;
-  pickupAddress?: string | null;
-  packageTitle: string;
-  packagePrice: number;
-  date: string;
-  time: string;
-  status: string;
-  notes?: string | null;
-  paymentStatus?: string;
-}): Promise<{ success: boolean; data?: any; error?: string }> {
+export async function saveBookingToSupabase(data: any): Promise<{ success: boolean; data?: any; error?: string }> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return { success: false, error: 'Supabase client is not configured' };
-  }
+  if (!supabase) return { success: false, error: 'Supabase client is not configured' };
 
   try {
-    // 1. Resolve or create Student record
-    let studentId: any = null;
+    let studentId: string | null = null;
+
     if (data.studentName) {
-      try {
-        let query = supabase.from('students').select('id');
-        if (data.email && data.phone) {
-          query = query.or(`email.eq.${data.email},phone.eq.${data.phone}`);
-        } else if (data.email) {
-          query = query.eq('email', data.email);
-        } else if (data.phone) {
-          query = query.eq('phone', data.phone);
-        }
-        const { data: existingStudent } = await query.limit(1).maybeSingle();
+      let existingStudent: any = null;
+      if (data.email) {
+        const found = await supabase.from('students')
+          .select('id, full_name, email, phone')
+          .eq('email', String(data.email).toLowerCase())
+          .limit(1).maybeSingle();
+        existingStudent = found.data;
+      } else if (data.phone) {
+        const found = await supabase.from('students')
+          .select('id, full_name, email, phone')
+          .eq('phone', String(data.phone))
+          .limit(1).maybeSingle();
+        existingStudent = found.data;
+      }
 
-        if (existingStudent?.id) {
-          studentId = existingStudent.id;
-        } else {
-          const { data: stdData, error: stdErr } = await supabase
-            .from('students')
-            .insert({
-              full_name: data.studentName,
-              phone: data.phone || '',
-              email: data.email || '',
-            })
-            .select('id')
-            .single();
+      if (existingStudent?.id) {
+        studentId = existingStudent.id;
+        const studentUpdate: any = {
+          full_name: data.studentName,
+          phone: data.phone || existingStudent.phone || '',
+          updated_at: new Date().toISOString()
+        };
+        if (data.email) studentUpdate.email = String(data.email).toLowerCase();
+        await supabase.from('students').update(studentUpdate).eq('id', studentId);
+      } else {
+        const { data: createdStudent, error: studentErr } = await supabase.from('students').insert({
+          full_name: data.studentName,
+          phone: data.phone || '',
+          email: String(data.email || '').toLowerCase()
+        }).select('id').single();
 
-          if (stdData?.id) {
-            studentId = stdData.id;
-          } else if (stdErr) {
-            console.warn('[Supabase] student insert error:', stdErr.message);
-          }
+        if (studentErr || !createdStudent?.id) {
+          return { success: false, error: studentErr?.message || 'Could not create student record' };
         }
-      } catch (err: any) {
-        console.warn('[Supabase] student lookup/insert notice:', err?.message || err);
+        studentId = createdStudent.id;
       }
     }
 
-    // 2. Resolve Instructor record if available
-    let instructorId: any = null;
-    try {
-      const { data: inst } = await supabase
-        .from('instructors')
-        .select('id')
-        .limit(1)
-        .maybeSingle();
-      if (inst?.id) instructorId = inst.id;
-    } catch {}
+    if (!studentId) return { success: false, error: 'Student record is required' };
 
-    // 3. Format metadata notes for full fidelity
-    const formattedNotes = `[BookingRef: ${data.bookingRef}] [Price: $${data.packagePrice}] [Suburb: ${data.suburb}] ${data.pickupAddress ? `[Pickup: ${data.pickupAddress}]` : ''} [Payment: ${data.paymentStatus || 'unpaid'}] ${data.notes || ''}`.trim();
-
-    let endTime: string | null = null;
-    if (data.time && data.time.includes('–')) {
-      const parts = data.time.split('–');
-      endTime = parts[1]?.trim() || null;
+    const { data: instructor, error: instructorErr } = await supabase.from('instructors')
+      .select('id').eq('status', 'active').limit(1).maybeSingle();
+    if (instructorErr || !instructor?.id) {
+      return { success: false, error: instructorErr?.message || 'No active instructor found' };
     }
 
-    // 4. Check if this booking ref already exists in Supabase to avoid duplicates
-    const { data: existingRows } = await supabase
-      .from('bookings')
-      .select('id')
-      .ilike('notes', `%${data.bookingRef}%`)
-      .limit(1);
+    const durationMinutes =
+      /3\.5\s*h|3\.5\s*hour/i.test(data.packageTitle || '') ? 210 :
+      /2\.5\s*h|2\.5\s*hour/i.test(data.packageTitle || '') ? 150 :
+      /2\s*h|2\s*hour/i.test(data.packageTitle || '') ? 120 : 60;
+    const times = toDbTimeRange(String(data.time || ''), durationMinutes);
 
-    if (existingRows && existingRows.length > 0) {
-      const existingId = existingRows[0].id;
-      const { data: updatedRow, error: updateErr } = await supabase
-        .from('bookings')
-        .update({
-          student_id: studentId,
-          lesson_type: data.packageTitle,
-          lesson_date: data.date,
-          start_time: data.time,
-          ...(endTime ? { end_time: endTime } : {}),
-          status: data.status || 'Confirmed',
-          notes: formattedNotes,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingId)
-        .select('*, students(*), instructors(*)')
-        .single();
+    const formattedNotes = (
+      `[BookingRef: ${data.bookingRef}] [Price: $${data.packagePrice}] [Suburb: ${data.suburb}] ` +
+      `${data.pickupAddress ? `[Pickup: ${data.pickupAddress}] ` : ''}` +
+      `[Payment: ${data.paymentStatus || 'unpaid'}] ${data.notes || ''}`
+    ).trim();
 
-      if (!updateErr && updatedRow) {
-        return { success: true, data: mapSupabaseRowToBooking(updatedRow) };
-      }
-    }
-
-    // 5. Insert new booking row
-    const insertPayload: Record<string, any> = {
+    const payload: any = {
+      booking_reference: String(data.bookingRef || '').trim().toUpperCase(),
       student_id: studentId,
-      lesson_type: data.packageTitle,
-      lesson_date: data.date,
-      start_time: data.time,
-      status: data.status || 'Confirmed',
+      instructor_id: instructor.id,
+      lesson_date: normalizeDate(String(data.date || '')),
+      start_time: times.start,
+      end_time: times.end,
+      lesson_type: data.packageTitle || 'Driving Lesson',
+      pickup_location: data.pickupAddress || data.suburb || 'Pickup to be confirmed',
+      status: normalizeBookingStatusForDb(data.status || (data.paymentStatus === 'paid' ? 'Confirmed' : 'Pending')),
       notes: formattedNotes,
+      updated_at: new Date().toISOString()
     };
-    if (instructorId) insertPayload.instructor_id = instructorId;
-    if (endTime) insertPayload.end_time = endTime;
 
-    const { data: sbRow, error: sbErr } = await supabase
-      .from('bookings')
-      .insert(insertPayload)
-      .select('*, students(*), instructors(*)')
-      .single();
+    if (!payload.booking_reference) return { success: false, error: 'Booking reference is required' };
 
-    if (sbErr) {
-      console.warn('[Supabase Server] insert error:', sbErr.message, sbErr.details || '');
-      return { success: false, error: sbErr.message };
+    const { data: existing, error: findErr } = await supabase.from('bookings')
+      .select('id').eq('booking_reference', payload.booking_reference).limit(1).maybeSingle();
+    if (findErr) return { success: false, error: findErr.message };
+
+    const result = existing?.id
+      ? await supabase.from('bookings').update(payload).eq('id', existing.id).select('*, students(*), instructors(*)').single()
+      : await supabase.from('bookings').insert(payload).select('*, students(*), instructors(*)').single();
+
+    if (result.error || !result.data) {
+      return { success: false, error: result.error?.message || 'Booking could not be persisted to Supabase' };
     }
 
-    if (sbRow) {
-      console.log(`[Supabase Server] Successfully saved booking #${data.bookingRef} to Supabase!`);
-      return { success: true, data: mapSupabaseRowToBooking(sbRow) };
-    }
-
-    return { success: false, error: 'Unknown Supabase insert response' };
+    console.log(`[Supabase Server] Persisted booking #${payload.booking_reference}`);
+    return { success: true, data: mapSupabaseRowToBooking(result.data) };
   } catch (err: any) {
     console.warn('[Supabase Server] saveBookingToSupabase catch:', err?.message || err);
     return { success: false, error: err?.message || String(err) };
   }
 }
 
-// Sync all existing bookings to Supabase
 export async function syncAllBookingsToSupabase(): Promise<{
   total: number;
   synced: number;
@@ -2501,59 +2504,71 @@ export async function updateBookingByRef(
   updates: Partial<typeof bookings.$inferInsert>
 ) {
   const cleanRef = bookingRef.trim().toUpperCase();
-
   const supabase = getSupabaseServerClient();
+  let updatedSupabase: any = null;
+
   if (supabase) {
     try {
-      const sbUpdates: Record<string, any> = {};
-      if (updates.status) sbUpdates.status = updates.status;
-      if (updates.notes !== undefined) sbUpdates.notes = updates.notes;
-      if (updates.date) sbUpdates.lesson_date = updates.date;
-      if (updates.time) sbUpdates.start_time = updates.time;
+      const sbUpdates: Record<string, any> = { updated_at: new Date().toISOString() };
+      if (updates.status) sbUpdates.status = normalizeBookingStatusForDb(updates.status);
+      if (updates.date) sbUpdates.lesson_date = normalizeDate(String(updates.date));
+      if (updates.time) {
+        const times = toDbTimeRange(String(updates.time));
+        sbUpdates.start_time = times.start;
+        sbUpdates.end_time = times.end;
+      }
       if (updates.packageTitle) sbUpdates.lesson_type = updates.packageTitle;
-      if (updates.studentName) sbUpdates.student_name = updates.studentName;
-      if (updates.phone) sbUpdates.phone = updates.phone;
-      if (updates.email) sbUpdates.email = updates.email;
-      if (updates.suburb) sbUpdates.suburb = updates.suburb;
-      if (updates.pickupAddress !== undefined) sbUpdates.pickup_address = updates.pickupAddress;
-      if (updates.packagePrice !== undefined) sbUpdates.package_price = updates.packagePrice;
-      if (updates.paymentStatus) sbUpdates.payment_status = updates.paymentStatus;
-      sbUpdates.updated_at = new Date().toISOString();
+      if (updates.pickupAddress !== undefined) sbUpdates.pickup_location = updates.pickupAddress;
 
-      await supabase.from('bookings').update(sbUpdates).ilike('notes', `%${cleanRef}%`);
-    } catch {}
+      if (updates.notes !== undefined || updates.paymentStatus) {
+        const current = await getBookingByRef(cleanRef, { allowUnpaid: true });
+        let notes = updates.notes !== undefined ? String(updates.notes || '') : String(current?.notes || '');
+        if (updates.paymentStatus) {
+          const paymentTag = `[Payment: ${updates.paymentStatus}]`;
+          notes = /\[Payment:\s*[^\]]+\]/i.test(notes)
+            ? notes.replace(/\[Payment:\s*[^\]]+\]/i, paymentTag)
+            : `${paymentTag} ${notes}`.trim();
+        }
+        sbUpdates.notes = notes;
+      }
+
+      const result = await supabase.from('bookings')
+        .update(sbUpdates)
+        .eq('booking_reference', cleanRef)
+        .select('*, students(*), instructors(*)')
+        .maybeSingle();
+
+      if (!result.error && result.data) updatedSupabase = mapSupabaseRowToBooking(result.data);
+    } catch (err: any) {
+      console.warn('[Supabase] updateBookingByRef notice:', err?.message || err);
+    }
   }
 
   if (isSqlConfigured && db) {
     try {
-      await db
-        .update(bookings)
-        .set({
-          ...updates,
-          updatedAt: new Date(),
-        })
-        .where(eq(bookings.bookingRef, bookingRef));
+      await db.update(bookings).set({ ...updates, updatedAt: new Date() }).where(eq(bookings.bookingRef, bookingRef));
     } catch {}
   }
 
   const idx = inMemoryBookings.findIndex(b => b.bookingRef && b.bookingRef.toUpperCase() === cleanRef);
   if (idx !== -1) {
-    inMemoryBookings[idx] = {
-      ...inMemoryBookings[idx],
-      ...updates,
-      updatedAt: new Date(),
-    };
+    inMemoryBookings[idx] = { ...inMemoryBookings[idx], ...updates, ...(updatedSupabase || {}), updatedAt: new Date() };
     persistBookings();
     return inMemoryBookings[idx];
-  } else {
-    // If not currently in inMemoryBookings, add to merge cache
-    const existing = await getBookingByRef(cleanRef, { allowUnpaid: true });
-    if (existing) {
-      const merged = { ...existing, ...updates, updatedAt: new Date() };
-      inMemoryBookings.push(merged);
-      persistBookings();
-      return merged;
-    }
+  }
+
+  if (updatedSupabase) {
+    inMemoryBookings.push(updatedSupabase);
+    persistBookings();
+    return updatedSupabase;
+  }
+
+  const existing = await getBookingByRef(cleanRef, { allowUnpaid: true });
+  if (existing) {
+    const merged = { ...existing, ...updates, updatedAt: new Date() };
+    inMemoryBookings.push(merged);
+    persistBookings();
+    return merged;
   }
   return null;
 }
@@ -2586,7 +2601,7 @@ export async function deleteBookingByRef(bookingRef: string) {
   const supabase = getSupabaseServerClient();
   if (supabase) {
     try {
-      await supabase.from('bookings').delete().ilike('notes', `%${cleanRef}%`);
+      await supabase.from('bookings').delete().eq('booking_reference', cleanRef);
     } catch {}
   }
 

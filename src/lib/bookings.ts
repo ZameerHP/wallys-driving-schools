@@ -118,8 +118,8 @@ export function deleteBooking(id: string): BookingItem[] {
 
 // Convert database record to standard BookingItem
 export function mapDbToBookingItem(row: any): BookingItem {
-  let pickup = row.pickup_address || row.pickupAddress || row.address || '';
-  let extractedRef = row.booking_ref || row.bookingRef || row.ref || '';
+  let pickup = row.pickup_location || row.pickup_address || row.pickupAddress || row.address || '';
+  let extractedRef = row.booking_reference || row.booking_ref || row.bookingRef || row.ref || '';
   let extractedSuburb = row.suburb || '';
   let extractedPrice = Number(row.package_price || row.packagePrice || row.price || 0);
   let extractedPayment = row.payment_status || row.paymentStatus || 'unpaid';
@@ -176,7 +176,13 @@ export function mapDbToBookingItem(row: any): BookingItem {
     packagePrice: extractedPrice,
     date: row.lesson_date || row.date || '',
     time: row.start_time || row.time || '',
-    status: (row.status as BookingItem['status']) || 'Pending',
+    status: (() => {
+      const s = String(row.status || '').trim().toLowerCase();
+      if (s === 'confirmed' || s === 'rescheduled') return 'Confirmed';
+      if (s === 'completed') return 'Completed';
+      if (s === 'cancelled' || s === 'canceled') return 'Cancelled';
+      return 'Pending';
+    })() as BookingItem['status'],
     notes: row.notes || undefined,
     createdAt: row.created_at || row.createdAt 
       ? new Date(row.created_at || row.createdAt).toISOString().split('T')[0] 
@@ -282,7 +288,7 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
     const res = await fetch(`/api/bookings/${encodeURIComponent(withPrefix)}`);
     if (res.ok) {
       const data = await res.json();
-      if (data && (data.bookingRef || data.booking_ref)) {
+      if (data && (data.bookingRef || data.booking_reference || data.booking_ref)) {
         addItems([mapDbToBookingItem(data)]);
       }
     }
@@ -293,7 +299,7 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
     const res = await fetch(`/api/bookings/${encodeURIComponent(clean)}`);
     if (res.ok) {
       const data = await res.json();
-      if (data && (data.bookingRef || data.booking_ref)) {
+      if (data && (data.bookingRef || data.booking_reference || data.booking_ref)) {
         addItems([mapDbToBookingItem(data)]);
       }
     }
@@ -307,7 +313,7 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
       if (Array.isArray(data)) {
         const qLower = clean.toLowerCase();
         const matches = data.filter((b: any) => {
-          const ref = (b.bookingRef || b.booking_ref || b.ref || '').toLowerCase();
+          const ref = (b.bookingRef || b.booking_reference || b.booking_ref || b.ref || '').toLowerCase();
           const email = (b.email || '').toLowerCase();
           const phone = (b.phone || '').toLowerCase();
           const name = (b.studentName || b.student_name || '').toLowerCase();
@@ -331,14 +337,14 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
     if (sb) {
       try {
         const orClauses = [
-          `booking_ref.ilike.%${clean}%`,
-          `booking_ref.ilike.%${withPrefix}%`,
+          `booking_reference.ilike.%${clean}%`,
+          `booking_reference.ilike.%${withPrefix}%`,
           `email.ilike.%${clean}%`,
           `phone.ilike.%${clean}%`,
           `student_name.ilike.%${clean}%`
         ];
         if (digitsOnly.length >= 3) {
-          orClauses.push(`booking_ref.ilike.%${digitsOnly}%`);
+          orClauses.push(`booking_reference.ilike.%${digitsOnly}%`);
         }
 
         const { data, error } = await sb
