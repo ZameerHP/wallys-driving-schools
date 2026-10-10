@@ -3102,7 +3102,11 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
       });
     }
     console.error("Error creating booking:", error);
-    res.status(500).json({ error: error.message || "Failed to create booking" });
+    const statusCode = Number(error?.status) || (error?.code === 'BOOKING_PERSISTENCE_FAILED' ? 503 : 500);
+    res.status(statusCode).json({
+      error: error?.code || "BOOKING_CREATE_FAILED",
+      message: error?.message || "Failed to create booking"
+    });
   }
 });
 

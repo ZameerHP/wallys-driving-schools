@@ -564,7 +564,7 @@ export async function updateBookingInDb(
   updates: Partial<BookingItem>,
   targetRef?: string
 ): Promise<BookingItem | null> {
-  const refToMatch = targetRef || (id.startsWith('WD-') ? id : undefined);
+  const refToMatch = targetRef || (/^(WD-|REF-)/i.test(id) ? id : undefined);
   let serverUpdatedItem: any = null;
 
   let token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
@@ -599,53 +599,19 @@ export async function updateBookingInDb(
     if (res) {
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || 'Failed to update booking');
+        throw new Error(errData.message || errData.error || 'Failed to update booking');
       }
       serverUpdatedItem = await res.json();
+    } else {
+      throw new Error('Unable to identify booking reference for update');
     }
   } catch (err: any) {
-    if (err?.message?.includes('already booked') || err?.message?.includes('available')) {
-      throw err;
-    }
     console.warn('Failed to patch to Backend API:', err);
+    throw err;
   }
 
-  // 2. Update Supabase if configured
-  if (isSupabaseConfigured) {
-    const sb = getSupabase();
-    if (sb) {
-      try {
-        const sbUpdates: Record<string, any> = {};
-        if (updates.status) sbUpdates.status = updates.status;
-        if (updates.date) sbUpdates.lesson_date = updates.date;
-        if (updates.time) sbUpdates.start_time = updates.time;
-        if (updates.packageTitle) sbUpdates.lesson_type = updates.packageTitle;
-        if (updates.studentName) sbUpdates.student_name = updates.studentName;
-        if (updates.phone) sbUpdates.phone = updates.phone;
-        if (updates.email) sbUpdates.email = updates.email;
-        if (updates.suburb) sbUpdates.suburb = updates.suburb;
-        if (updates.pickupAddress !== undefined) sbUpdates.pickup_address = updates.pickupAddress;
-        if (updates.packagePrice !== undefined) sbUpdates.package_price = updates.packagePrice;
-        if (updates.paymentStatus) sbUpdates.payment_status = updates.paymentStatus;
-        if (updates.notes !== undefined) sbUpdates.notes = updates.notes;
-        else if (serverUpdatedItem?.notes) sbUpdates.notes = serverUpdatedItem.notes;
-        sbUpdates.updated_at = new Date().toISOString();
-
-        if (refToMatch) {
-          await sb.from('bookings').update(sbUpdates).ilike('notes', `%${refToMatch}%`);
-        } else {
-          const numId = parseInt(id.replace(/^b-/, ''), 10);
-          if (!isNaN(numId)) {
-            await sb.from('bookings').update(sbUpdates).eq('id', numId);
-          } else {
-            await sb.from('bookings').update(sbUpdates).ilike('notes', `%${id}%`);
-          }
-        }
-      } catch (err) {
-        console.warn('Supabase booking update notice:', err);
-      }
-    }
-  }
+  // 2. Backend is the authoritative writer. Direct browser writes are intentionally disabled
+  // because production Supabase uses RLS and a relational schema.
 
   // 3. Update local state
   const mergedUpdates: Partial<BookingItem> = {
@@ -663,7 +629,7 @@ export async function updateBookingInDb(
 
 // Delete booking from backend API, Supabase, and local storage
 export async function deleteBookingFromDb(id: string, targetRef?: string): Promise<void> {
-  const refToMatch = targetRef || (id.startsWith('WD-') ? id : undefined);
+  const refToMatch = targetRef || (/^(WD-|REF-)/i.test(id) ? id : undefined);
   const cleanId = String(id).replace(/^b-/, '');
   const numId = parseInt(cleanId, 10);
   let token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
@@ -700,23 +666,7 @@ export async function deleteBookingFromDb(id: string, targetRef?: string): Promi
     }
   }
 
-  // 3. Delete from Supabase if configured
-  if (isSupabaseConfigured) {
-    const sb = getSupabase();
-    if (sb) {
-      try {
-        if (refToMatch) {
-          await sb.from('bookings').delete().ilike('notes', `%${refToMatch}%`);
-        } else if (!isNaN(numId)) {
-          await sb.from('bookings').delete().eq('id', numId);
-        } else {
-          await sb.from('bookings').delete().ilike('notes', `%${id}%`);
-        }
-      } catch (err) {
-        console.warn('Supabase booking deletion notice:', err);
-      }
-    }
-  }
+  // 3. Backend is the authoritative deleter. Direct browser deletes are intentionally disabled.
 
   // 4. Delete from local state
   deleteBooking(id);
