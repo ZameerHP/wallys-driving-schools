@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
 import Stripe from "stripe";
+import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { 
   getBookings, 
   getBookingByRef, 
@@ -299,44 +300,76 @@ function persistInstructorSessions() {
   }
 }
 
+function getInstructorSessionSecret(): string {
+  return process.env.INSTRUCTOR_SESSION_SECRET ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.STRIPE_SECRET_KEY ||
+    '';
+}
+
+function signInstructorPayload(payload: string): string {
+  const secret = getInstructorSessionSecret();
+  if (!secret) throw new Error('Instructor session signing secret is not configured');
+  return createHmac('sha256', secret).update(payload).digest('base64url');
+}
+
+function createSignedInstructorToken(session: Omit<InstructorSession, 'token'>): string {
+  const payload = Buffer.from(JSON.stringify({
+    email: session.email,
+    name: session.name,
+    role: session.role,
+    expiresAt: session.expiresAt,
+    nonce: randomBytes(16).toString('hex')
+  })).toString('base64url');
+  return `wally.${payload}.${signInstructorPayload(payload)}`;
+}
+
 export function getOrRestoreInstructorSession(token: string): InstructorSession | null {
   if (!token || typeof token !== "string") return null;
   const clean = token.trim();
   if (!clean || clean === "null" || clean === "undefined") return null;
 
-  // 1. Check in-memory session cache
   const cached = activeInstructorSessions.get(clean);
   if (cached) {
-    if (!cached.expiresAt || Date.now() <= cached.expiresAt) {
-      return cached;
-    } else {
-      activeInstructorSessions.delete(clean);
-      persistInstructorSessions();
-    }
+    if (!cached.expiresAt || Date.now() <= cached.expiresAt) return cached;
+    activeInstructorSessions.delete(clean);
+    persistInstructorSessions();
   }
 
-  // 2. Wally is the authorized owner and lead instructor.
-  // Authorize known instructor token signatures and auto-restore session across server restarts.
-  const isInstructorToken =
-    clean === "wally_owner_session" ||
-    clean === "instructor_session" ||
-    clean.startsWith("inst_") ||
-    clean.startsWith("wally_");
+  // Stateless HMAC-signed sessions work across Vercel serverless instances.
+  // Never trust a token merely because it starts with "inst_" or "wally_".
+  const parts = clean.split('.');
+  if (parts.length !== 3 || parts[0] !== 'wally') return null;
 
-  if (isInstructorToken) {
+  try {
+    const expected = signInstructorPayload(parts[1]);
+    const expectedBytes = Buffer.from(expected);
+    const actualBytes = Buffer.from(parts[2]);
+    if (expectedBytes.length !== actualBytes.length || !timingSafeEqual(expectedBytes, actualBytes)) {
+      return null;
+    }
+
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (
+      payload.email !== 'wally@wallysdrivingschool.com.au' ||
+      payload.role !== 'instructor' ||
+      !Number.isFinite(payload.expiresAt) ||
+      payload.expiresAt <= Date.now() ||
+      typeof payload.nonce !== 'string'
+    ) return null;
+
     const restored: InstructorSession = {
       token: clean,
-      email: "wally@wallysdrivingschool.com.au",
-      name: "Wally (Owner & Lead Instructor)",
-      role: "instructor",
-      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days
+      email: payload.email,
+      name: 'Wally (Owner & Lead Instructor)',
+      role: 'instructor',
+      expiresAt: payload.expiresAt
     };
     activeInstructorSessions.set(clean, restored);
-    persistInstructorSessions();
     return restored;
+  } catch {
+    return null;
   }
-
-  return null;
 }
 
 export function extractInstructorToken(req: express.Request): string | null {
@@ -430,10 +463,23 @@ export function requireInstructorOrAuth(req: express.Request, res: express.Respo
 app.post("/api/auth/instructor-login", loginLimiter, (req, res) => {
   const { email, password } = req.body || {};
   const cleanEmail = sanitizeText(email).toLowerCase();
-  const cleanPass = (password || '').trim();
+  const cleanPass = typeof password === 'string' ? password : '';
+  const expectedPassword = process.env.INSTRUCTOR_PORTAL_PASSWORD;
+  const sessionSecret = getInstructorSessionSecret();
 
-  const expectedPassword = process.env.INSTRUCTOR_PORTAL_PASSWORD || "Wellard44#";
-  const isOwner = (cleanEmail === "wally@wallysdrivingschool.com.au" || cleanEmail === "wally") && cleanPass === expectedPassword;
+  // Do not ship a known default owner password. Configure the password in the
+  // deployment environment and use a stable server-side secret for signed sessions.
+  if (!expectedPassword || !sessionSecret) {
+    return res.status(503).json({
+      success: false,
+      error: "INSTRUCTOR_AUTH_NOT_CONFIGURED",
+      message: "Owner login is not configured securely. Set INSTRUCTOR_PORTAL_PASSWORD and INSTRUCTOR_SESSION_SECRET in the deployment environment."
+    });
+  }
+
+  const isOwner =
+    (cleanEmail === "wally@wallysdrivingschool.com.au" || cleanEmail === "wally") &&
+    cleanPass === expectedPassword;
 
   if (!isOwner) {
     return res.status(401).json({
@@ -443,16 +489,15 @@ app.post("/api/auth/instructor-login", loginLimiter, (req, res) => {
     });
   }
 
-  const token = `inst_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-  const session: InstructorSession = {
-    token,
+  const sessionData = {
     email: "wally@wallysdrivingschool.com.au",
     name: "Wally (Owner & Lead Instructor)",
     role: "instructor",
-    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days
+    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000
   };
+  const token = createSignedInstructorToken(sessionData);
+  const session: InstructorSession = { ...sessionData, token };
   activeInstructorSessions.set(token, session);
-  persistInstructorSessions();
 
   res.json({
     success: true,
