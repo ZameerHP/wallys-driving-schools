@@ -1117,40 +1117,43 @@ const CANONICAL_PRICES: Record<string, number> = {
 };
 
 function computeVerifiedOrder(items: any[]): {
-  verifiedItems: Array<{ name: string; unitPrice: number; quantity: number; lineTotal: number }>;
+  verifiedItems: Array<{ id?: string; name: string; unitPrice: number; quantity: number; lineTotal: number }>;
   totalAmount: number;
 } {
   let total = 0;
-  const verifiedItems: Array<{ name: string; unitPrice: number; quantity: number; lineTotal: number }> = [];
-
+  const verifiedItems: Array<{ id?: string; name: string; unitPrice: number; quantity: number; lineTotal: number }> = [];
   const rawItems = Array.isArray(items) && items.length > 0 ? items : [{ name: '1 Hour Driving Lesson', quantity: 1 }];
 
   for (const raw of rawItems) {
-    const qty = Math.max(1, parseInt(String(raw.quantity || 1), 10) || 1);
-    const rawName = String(raw.name || raw.title || raw.id || '1 Hour Driving Lesson').trim();
-    const nameLower = rawName.toLowerCase();
-    
-    let unitPrice = 65.0; // standard default
+    const qty = Number.parseInt(String(raw.quantity || 1), 10);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 20) {
+      throw new Error('Invalid package quantity.');
+    }
 
-    if (CANONICAL_PRICES[nameLower]) {
+    const rawId = String(raw.id || '').trim().toLowerCase();
+    const rawName = String(raw.name || raw.title || raw.id || '').trim();
+    const nameLower = rawName.toLowerCase();
+    let unitPrice: number | undefined;
+
+    // Product ID must win over display name: both test packages share the same title.
+    if (rawId && Object.prototype.hasOwnProperty.call(CANONICAL_PRICES, rawId)) {
+      unitPrice = CANONICAL_PRICES[rawId];
+    } else if (Object.prototype.hasOwnProperty.call(CANONICAL_PRICES, nameLower)) {
       unitPrice = CANONICAL_PRICES[nameLower];
-    } else if (raw.id && CANONICAL_PRICES[String(raw.id).toLowerCase()]) {
-      unitPrice = CANONICAL_PRICES[String(raw.id).toLowerCase()];
     } else {
-      const match = Object.entries(CANONICAL_PRICES).find(([key]) => nameLower.includes(key));
-      if (match) {
-        unitPrice = match[1];
-      } else if (typeof raw.unitPrice === 'number' && raw.unitPrice > 0) {
-        unitPrice = raw.unitPrice;
-      } else if (typeof raw.packagePrice === 'number' && raw.packagePrice > 0) {
-        unitPrice = raw.packagePrice;
-      }
+      const match = Object.entries(CANONICAL_PRICES).find(([key]) => nameLower && nameLower.includes(key));
+      if (match) unitPrice = match[1];
+    }
+
+    // Never accept a price supplied by the browser for an unknown product.
+    if (unitPrice === undefined || !Number.isFinite(unitPrice) || unitPrice <= 0) {
+      throw new Error(`Unknown driving lesson package: ${rawName || rawId || 'unnamed package'}`);
     }
 
     const lineTotal = Number((unitPrice * qty).toFixed(2));
     total += lineTotal;
-
     verifiedItems.push({
+      ...(rawId ? { id: rawId } : {}),
       name: rawName,
       unitPrice,
       quantity: qty,
@@ -1158,10 +1161,7 @@ function computeVerifiedOrder(items: any[]): {
     });
   }
 
-  return {
-    verifiedItems,
-    totalAmount: Number(total.toFixed(2)),
-  };
+  return { verifiedItems, totalAmount: Number(total.toFixed(2)) };
 }
 
 // 1. Calculate authoritative total amount server-side
@@ -1240,7 +1240,13 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
     }
 
     if (!process.env.STRIPE_SECRET_KEY) {
-      // Sandbox fallback: Return simulated client secret without creating any unpaid pre-booking
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({
+          error: "STRIPE_NOT_CONFIGURED",
+          message: "Online payments are temporarily unavailable. Please contact Wally before attempting to pay."
+        });
+      }
+      // Development-only simulation: never enable fake payments in production.
       const simPiId = `pi_sim_${Date.now()}_${targetRef}`;
       return res.json({
         sandboxMode: true,
@@ -1375,7 +1381,13 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     const paymentMethodName = req.body.paymentMethod || (paymentIntentId.startsWith("pi_sim_") ? "Stripe" : "Stripe Card / Google Pay");
 
     if (paymentIntentId.startsWith("pi_sim_")) {
-      // Sandbox mode: verified simulation
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(400).json({
+          error: "SIMULATED_PAYMENT_NOT_ALLOWED",
+          message: "Simulated payments cannot confirm production bookings."
+        });
+      }
+      // Development-only simulation.
       paidAmount = totalAmount > 0 ? totalAmount : (bookingData?.packagePrice || 65);
     } else {
       if (!process.env.STRIPE_SECRET_KEY) {
@@ -1386,11 +1398,23 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
       verifiedPaymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
       // Verify payment actually succeeded on Stripe
-      if (verifiedPaymentIntent.status !== "succeeded" && verifiedPaymentIntent.status !== "processing") {
+      if (verifiedPaymentIntent.status !== "succeeded") {
         return res.status(400).json({
           error: "PAYMENT_NOT_COMPLETED",
           message: `Stripe payment status is: ${verifiedPaymentIntent.status}. Expected 'succeeded'.`,
           status: verifiedPaymentIntent.status,
+        });
+      }
+      if (verifiedPaymentIntent.currency !== 'aud') {
+        return res.status(400).json({
+          error: "PAYMENT_CURRENCY_MISMATCH",
+          message: "The payment currency does not match the required AUD currency."
+        });
+      }
+      if (Array.isArray(items) && items.length > 0 && verifiedPaymentIntent.amount !== Math.round(totalAmount * 100)) {
+        return res.status(400).json({
+          error: "PAYMENT_AMOUNT_MISMATCH",
+          message: "The verified Stripe amount does not match the selected lesson package total."
         });
       }
       paidAmount = verifiedPaymentIntent.amount / 100;
