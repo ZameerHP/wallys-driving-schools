@@ -759,8 +759,12 @@ app.post("/api/create-checkout-session", async (req, res) => {
           stripeSessionId: null,
         });
       }
-    } catch (preErr) {
-      console.warn("[Checkout] Notice on pre-creating booking:", preErr);
+    } catch (preErr: any) {
+      console.error("[Checkout] Failed to persist booking before checkout:", preErr?.message || preErr);
+      return res.status(503).json({
+        error: "BOOKING_PERSISTENCE_FAILED",
+        message: "Booking could not be saved. Please contact Wally before retrying payment."
+      });
     }
 
     if (!process.env.STRIPE_SECRET_KEY) {
