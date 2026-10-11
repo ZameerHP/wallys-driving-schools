@@ -473,6 +473,15 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     loadData();
 
+    // Keep the open owner dashboard in sync with bookings created from the
+    // public checkout on another device/tab. Refresh only while the tab is visible.
+    const bookingRefreshTimer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      fetchBookingsFromDb()
+        .then(setBookingsList)
+        .catch((err) => console.warn('Automatic booking refresh failed:', err));
+    }, 20000);
+
     const handleAvailabilitySync = (e?: any) => {
       // If event was purely a recurring weekly days-off toggle, do not reload blocked days to prevent stutter
       const detail = e?.detail || e?.data;
@@ -494,6 +503,7 @@ function InstructorDashboard({ onLogout }: { onLogout: () => void }) {
     } catch {}
 
     return () => {
+      window.clearInterval(bookingRefreshTimer);
       window.removeEventListener('wallys-availability-updated', handleAvailabilitySync);
       window.removeEventListener('storage', handleAvailabilitySync);
       if (channel) channel.close();
