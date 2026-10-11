@@ -195,186 +195,64 @@ export function mapDbToBookingItem(row: any): BookingItem {
 
 // Fetch all bookings from backend database (Cloud SQL), Supabase, and local storage
 export async function fetchBookingsFromDb(token?: string | null): Promise<BookingItem[]> {
-  const bookingMap = new Map<string, BookingItem>();
-
-  const addItems = (items: BookingItem[]) => {
-    for (const item of items) {
-      if (!item || !item.ref) continue;
-      const existing = bookingMap.get(item.ref);
-      if (!existing) {
-        bookingMap.set(item.ref, item);
-      } else {
-        // Merge updates, prioritizing newer fields
-        bookingMap.set(item.ref, {
-          ...existing,
-          ...item,
-          pickupAddress: item.pickupAddress || existing.pickupAddress,
-          isRescheduled: item.isRescheduled || existing.isRescheduled
-        });
-      }
-    }
-  };
-
-  // 1. Load from Backend API (/api/bookings) - primary source of truth
-  try {
-    const effectiveToken = token || (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null);
-    const headers: Record<string, string> = {};
-    if (effectiveToken) {
-      headers['Authorization'] = `Bearer ${effectiveToken}`;
-      headers['x-instructor-token'] = effectiveToken;
-    }
-    const res = await fetch('/api/bookings', { headers });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        addItems(data.map(mapDbToBookingItem));
-      }
-    }
-  } catch (err) {
-    console.warn('Backend API fetch error:', err);
+  const effectiveToken = token || (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null);
+  const headers: Record<string, string> = {};
+  if (effectiveToken) {
+    headers['Authorization'] = `Bearer ${effectiveToken}`;
+    headers['x-instructor-token'] = effectiveToken;
   }
 
-  // 2. Load from Supabase if configured
-  if (isSupabaseConfigured) {
-    const sb = getSupabase();
-    if (sb) {
-      try {
-        const { data, error } = await sb
-          .from('bookings')
-          .select('*, students(*), instructors(*)')
-          .order('created_at', { ascending: false });
-        if (!error && Array.isArray(data) && data.length > 0) {
-          addItems(data.map(mapDbToBookingItem));
-        }
-      } catch (err) {
-        console.warn('Supabase fetch error:', err);
-      }
-    }
+  // The server is the single source of truth. Never merge browser cache or direct
+  // anon-key Supabase results into the owner dashboard: stale cache can resurrect
+  // deleted bookings and client-side writes can create duplicates.
+  const res = await fetch('/api/bookings', { headers, cache: 'no-store' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message || body.error || `Unable to load bookings (HTTP ${res.status})`);
   }
 
-  // 3. Merge local cached bookings
-  const local = getStoredBookings();
-  addItems(local);
-
-  const combined = Array.from(bookingMap.values());
-  if (combined.length > 0) {
-    saveBookings(combined);
+  const data = await res.json();
+  if (!Array.isArray(data)) {
+    throw new Error('Booking API returned an invalid response.');
   }
 
-  return combined;
+  const items = data.map(mapDbToBookingItem);
+  saveBookings(items);
+  return items;
 }
 
-// Search bookings by booking code / number (e.g. "8492", "WD-8492"), email, or phone
+// Customer-facing lookup is reference-code-only. Do not query or merge the full
+// booking list in the browser: that can expose other customers' personal data.
 export async function searchCustomerBookings(query: string): Promise<BookingItem[]> {
-  const raw = query.trim();
+  const raw = query.trim().replace(/^#/, '').trim();
   if (!raw) return [];
 
-  const clean = raw.replace(/^#/, '').trim();
-  const digitsOnly = clean.replace(/[^0-9]/g, '');
-  const withPrefix = clean.toUpperCase().startsWith('WD-') ? clean.toUpperCase() : `WD-${clean.toUpperCase()}`;
+  const normalized = raw.toUpperCase();
+  const candidates = normalized.startsWith('WD-')
+    ? [normalized]
+    : [`WD-${normalized}`, normalized];
+  const uniqueCandidates = [...new Set(candidates)];
 
-  const resultsMap = new Map<string, BookingItem>();
-  const addItems = (items: BookingItem[]) => {
-    for (const item of items) {
-      if (item && item.ref && !resultsMap.has(item.ref)) {
-        // Return active and confirmed bookings to the customer Manage Booking screen
-        resultsMap.set(item.ref, item);
+  for (const ref of uniqueCandidates) {
+    try {
+      const res = await fetch(`/api/bookings/${encodeURIComponent(ref)}`, { cache: 'no-store' });
+      if (res.status === 404) continue;
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || body.error || 'Unable to look up this booking right now.');
       }
-    }
-  };
-
-  // 1. Direct query to Backend API by reference
-  try {
-    const res = await fetch(`/api/bookings/${encodeURIComponent(withPrefix)}`);
-    if (res.ok) {
       const data = await res.json();
-      if (data && (data.bookingRef || data.booking_reference || data.booking_ref)) {
-        addItems([mapDbToBookingItem(data)]);
+      if (data && (data.bookingRef || data.booking_reference || data.booking_ref || data.bookingRef)) {
+        return [mapDbToBookingItem(data)];
       }
-    }
-  } catch {}
-
-  // Also query without prefix if user entered reference number
-  try {
-    const res = await fetch(`/api/bookings/${encodeURIComponent(clean)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && (data.bookingRef || data.booking_reference || data.booking_ref)) {
-        addItems([mapDbToBookingItem(data)]);
-      }
-    }
-  } catch {}
-
-  // 2. Query all backend API bookings to match by email, phone, or digits
-  try {
-    const res = await fetch('/api/bookings?includeUnpaid=true');
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        const qLower = clean.toLowerCase();
-        const matches = data.filter((b: any) => {
-          const ref = (b.bookingRef || b.booking_reference || b.booking_ref || b.ref || '').toLowerCase();
-          const email = (b.email || '').toLowerCase();
-          const phone = (b.phone || '').toLowerCase();
-          const name = (b.studentName || b.student_name || '').toLowerCase();
-          return (
-            ref.includes(qLower) ||
-            ref.replace('wd-', '').includes(qLower) ||
-            (digitsOnly && ref.includes(digitsOnly)) ||
-            email.includes(qLower) ||
-            phone.includes(qLower) ||
-            name.includes(qLower)
-          );
-        });
-        addItems(matches.map(mapDbToBookingItem));
-      }
-    }
-  } catch {}
-
-  // 3. Query Supabase if configured
-  if (isSupabaseConfigured) {
-    const sb = getSupabase();
-    if (sb) {
-      try {
-        const orClauses = [
-          `booking_reference.ilike.%${clean}%`,
-          `booking_reference.ilike.%${withPrefix}%`,
-          `email.ilike.%${clean}%`,
-          `phone.ilike.%${clean}%`,
-          `student_name.ilike.%${clean}%`
-        ];
-        if (digitsOnly.length >= 3) {
-          orClauses.push(`booking_reference.ilike.%${digitsOnly}%`);
-        }
-
-        const { data, error } = await sb
-          .from('bookings')
-          .select('*')
-          .or(orClauses.join(','));
-        
-        if (!error && Array.isArray(data) && data.length > 0) {
-          addItems(data.map(mapDbToBookingItem));
-        }
-      } catch (err) {
-        console.warn('Supabase customer booking search error:', err);
-      }
+    } catch (error) {
+      if (error instanceof Error && error.message !== 'Failed to fetch') throw error;
+      console.warn('Customer booking lookup temporarily unavailable:', error);
+      throw new Error('Booking lookup is temporarily unavailable. Please try again in a moment.');
     }
   }
 
-  // 4. Local storage fallback match
-  const local = getStoredBookings();
-  const qLower = clean.toLowerCase();
-  const localMatches = local.filter(b => 
-    b.ref.toLowerCase().includes(qLower) ||
-    b.ref.toLowerCase().replace('wd-', '').includes(qLower) ||
-    (digitsOnly && b.ref.includes(digitsOnly)) ||
-    b.email.toLowerCase().includes(qLower) ||
-    b.phone.toLowerCase().includes(qLower) ||
-    b.studentName.toLowerCase().includes(qLower)
-  );
-  addItems(localMatches);
-
-  return Array.from(resultsMap.values());
+  return [];
 }
 
 export async function lookupBookingFromDb(ref: string): Promise<BookingItem | null> {
@@ -404,140 +282,56 @@ export interface ManualBookingData {
 }
 
 // Create new driving lesson booking across database, Supabase, and local storage
+// Create bookings through the server only. The server validates availability,
+// verifies payment/authentication and persists the canonical Supabase record.
+// Never fall back to localStorage or issue a second browser-side Supabase insert:
+// either behavior can tell customers a booking succeeded when it was not saved.
 export async function createBookingInDb(
-  booking: Omit<BookingItem, 'id' | 'ref' | 'createdAt'> & Partial<ManualBookingData> & { verificationToken?: string }, 
+  booking: Omit<BookingItem, 'id' | 'ref' | 'createdAt'> & Partial<ManualBookingData> & { verificationToken?: string },
   token?: string | null
 ): Promise<BookingItem> {
   const effectiveToken = token || (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null);
   const randomNum = Math.floor(1000 + Math.random() * 9000);
   const bookingRef = booking.bookingRef || `WD-${randomNum}`;
 
-  let finalItem: BookingItem | null = null;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (booking.verificationToken) {
+    headers['x-email-verification-token'] = booking.verificationToken;
+  }
+  if (effectiveToken) {
+    headers['Authorization'] = `Bearer ${effectiveToken}`;
+    headers['x-instructor-token'] = effectiveToken;
+  }
 
-  // 1. Authoritative Backend Check and Insert
+  let res: Response;
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (booking.verificationToken) {
-      headers['x-email-verification-token'] = booking.verificationToken;
-    }
-    if (effectiveToken) {
-      headers['Authorization'] = `Bearer ${effectiveToken}`;
-      headers['x-instructor-token'] = effectiveToken;
-    }
-    const res = await fetch('/api/bookings', {
+    res = await fetch('/api/bookings', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ 
-        ...booking, 
+      body: JSON.stringify({
+        ...booking,
         bookingRef,
         pickupAddress: booking.pickupAddress || null,
         status: booking.status || 'Pending'
       }),
     });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.message || errData.error || 'Failed to create booking in database.');
-    }
-
-    const data = await res.json();
-    finalItem = mapDbToBookingItem(data);
-  } catch (err: any) {
-    // If backend threw an availability error or validation error, rethrow immediately
-    if (err?.message?.includes('time slot') || err?.message?.includes('reserved') || err?.message?.includes('available') || err?.message?.includes('required') || err?.message?.includes('phone') || err?.message?.includes('email') || err?.message?.toLowerCase().includes('verif')) {
-      throw err;
-    }
-    console.warn('Backend API error, falling back:', err);
+  } catch (error) {
+    console.error('Booking API request failed:', error);
+    throw new Error('We could not confirm the booking server response. Please check Manage Booking before trying again; do not submit payment again.');
   }
 
-  // Fallback if backend was unreachable (e.g. static preview)
-  if (!finalItem) {
-    finalItem = addBooking({
-      ...booking,
-      ref: bookingRef,
-    } as any);
-  } else {
-    // Update local storage cache
-    const current = getStoredBookings(true);
-    saveBookings([finalItem, ...current.filter(c => c.ref !== finalItem!.ref)]);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'The booking could not be saved. Please review the details and try again.');
   }
 
-  // 2. Send to Supabase if configured
-  if (isSupabaseConfigured) {
-    const sb = getSupabase();
-    if (sb) {
-      try {
-        let studentId: any = null;
-        if (booking.studentName) {
-          try {
-            const { data: stdData } = await sb
-              .from('students')
-              .upsert({
-                full_name: booking.studentName,
-                phone: booking.phone,
-                email: booking.email,
-              })
-              .select('id')
-              .single();
-            if (stdData?.id) {
-              studentId = stdData.id;
-            }
-          } catch {}
-        }
-
-        const notesWithMeta = `[BookingRef: ${bookingRef}] [Price: $${booking.packagePrice}] [Suburb: ${booking.suburb}] ${booking.pickupAddress ? `[Pickup: ${booking.pickupAddress}]` : ''} ${booking.notes || ''}`.trim();
-
-        // Attempt relational schema insert
-        const relationalPayload: Record<string, any> = {
-          student_id: studentId,
-          lesson_type: booking.packageTitle,
-          lesson_date: booking.date,
-          start_time: booking.time,
-          status: booking.status || 'Pending',
-          notes: notesWithMeta,
-        };
-
-        const { data: relData, error: relError } = await sb
-          .from('bookings')
-          .insert(relationalPayload)
-          .select('*, students(*), instructors(*)')
-          .single();
-
-        if (!relError && relData) {
-          finalItem = mapDbToBookingItem(relData);
-        } else {
-          // Fallback to flat schema insert if columns exist
-          const flatPayload = {
-            booking_ref: bookingRef,
-            student_name: booking.studentName,
-            phone: booking.phone,
-            email: booking.email,
-            suburb: booking.suburb,
-            pickup_address: booking.pickupAddress || null,
-            package_title: booking.packageTitle,
-            package_price: booking.packagePrice,
-            date: booking.date,
-            time: booking.time,
-            status: booking.status || 'Pending',
-            notes: notesWithMeta,
-            payment_status: 'unpaid',
-          };
-          const { data: flatData, error: flatError } = await sb.from('bookings').insert(flatPayload).select().single();
-          if (!flatError && flatData) {
-            finalItem = mapDbToBookingItem(flatData);
-          }
-        }
-      } catch (err) {
-        console.warn('Supabase booking insert failed:', err);
-      }
-    }
+  const finalItem = mapDbToBookingItem(data);
+  if (!finalItem.ref) {
+    throw new Error('The server did not return a booking reference. Please contact Wally before retrying.');
   }
 
-  // Update local storage with final synced item
-  const current = getStoredBookings();
-  saveBookings([finalItem, ...current.filter(c => c.ref !== finalItem.ref)]);
+  const current = getStoredBookings(true);
+  saveBookings([finalItem, ...current.filter(item => item.ref !== finalItem.ref)]);
   return finalItem;
 }
 
