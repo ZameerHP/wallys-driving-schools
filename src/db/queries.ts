@@ -408,11 +408,13 @@ export async function getBookingByRef(bookingRef: string, options?: { allowUnpai
   // in one .or() expression: a missing column makes the entire lookup fail.
   const supabase = getSupabaseServerClient();
   if (supabase) {
+    // The production Supabase schema uses booking_reference (not booking_ref).
+    // Keep every lookup compatible with the real schema so a missing legacy column
+    // never generates noisy errors or masks the actual lookup result.
     const lookupAttempts: Array<() => Promise<any>> = [
       () => supabase.from('bookings').select('*').eq('booking_reference', withPrefix).limit(1),
       () => supabase.from('bookings').select('*').eq('booking_reference', cleanRef).limit(1),
-      () => supabase.from('bookings').select('*').eq('booking_ref', withPrefix).limit(1),
-      () => supabase.from('bookings').select('*').eq('booking_ref', cleanRef).limit(1),
+      () => supabase.from('bookings').select('*').ilike('booking_reference', withPrefix).limit(1),
       () => supabase.from('bookings').select('*').ilike('notes', `%[BookingRef: ${withPrefix}]%`).limit(1),
       () => supabase.from('bookings').select('*').ilike('notes', `%${withPrefix}%`).limit(1),
     ];
