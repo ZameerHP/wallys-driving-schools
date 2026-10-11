@@ -307,25 +307,41 @@ export async function getBookings(filter?: { email?: string; userId?: string; in
   loadPersistedBookings();
   const mergedMap = new Map<string, any>();
 
-  // 1. Fetch from Supabase
+  // 1. Fetch from Supabase. Some production schemas do not expose PostgREST
+  // relationships for students/instructors, so retry with a plain table select.
   const supabase = getSupabaseServerClient();
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      let result = await supabase
         .from('bookings')
         .select('*, students(*), instructors(*)')
         .order('created_at', { ascending: false });
 
-      if (!error && Array.isArray(data)) {
-        for (const row of data) {
+      if (result.error) {
+        console.warn('[Supabase Server] Joined bookings query failed; retrying flat select:', result.error.message);
+        result = await supabase
+          .from('bookings')
+          .select('*')
+          .order('created_at', { ascending: false });
+      }
+
+      // Last-resort query avoids depending on created_at in older schemas.
+      if (result.error) {
+        result = await supabase.from('bookings').select('*');
+      }
+
+      if (!result.error && Array.isArray(result.data)) {
+        for (const row of result.data) {
           const mapped = mapSupabaseRowToBooking(row);
           if (mapped.bookingRef) {
             mergedMap.set(mapped.bookingRef.toUpperCase(), mapped);
           }
         }
+      } else if (result.error) {
+        console.error('[Supabase Server] Unable to list bookings:', result.error.message);
       }
     } catch (err: any) {
-      console.warn('[Supabase Server] getBookings notice:', err?.message || err);
+      console.error('[Supabase Server] getBookings failed:', err?.message || err);
     }
   }
 
@@ -388,23 +404,39 @@ export async function getBookingByRef(bookingRef: string, options?: { allowUnpai
     return false;
   };
 
-  // 1. Check Supabase
+  // 1. Check Supabase with schema-tolerant lookups. Do not combine columns
+  // in one .or() expression: a missing column makes the entire lookup fail.
   const supabase = getSupabaseServerClient();
   if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .select('*, students(*), instructors(*)')
-        .or(`booking_reference.eq.${cleanRef},booking_reference.eq.${withPrefix},notes.ilike.%${cleanRef}%,notes.ilike.%${withPrefix}%`)
-        .limit(1);
+    const lookupAttempts: Array<() => Promise<any>> = [
+      () => supabase.from('bookings').select('*').eq('booking_reference', withPrefix).limit(1),
+      () => supabase.from('bookings').select('*').eq('booking_reference', cleanRef).limit(1),
+      () => supabase.from('bookings').select('*').eq('booking_ref', withPrefix).limit(1),
+      () => supabase.from('bookings').select('*').eq('booking_ref', cleanRef).limit(1),
+      () => supabase.from('bookings').select('*').ilike('notes', `%[BookingRef: ${withPrefix}]%`).limit(1),
+      () => supabase.from('bookings').select('*').ilike('notes', `%${withPrefix}%`).limit(1),
+    ];
 
-      if (!error && data && data.length > 0) {
-        const found = mapSupabaseRowToBooking(data[0]);
-        if (found && (options?.allowUnpaid !== false || found.paymentStatus === 'paid')) {
-          return found;
+    for (const attempt of lookupAttempts) {
+      try {
+        const result = await attempt();
+        if (result.error) {
+          // Try the next schema-compatible lookup rather than treating a
+          // schema mismatch as "Booking not found".
+          console.warn('[Supabase Server] Booking lookup variant failed:', result.error.message);
+          continue;
         }
+        const row = Array.isArray(result.data) ? result.data[0] : result.data;
+        if (row) {
+          const found = mapSupabaseRowToBooking(row);
+          if (found && (options?.allowUnpaid !== false || found.paymentStatus === 'paid')) {
+            return found;
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Supabase Server] Booking lookup attempt failed:', err?.message || err);
       }
-    } catch {}
+    }
   }
 
   // 2. Check Cloud SQL
