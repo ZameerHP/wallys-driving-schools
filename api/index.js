@@ -3533,6 +3533,7 @@ async function saveBookingToSupabase(data) {
       const existingId = existingRows[0].id;
       const { data: updatedRow, error: updateErr } = await supabase.from("bookings").update({
         student_id: studentId,
+        booking_reference: data.bookingRef,
         lesson_type: data.packageTitle,
         lesson_date: data.date,
         start_time: data.time,
@@ -3546,6 +3547,7 @@ async function saveBookingToSupabase(data) {
       }
     }
     const insertPayload = {
+      booking_reference: data.bookingRef,
       student_id: studentId,
       lesson_type: data.packageTitle,
       lesson_date: data.date,
