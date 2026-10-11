@@ -1438,8 +1438,8 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     // the server-verified PaymentIntent. Never replace an unknown reference with
     // a random reference after a real payment has already been taken.
     const verifiedMetadata = verifiedPaymentIntent?.metadata || {};
-    const targetRef = bookingRef || bookingData?.bookingRef || bookingData?.ref || verifiedMetadata.bookingRef ||
-      (paymentIntentId.startsWith("pi_sim_") && process.env.NODE_ENV !== 'production' ? `WD-${Math.floor(1000 + Math.random() * 9000)}` : "");
+    const targetRef = String(bookingRef || bookingData?.bookingRef || bookingData?.ref || verifiedMetadata.bookingRef ||
+      (paymentIntentId.startsWith("pi_sim_") && process.env.NODE_ENV !== 'production' ? `WD-${Math.floor(1000 + Math.random() * 9000)}` : "")).trim().toUpperCase();
 
     // Bind a real Stripe payment to the booking reference and customer/lesson
     // details that were attached by the server when the intent was created.
