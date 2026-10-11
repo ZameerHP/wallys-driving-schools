@@ -2215,15 +2215,35 @@ async function getBookingByRef(bookingRef, options) {
   };
   const supabase = getSupabaseServerClient();
   if (supabase) {
-    try {
-      const { data, error } = await supabase.from("bookings").select("*, students(*), instructors(*)").or(`notes.ilike.%${cleanRef}%,notes.ilike.%${withPrefix}%,booking_ref.ilike.%${cleanRef}%`).limit(1);
-      if (!error && data && data.length > 0) {
-        const found2 = mapSupabaseRowToBooking(data[0]);
-        if (found2 && (options?.allowUnpaid !== false || found2.paymentStatus === "paid")) {
-          return found2;
+    // The live Supabase schema uses booking_reference (not booking_ref).
+    // Some older records keep the reference only inside notes, so try each
+    // supported lookup independently; one missing column must not break lookup.
+    const lookupAttempts = [
+      () => supabase.from("bookings").select("*, students(*), instructors(*)")
+        .ilike("notes", `%${cleanRef}%`).limit(1),
+      () => supabase.from("bookings").select("*, students(*), instructors(*)")
+        .ilike("notes", `%${withPrefix}%`).limit(1),
+      () => supabase.from("bookings").select("*, students(*), instructors(*)")
+        .eq("booking_reference", cleanRef).limit(1),
+      () => supabase.from("bookings").select("*, students(*), instructors(*)")
+        .eq("booking_reference", withPrefix).limit(1)
+    ];
+    for (const runLookup of lookupAttempts) {
+      try {
+        const { data, error } = await runLookup();
+        if (error) {
+          console.warn("[Supabase Server] Booking lookup attempt failed:", error.message);
+          continue;
         }
+        const row = data?.[0];
+        if (!row) continue;
+        const found = mapSupabaseRowToBooking(row);
+        if (found && (options?.allowUnpaid !== false || found.paymentStatus === "paid")) {
+          return found;
+        }
+      } catch (lookupError) {
+        console.warn("[Supabase Server] Booking lookup attempt threw:", lookupError?.message || lookupError);
       }
-    } catch {
     }
   }
   if (isSqlConfigured && db) {
