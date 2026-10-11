@@ -1322,7 +1322,7 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     );
 
     let paidAmount = totalAmount;
-    const targetRef = bookingRef || bookingData?.bookingRef || bookingData?.ref || `WD-${Math.floor(1000 + Math.random() * 9000)}`;
+    let verifiedPaymentIntent: Stripe.PaymentIntent | null = null;
     const paymentMethodName = req.body.paymentMethod || (paymentIntentId.startsWith("pi_sim_") ? "Stripe" : "Stripe Card / Google Pay");
 
     if (paymentIntentId.startsWith("pi_sim_")) {
@@ -1334,17 +1334,43 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
       }
 
       const stripe = getStripe();
-      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      verifiedPaymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
       // Verify payment actually succeeded on Stripe
-      if (paymentIntent.status !== "succeeded" && paymentIntent.status !== "processing") {
+      if (verifiedPaymentIntent.status !== "succeeded" && verifiedPaymentIntent.status !== "processing") {
         return res.status(400).json({
           error: "PAYMENT_NOT_COMPLETED",
-          message: `Stripe payment status is: ${paymentIntent.status}. Expected 'succeeded'.`,
-          status: paymentIntent.status,
+          message: `Stripe payment status is: ${verifiedPaymentIntent.status}. Expected 'succeeded'.`,
+          status: verifiedPaymentIntent.status,
         });
       }
-      paidAmount = paymentIntent.amount / 100;
+      paidAmount = verifiedPaymentIntent.amount / 100;
+    }
+
+    // When the client omits bookingData, recover only from metadata attached to
+    // the server-verified PaymentIntent. Never replace an unknown reference with
+    // a random reference after a real payment has already been taken.
+    const verifiedMetadata = verifiedPaymentIntent?.metadata || {};
+    const targetRef = bookingRef || bookingData?.bookingRef || bookingData?.ref || verifiedMetadata.bookingRef ||
+      (paymentIntentId.startsWith("pi_sim_") ? `WD-${Math.floor(1000 + Math.random() * 9000)}` : "");
+    const resolvedBookingData = bookingData || (verifiedPaymentIntent ? {
+      studentName: verifiedMetadata.customerName || "Student Driver",
+      phone: verifiedMetadata.customerPhone || "",
+      email: verifiedMetadata.customerEmail || verifiedPaymentIntent.receipt_email || "",
+      suburb: verifiedMetadata.suburb || "Rockingham, WA",
+      pickupAddress: verifiedMetadata.pickupAddress || null,
+      packageTitle: verifiedMetadata.packageTitle || verifiedItems[0]?.name || "Driving Lesson",
+      date: verifiedMetadata.bookingDate || new Date().toISOString().split("T")[0],
+      time: verifiedMetadata.bookingTime || "09:00 AM",
+      packagePrice: paidAmount,
+    } : null);
+
+    if (!targetRef) {
+      return res.status(400).json({
+        error: "BOOKING_REFERENCE_MISSING",
+        paymentStatus: "paid",
+        message: "Payment was verified, but its booking reference is missing. Contact Wally before attempting payment again.",
+      });
     }
 
     let finalBooking: any = null;
@@ -1378,23 +1404,36 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     }
 
     // If no existing booking, create new verified booking in DB
-    if (!finalBooking && bookingData) {
+    if (!finalBooking && resolvedBookingData) {
       finalBooking = await createBooking({
         bookingRef: targetRef,
-        userId: bookingData?.userId || null,
-        studentName: sanitizeText(bookingData?.studentName || "Student Driver"),
-        phone: sanitizeText(bookingData?.phone || ""),
-        email: sanitizeText(bookingData?.email || ""),
-        suburb: sanitizeText(bookingData?.suburb || "Rockingham, WA"),
-        pickupAddress: sanitizeText(bookingData?.pickupAddress || null),
-        packageTitle: sanitizeText(bookingData?.packageTitle || verifiedItems[0]?.name || "Driving Lesson"),
+        userId: resolvedBookingData?.userId || null,
+        studentName: sanitizeText(resolvedBookingData?.studentName || "Student Driver"),
+        phone: sanitizeText(resolvedBookingData?.phone || ""),
+        email: sanitizeText(resolvedBookingData?.email || ""),
+        suburb: sanitizeText(resolvedBookingData?.suburb || "Rockingham, WA"),
+        pickupAddress: sanitizeText(resolvedBookingData?.pickupAddress || null),
+        packageTitle: sanitizeText(resolvedBookingData?.packageTitle || verifiedItems[0]?.name || "Driving Lesson"),
         packagePrice: paidAmount > 0 ? paidAmount : totalAmount,
-        date: sanitizeText(bookingData?.date || new Date().toISOString().split("T")[0]),
-        time: sanitizeText(bookingData?.time || "09:00 AM"),
+        date: sanitizeText(resolvedBookingData?.date || new Date().toISOString().split("T")[0]),
+        time: sanitizeText(resolvedBookingData?.time || "09:00 AM"),
         status: "Confirmed",
         notes: `[Verified via Stripe: ${paymentIntentId}]`,
         paymentStatus: "paid",
         stripeSessionId: paymentIntentId,
+      });
+    }
+
+    // Do not return a successful booking confirmation unless a durable record
+    // was found, updated, or created. Payment may already be captured, so avoid
+    // encouraging a second payment and return a clear recovery message instead.
+    if (!finalBooking) {
+      console.error(`[Booking Persistence] Payment verified but booking ${targetRef} could not be persisted.`);
+      return res.status(503).json({
+        error: "BOOKING_PERSISTENCE_FAILED",
+        paymentStatus: "paid",
+        bookingRef: targetRef,
+        message: "Payment was verified, but the booking record could not be saved. Contact Wally before attempting payment again.",
       });
     }
 
