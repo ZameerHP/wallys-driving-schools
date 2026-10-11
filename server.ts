@@ -3031,6 +3031,11 @@ app.post(["/api/check-slots", "/check-slots"], async (req, res) => {
 });
 
 app.get("/api/bookings", attachInstructorOrAuth, async (req: AuthRequest, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  });
   try {
     const email = (req.query.email as string) || undefined;
     const userId = req.user?.uid;
@@ -3045,6 +3050,11 @@ app.get("/api/bookings", attachInstructorOrAuth, async (req: AuthRequest, res) =
 // Public customer lookup is intentionally code-only: Manage Booking customers do not
 // have an instructor token. Keep it rate-limited; the full booking list remains protected.
 app.get(["/api/bookings/:ref", "/api/bookings/ref/:ref"], customerBookingLookupLimiter, async (req: AuthRequest, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  });
   try {
     const ref = req.params.ref;
     const booking = await getBookingByRef(ref, { allowUnpaid: true });
