@@ -1839,9 +1839,42 @@ export function InstructorLogin() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
-    if (isOwnerLoggedIn()) {
-      setIsLoggedIn(true);
-    }
+    let active = true;
+
+    const verifyExistingSession = async () => {
+      if (!isOwnerLoggedIn()) return;
+      const token = localStorage.getItem('instructor_token');
+      if (!token) {
+        logoutOwner();
+        if (active) setIsLoggedIn(false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/instructor-verify', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'x-instructor-token': token
+          },
+          cache: 'no-store'
+        });
+        if (res.ok) {
+          if (active) setIsLoggedIn(true);
+        } else {
+          localStorage.removeItem('instructor_token');
+          logoutOwner();
+          if (active) setIsLoggedIn(false);
+        }
+      } catch {
+        // Fail closed: never keep an unverified owner dashboard open offline.
+        localStorage.removeItem('instructor_token');
+        logoutOwner();
+        if (active) setIsLoggedIn(false);
+      }
+    };
+
+    void verifyExistingSession();
+    return () => { active = false; };
   }, []);
 
   const handleLogout = () => {
