@@ -330,11 +330,8 @@ export function getOrRestoreInstructorSession(token: string): InstructorSession 
   if (!clean || clean === "null" || clean === "undefined") return null;
 
   const cached = activeInstructorSessions.get(clean);
-  if (cached) {
-    if (!cached.expiresAt || Date.now() <= cached.expiresAt) return cached;
-    activeInstructorSessions.delete(clean);
-    persistInstructorSessions();
-  }
+  // Only signed tokens may use the cache. Legacy persisted "inst_*" or
+  // "wally_*" tokens must not bypass signature validation after deployment.
 
   // Stateless HMAC-signed sessions work across Vercel serverless instances.
   // Never trust a token merely because it starts with "inst_" or "wally_".
@@ -347,6 +344,12 @@ export function getOrRestoreInstructorSession(token: string): InstructorSession 
     const actualBytes = Buffer.from(parts[2]);
     if (expectedBytes.length !== actualBytes.length || !timingSafeEqual(expectedBytes, actualBytes)) {
       return null;
+    }
+
+    if (cached && (!cached.expiresAt || Date.now() <= cached.expiresAt)) return cached;
+    if (cached) {
+      activeInstructorSessions.delete(clean);
+      persistInstructorSessions();
     }
 
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
