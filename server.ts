@@ -3016,27 +3016,53 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const bookingRef = String(req.body.bookingRef || `WD-${randomNum}`).trim().toUpperCase();
 
-    // Booking references are unique in Supabase. Make retries idempotent for the
-    // same single booking and reject collisions instead of overwriting another
-    // customer's booking through the upsert persistence helper.
-    if (!hasMultipleLessons) {
-      const existingRefBooking = await getBookingByRef(bookingRef, { allowUnpaid: true });
-      if (existingRefBooking) {
-        const sameRequest =
-          String(existingRefBooking.email || '').toLowerCase() === String(email).trim().toLowerCase() &&
-          normalizeDate(String(existingRefBooking.date || '')) === normalizeDate(String(primaryDate || '')) &&
-          String(existingRefBooking.time || '').trim().toLowerCase() === String(primaryTime || '').trim().toLowerCase() &&
-          String(existingRefBooking.packageTitle || '').trim().toLowerCase() === String(packageTitle || '').trim().toLowerCase();
+    // Booking references are unique in Supabase. Preflight every requested
+    // lesson reference so retries are idempotent and collisions never overwrite
+    // a different customer's record through the persistence upsert helper.
+    const requestedRefs = hasMultipleLessons
+      ? lessons.map((lesson: any, index: number) => {
+          const lessonNum = lesson.lessonNumber || index + 1;
+          return index === 0 ? bookingRef : `${bookingRef}-L${lessonNum}`;
+        })
+      : [bookingRef];
 
-        if (sameRequest) {
-          return res.status(200).json(existingRefBooking);
+    const existingRefs: any[] = [];
+    for (const ref of requestedRefs) {
+      const existing = await getBookingByRef(ref, { allowUnpaid: true });
+      if (existing) existingRefs.push(existing);
+    }
+
+    if (existingRefs.length > 0) {
+      const allExist = existingRefs.length === requestedRefs.length;
+      const sameRequest = allExist && existingRefs.every((existing: any, index: number) => {
+        const requestedLesson = hasMultipleLessons ? lessons[index] : { date: primaryDate, time: primaryTime };
+        return String(existing.email || '').toLowerCase() === String(email).trim().toLowerCase() &&
+          normalizeDate(String(existing.date || '')) === normalizeDate(String(requestedLesson.date || '')) &&
+          String(existing.time || '').trim().toLowerCase() === String(requestedLesson.time || '').trim().toLowerCase() &&
+          String(existing.packageTitle || '').trim().toLowerCase() === String(packageTitle || '').trim().toLowerCase();
+      });
+
+      if (sameRequest) {
+        if (hasMultipleLessons) {
+          const first = existingRefs[0];
+          return res.status(200).json({
+            ...first,
+            lessons: existingRefs.map((item: any, index: number) => ({
+              lessonNumber: index + 1,
+              bookingRef: item.bookingRef,
+              date: item.date,
+              time: item.time,
+              status: item.status
+            }))
+          });
         }
-
-        return res.status(409).json({
-          error: "BOOKING_REFERENCE_CONFLICT",
-          message: "This booking reference is already in use. Please refresh and contact Wally if payment has already been taken."
-        });
+        return res.status(200).json(existingRefs[0]);
       }
+
+      return res.status(409).json({
+        error: "BOOKING_REFERENCE_CONFLICT",
+        message: "This booking reference is already in use or a previous package save was incomplete. Please contact Wally before retrying, especially if payment has already been taken."
+      });
     }
 
     // Format transmission and manual entry metadata in notes
