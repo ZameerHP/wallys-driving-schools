@@ -127,6 +127,7 @@ export function ManageBooking() {
   const [bookingCode, setBookingCode] = useState(initialQuery);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [foundBookings, setFoundBookings] = useState<BookingItem[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<BookingItem | null>(null);
   const [copiedRef, setCopiedRef] = useState<string | null>(null);
@@ -217,6 +218,7 @@ export function ManageBooking() {
 
     setIsSearching(true);
     setHasSearched(true);
+    setSearchError(null);
     setRescheduleSuccess(null);
     setAddressSuccess(null);
     setCancelSuccess(null);
@@ -234,6 +236,7 @@ export function ManageBooking() {
       console.error('Failed to search bookings:', err);
       setFoundBookings([]);
       setSelectedBooking(null);
+      setSearchError(err instanceof Error ? err.message : 'Booking lookup is temporarily unavailable. Please try again.');
     } finally {
       setIsSearching(false);
     }
@@ -911,10 +914,10 @@ export function ManageBooking() {
               <AlertCircle className="w-6 h-6" />
             </div>
             <h3 className="text-base font-bold text-brand-black mb-1">
-              No Booking Found for "{bookingCode}"
+              {searchError ? 'Unable to Check Booking' : `No Booking Found for "${bookingCode}"`}
             </h3>
             <p className="text-xs text-black/60 max-w-sm mx-auto mb-5">
-              Please double check the reference code (e.g. <strong>WD-8492</strong> or just <strong>8492</strong>) or search with the phone number used when booking.
+              {searchError || <>Please double check the reference code (e.g. <strong>WD-8492</strong> or just <strong>8492</strong>) and try again. If payment has already been taken, do not pay again — contact Wally.</>}
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
               <a
