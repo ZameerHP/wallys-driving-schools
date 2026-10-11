@@ -497,7 +497,20 @@ export function setOwnerLoggedIn(val: boolean): void {
 }
 
 export function logoutOwner(): void {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null;
   sessionStorage.removeItem(OWNER_SESSION_KEY);
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('instructor_token');
+    if (token) {
+      fetch('/api/auth/instructor-logout', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-instructor-token': token
+        }
+      }).catch(() => {});
+    }
+  }
 }
 
 // Fetch server Resend email reminder engine status
