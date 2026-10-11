@@ -13,7 +13,7 @@ const inMemoryContactMessages: any[] = [];
 const inMemoryAuditLogs: any[] = [];
 const inMemoryEmailLogs: any[] = [];
 const inMemoryWebhookEvents: Set<string> = new Set();
-const inMemoryBookings: any[] = [
+const inMemoryBookings: any[] = process.env.NODE_ENV === 'production' ? [] : [
   {
     id: 1,
     bookingRef: 'WD-8492',
@@ -100,6 +100,10 @@ const BOOKING_PERSISTENCE_FILES = [
 ];
 
 export function loadPersistedBookings(): any[] {
+  // Vercel/serverless production must never hydrate booking data from committed
+  // demo JSON or ephemeral filesystem state. Supabase/SQL are authoritative.
+  if (process.env.NODE_ENV === 'production') return inMemoryBookings;
+
   for (const filePath of BOOKING_PERSISTENCE_FILES) {
     try {
       if (fs.existsSync(filePath)) {
@@ -127,6 +131,7 @@ export function loadPersistedBookings(): any[] {
 }
 
 export function persistBookings(): void {
+  if (process.env.NODE_ENV === 'production') return;
   try {
     const data = JSON.stringify(inMemoryBookings, null, 2);
     for (const filePath of BOOKING_PERSISTENCE_FILES) {
