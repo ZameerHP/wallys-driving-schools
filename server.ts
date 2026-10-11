@@ -1267,6 +1267,22 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
 
     // Check if an existing open Stripe PaymentIntent can be reused & updated
     let existingBooking = await getBookingByRef(targetRef, { allowUnpaid: true });
+
+    // A customer-supplied reference must not let a new checkout attach payment
+    // to another customer's existing reservation.
+    if (existingBooking) {
+      const sameOwner =
+        String(existingBooking.email || '').trim().toLowerCase() === customerEmail &&
+        normalizeDate(String(existingBooking.date || '')) === normalizeDate(String(bookingDate || '')) &&
+        String(existingBooking.time || '').trim().toLowerCase() === String(bookingTime || '').trim().toLowerCase();
+      if (!sameOwner) {
+        return res.status(409).json({
+          error: "BOOKING_REFERENCE_CONFLICT",
+          message: "This booking reference belongs to a different reservation. Refresh the booking flow; if payment has already been taken, contact Wally before trying again."
+        });
+      }
+    }
+
     if (existingBooking?.stripeSessionId && existingBooking.stripeSessionId.startsWith('pi_')) {
       try {
         const existingPI = await stripe.paymentIntents.retrieve(existingBooking.stripeSessionId);
@@ -1504,6 +1520,22 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     if (targetRef) {
       const existing = await getBookingByRef(targetRef, { allowUnpaid: true });
       if (existing) {
+        if (verifiedPaymentIntent) {
+          const metadata = verifiedPaymentIntent.metadata || {};
+          const detailsMismatch =
+            (metadata.customerEmail && String(existing.email || '').trim().toLowerCase() !== metadata.customerEmail.trim().toLowerCase()) ||
+            (metadata.bookingDate && normalizeDate(String(existing.date || '')) !== normalizeDate(metadata.bookingDate)) ||
+            (metadata.bookingTime && String(existing.time || '').trim().toLowerCase() !== metadata.bookingTime.trim().toLowerCase());
+          if (detailsMismatch) {
+            return res.status(409).json({
+              error: "PAYMENT_BOOKING_DETAILS_MISMATCH",
+              paymentStatus: "paid",
+              bookingRef: targetRef,
+              message: "Payment succeeded, but this reference belongs to different booking details. Contact Wally before paying again."
+            });
+          }
+        }
+
         // Idempotency: if already paid with this intent, return existing confirmed booking
         if (existing.paymentStatus === 'paid' && existing.stripeSessionId === paymentIntentId) {
           return res.json({
