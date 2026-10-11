@@ -1281,7 +1281,9 @@ app.post("/api/payments/stripe/create-intent", async (req, res) => {
               suburb: sanitizeText(customerInfo?.suburb || ""),
               bookingDate: bookingDate || "",
               bookingTime: bookingTime || "",
-              packageTitle: verifiedItems[0]?.name || "Driving Lesson",
+              packageId: verifiedItems[0]?.id || "",
+              packageId: verifiedItems[0]?.id || "",
+        packageTitle: verifiedItems[0]?.name || "Driving Lesson",
             },
           });
 
@@ -1411,10 +1413,22 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
           message: "The payment currency does not match the required AUD currency."
         });
       }
-      if (Array.isArray(items) && items.length > 0 && verifiedPaymentIntent.amount !== Math.round(totalAmount * 100)) {
+      const verifiedMetadataForAmount = verifiedPaymentIntent.metadata || {};
+      let expectedAmountCents: number | null = null;
+      if (Array.isArray(items) && items.length > 0) {
+        expectedAmountCents = Math.round(totalAmount * 100);
+      } else if (verifiedMetadataForAmount.packageId || verifiedMetadataForAmount.packageTitle) {
+        const metadataOrder = computeVerifiedOrder([{
+          id: verifiedMetadataForAmount.packageId,
+          name: verifiedMetadataForAmount.packageTitle,
+          quantity: 1
+        }]);
+        expectedAmountCents = Math.round(metadataOrder.totalAmount * 100);
+      }
+      if (expectedAmountCents === null || verifiedPaymentIntent.amount !== expectedAmountCents) {
         return res.status(400).json({
           error: "PAYMENT_AMOUNT_MISMATCH",
-          message: "The verified Stripe amount does not match the selected lesson package total."
+          message: "The verified Stripe amount does not match the server-verified lesson package total."
         });
       }
       paidAmount = verifiedPaymentIntent.amount / 100;
@@ -1425,7 +1439,43 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
     // a random reference after a real payment has already been taken.
     const verifiedMetadata = verifiedPaymentIntent?.metadata || {};
     const targetRef = bookingRef || bookingData?.bookingRef || bookingData?.ref || verifiedMetadata.bookingRef ||
-      (paymentIntentId.startsWith("pi_sim_") ? `WD-${Math.floor(1000 + Math.random() * 9000)}` : "");
+      (paymentIntentId.startsWith("pi_sim_") && process.env.NODE_ENV !== 'production' ? `WD-${Math.floor(1000 + Math.random() * 9000)}` : "");
+
+    // Bind a real Stripe payment to the booking reference and customer/lesson
+    // details that were attached by the server when the intent was created.
+    if (verifiedPaymentIntent && verifiedMetadata.bookingRef && targetRef !== verifiedMetadata.bookingRef) {
+      return res.status(409).json({
+        error: "PAYMENT_BOOKING_REFERENCE_MISMATCH",
+        paymentStatus: "paid",
+        bookingRef: verifiedMetadata.bookingRef,
+        message: "Payment succeeded for a different booking reference. Contact Wally before retrying; do not pay again."
+      });
+    }
+    if (verifiedPaymentIntent && bookingData) {
+      const mismatch =
+        (verifiedMetadata.customerEmail && String(bookingData.email || '').trim().toLowerCase() !== verifiedMetadata.customerEmail.trim().toLowerCase()) ||
+        (verifiedMetadata.bookingDate && String(bookingData.date || bookingData.bookingDate || '').trim() !== verifiedMetadata.bookingDate.trim()) ||
+        (verifiedMetadata.bookingTime && String(bookingData.time || bookingData.bookingTime || '').trim() !== verifiedMetadata.bookingTime.trim());
+      if (mismatch) {
+        return res.status(409).json({
+          error: "PAYMENT_BOOKING_DETAILS_MISMATCH",
+          paymentStatus: "paid",
+          bookingRef: targetRef,
+          message: "Payment succeeded, but the submitted booking details do not match the original checkout. Contact Wally before paying again."
+        });
+      }
+    }
+
+    if (!bookingData && verifiedPaymentIntent &&
+      (!verifiedMetadata.customerEmail || !verifiedMetadata.bookingDate || !verifiedMetadata.bookingTime || !verifiedMetadata.packageTitle)) {
+      return res.status(503).json({
+        error: "BOOKING_RECOVERY_METADATA_INCOMPLETE",
+        paymentStatus: "paid",
+        bookingRef: targetRef || verifiedMetadata.bookingRef || "",
+        message: "Payment was verified, but the original booking details are incomplete. Contact Wally before attempting payment again."
+      });
+    }
+
     const resolvedBookingData = bookingData || (verifiedPaymentIntent ? {
       studentName: verifiedMetadata.customerName || "Student Driver",
       phone: verifiedMetadata.customerPhone || "",
@@ -1433,8 +1483,8 @@ app.post("/api/payments/stripe/confirm-payment", async (req, res) => {
       suburb: verifiedMetadata.suburb || "Rockingham, WA",
       pickupAddress: verifiedMetadata.pickupAddress || null,
       packageTitle: verifiedMetadata.packageTitle || verifiedItems[0]?.name || "Driving Lesson",
-      date: verifiedMetadata.bookingDate || new Date().toISOString().split("T")[0],
-      time: verifiedMetadata.bookingTime || "09:00 AM",
+      date: verifiedMetadata.bookingDate,
+      time: verifiedMetadata.bookingTime,
       packagePrice: paidAmount,
     } : null);
 
