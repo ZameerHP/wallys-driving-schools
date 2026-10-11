@@ -2995,6 +2995,16 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
 
     // Enforce that bookings must have successful payment or be marked pending (e.g. cash in car)
     const finalPaymentStatus = paymentStatus || (isInstructor ? "paid" : "unpaid");
+
+    // Never trust a browser-supplied "paid" flag. Customer bookings become paid
+    // only through /api/payments/stripe/confirm-payment after server-side Stripe
+    // verification. Instructor-created bookings may still record offline payment.
+    if (!isInstructor && String(finalPaymentStatus).toLowerCase() === "paid") {
+      return res.status(400).json({
+        error: "PAYMENT_VERIFICATION_REQUIRED",
+        message: "Online payment must be verified by Stripe before a booking can be marked paid."
+      });
+    }
     const isPendingOrCash = (status === "Pending" || req.body.paymentMethod === "cash" || finalPaymentStatus === "unpaid");
     if (finalPaymentStatus !== "paid" && !isInstructor && !isPendingOrCash) {
       return res.status(400).json({
@@ -3004,7 +3014,30 @@ app.post("/api/bookings", attachInstructorOrAuth, bookingLimiter, async (req: Au
     }
 
     const randomNum = Math.floor(1000 + Math.random() * 9000);
-    const bookingRef = req.body.bookingRef || `WD-${randomNum}`;
+    const bookingRef = String(req.body.bookingRef || `WD-${randomNum}`).trim().toUpperCase();
+
+    // Booking references are unique in Supabase. Make retries idempotent for the
+    // same single booking and reject collisions instead of overwriting another
+    // customer's booking through the upsert persistence helper.
+    if (!hasMultipleLessons) {
+      const existingRefBooking = await getBookingByRef(bookingRef, { allowUnpaid: true });
+      if (existingRefBooking) {
+        const sameRequest =
+          String(existingRefBooking.email || '').toLowerCase() === String(email).trim().toLowerCase() &&
+          normalizeDate(String(existingRefBooking.date || '')) === normalizeDate(String(primaryDate || '')) &&
+          String(existingRefBooking.time || '').trim().toLowerCase() === String(primaryTime || '').trim().toLowerCase() &&
+          String(existingRefBooking.packageTitle || '').trim().toLowerCase() === String(packageTitle || '').trim().toLowerCase();
+
+        if (sameRequest) {
+          return res.status(200).json(existingRefBooking);
+        }
+
+        return res.status(409).json({
+          error: "BOOKING_REFERENCE_CONFLICT",
+          message: "This booking reference is already in use. Please refresh and contact Wally if payment has already been taken."
+        });
+      }
+    }
 
     // Format transmission and manual entry metadata in notes
     const chosenTransmission = transmission ? sanitizeText(transmission) : 'Automatic';
