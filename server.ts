@@ -244,6 +244,7 @@ function createRateLimiter(windowMs: number, maxRequests: number, message: strin
 
 const loginLimiter = createRateLimiter(15 * 60 * 1000, 5, "Too many login attempts. Please try again in 15 minutes.");
 const bookingLimiter = createRateLimiter(60 * 1000, 25, "Too many booking requests. Please wait a moment.");
+const customerBookingLookupLimiter = createRateLimiter(60 * 1000, 15, "Too many booking lookup attempts. Please wait a moment.");
 const contactLimiter = createRateLimiter(60 * 1000, 5, "Too many contact inquiries. Please wait a moment.");
 
 // 3. String Sanitizer helper
@@ -2844,8 +2845,9 @@ app.get("/api/bookings", attachInstructorOrAuth, async (req: AuthRequest, res) =
   }
 });
 
-// Lookup booking by reference code (WD-XXXX) - supports both student and instructor queries
-app.get(["/api/bookings/:ref", "/api/bookings/ref/:ref"], attachInstructorOrAuth, async (req: AuthRequest, res) => {
+// Public customer lookup is intentionally code-only: Manage Booking customers do not
+// have an instructor token. Keep it rate-limited; the full booking list remains protected.
+app.get(["/api/bookings/:ref", "/api/bookings/ref/:ref"], customerBookingLookupLimiter, async (req: AuthRequest, res) => {
   try {
     const ref = req.params.ref;
     const booking = await getBookingByRef(ref, { allowUnpaid: true });
