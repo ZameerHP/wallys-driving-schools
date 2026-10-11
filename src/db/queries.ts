@@ -439,6 +439,19 @@ export async function getBookingByRef(bookingRef: string, options?: { allowUnpai
     }
   }
 
+  // 1b. Last-resort lookup through the normalized booking list. This also
+  // catches legacy rows where the reference exists only in notes or uses
+  // a different column name than the current schema.
+  try {
+    const allBookings = await getBookings({ includeUnpaid: true });
+    const normalizedMatch = allBookings.find((booking: any) => matchesRef(booking));
+    if (normalizedMatch && (options?.allowUnpaid !== false || normalizedMatch.paymentStatus === 'paid')) {
+      return normalizedMatch;
+    }
+  } catch (err: any) {
+    console.warn('[Booking Lookup] Normalized list fallback failed:', err?.message || err);
+  }
+
   // 2. Check Cloud SQL
   if (isSqlConfigured && db) {
     try {
