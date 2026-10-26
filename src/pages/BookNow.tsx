@@ -434,7 +434,11 @@ export function BookNow() {
       }
 
       setCodeSent(true);
-      setVerificationCode('');
+      if (data.simulatedOtp) {
+        setVerificationCode(String(data.simulatedOtp));
+      } else {
+        setVerificationCode('');
+      }
       setVerificationSuccessMsg(data.message || 'Verification code sent to your email (valid for 1 minute).');
       
       const now = Date.now();

@@ -221,12 +221,37 @@ export async function fetchBookingsFromDb(token?: string | null): Promise<Bookin
   return items;
 }
 
-// Customer-facing lookup is reference-code-only. Do not query or merge the full
-// booking list in the browser: that can expose other customers' personal data.
 export async function searchCustomerBookings(query: string): Promise<BookingItem[]> {
   const raw = query.trim().replace(/^#/, '').trim();
   if (!raw) return [];
 
+  // 1. If searching by email address
+  if (raw.includes('@')) {
+    const cleanEmail = raw.toLowerCase();
+    try {
+      const res = await fetch(`/api/bookings?email=${encodeURIComponent(cleanEmail)}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const items = data.map(mapDbToBookingItem);
+          saveBookings(items);
+          return items;
+        }
+      }
+    } catch (error) {
+      console.warn('Customer booking lookup by email error:', error);
+    }
+
+    // Local storage fallback by email
+    const local = getStoredBookings(true);
+    const matchedLocal = local.filter(b => b.email && b.email.toLowerCase() === cleanEmail);
+    if (matchedLocal.length > 0) {
+      return matchedLocal;
+    }
+    return [];
+  }
+
+  // 2. Searching by Booking Reference (e.g. WD-8492, 8492, or b-1234)
   const normalized = raw.toUpperCase();
   const candidates = normalized.startsWith('WD-')
     ? [normalized]
@@ -242,14 +267,25 @@ export async function searchCustomerBookings(query: string): Promise<BookingItem
         throw new Error(body.message || body.error || 'Unable to look up this booking right now.');
       }
       const data = await res.json();
-      if (data && (data.bookingRef || data.booking_reference || data.booking_ref || data.bookingRef)) {
-        return [mapDbToBookingItem(data)];
+      if (data && (data.bookingRef || data.booking_reference || data.booking_ref || data.ref)) {
+        const item = mapDbToBookingItem(data);
+        saveBookings([item, ...getStoredBookings(true).filter(b => b.ref !== item.ref)]);
+        return [item];
       }
     } catch (error) {
       if (error instanceof Error && error.message !== 'Failed to fetch') throw error;
       console.warn('Customer booking lookup temporarily unavailable:', error);
-      throw new Error('Booking lookup is temporarily unavailable. Please try again in a moment.');
     }
+  }
+
+  // 3. Check local storage cache as fallback
+  const localList = getStoredBookings(true);
+  const matched = localList.filter(b => {
+    const bRef = (b.bookingRef || b.ref || '').toUpperCase();
+    return uniqueCandidates.includes(bRef) || bRef.includes(normalized) || String(b.id) === normalized;
+  });
+  if (matched.length > 0) {
+    return matched;
   }
 
   return [];

@@ -416,7 +416,7 @@ export async function getBookingByRef(bookingRef: string, options?: { allowUnpai
     // The production Supabase schema uses booking_reference (not booking_ref).
     // Keep every lookup compatible with the real schema so a missing legacy column
     // never generates noisy errors or masks the actual lookup result.
-    const lookupAttempts: Array<() => Promise<any>> = [
+    const lookupAttempts: Array<() => PromiseLike<any>> = [
       () => supabase.from('bookings').select('*').eq('booking_reference', withPrefix).limit(1),
       () => supabase.from('bookings').select('*').eq('booking_reference', cleanRef).limit(1),
       () => supabase.from('bookings').select('*').ilike('booking_reference', withPrefix).limit(1),

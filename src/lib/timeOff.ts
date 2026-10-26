@@ -445,12 +445,13 @@ export async function createClientTimeOffBlock(block: {
     const url = apiUrl(rawPath);
     const method = block.id ? 'PUT' : 'POST';
 
+    const effectiveToken = (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null) || 'wally_owner_session';
     const res = await fetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer wally_owner_session',
-        'x-instructor-token': 'wally_owner_session'
+        'Authorization': `Bearer ${effectiveToken}`,
+        'x-instructor-token': effectiveToken
       },
       body: JSON.stringify({
         id: block.id,
@@ -559,13 +560,14 @@ export async function deleteClientTimeOffBlock(id: string | number, date: string
     const safeId = id ? String(id).trim() : '0';
     const deletePayload = JSON.stringify({ id, date, normDate });
 
+    const effectiveToken = (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null) || 'wally_owner_session';
     const rawDeleteUrl = `/api/instructor/time-off/${encodeURIComponent(safeId)}?date=${encodeURIComponent(date)}&normDate=${encodeURIComponent(normDate)}`;
     let res = await fetch(apiUrl(rawDeleteUrl), {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer wally_owner_session',
-        'x-instructor-token': 'wally_owner_session'
+        'Authorization': `Bearer ${effectiveToken}`,
+        'x-instructor-token': effectiveToken
       },
       body: deletePayload
     }).catch(() => null);
@@ -576,8 +578,8 @@ export async function deleteClientTimeOffBlock(id: string | number, date: string
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer wally_owner_session',
-          'x-instructor-token': 'wally_owner_session'
+          'Authorization': `Bearer ${effectiveToken}`,
+          'x-instructor-token': effectiveToken
         },
         body: deletePayload
       }).catch(() => null);

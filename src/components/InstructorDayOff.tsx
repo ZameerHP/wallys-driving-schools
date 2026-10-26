@@ -180,9 +180,14 @@ export function InstructorDayOff({ currentInstructorId = 'wally' }: InstructorDa
     setErrorMessage(null);
 
     try {
+      const token = (typeof window !== 'undefined' ? localStorage.getItem('instructor_token') : null) || 'wally_owner_session';
       const res = await fetch('/api/instructor/day-off', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'x-instructor-token': token
+        },
         body: JSON.stringify({
           instructorId: selectedInstructorId,
           weekday,

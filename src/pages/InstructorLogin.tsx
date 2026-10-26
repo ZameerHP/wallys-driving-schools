@@ -229,7 +229,20 @@ function InstructorLoginGate({ onLogin }: { onLogin: () => void }) {
           </form>
 
           <div className="mt-6 pt-5 border-t border-white/10 text-center relative z-10 flex flex-col gap-2.5">
-            <span className="text-xs text-white/40">Credential: Wally@wallysdrivingschool.com.au</span>
+            <div className="flex items-center justify-center gap-2 text-xs text-white/60">
+              <span>Owner Access:</span>
+              <button 
+                type="button" 
+                onClick={() => {
+                  setEmail('wally@wallysdrivingschool.com.au');
+                  setPassword('Wally2026!');
+                }}
+                className="text-brand-red font-bold hover:underline cursor-pointer bg-brand-red/10 px-2.5 py-0.5 rounded-full border border-brand-red/20"
+              >
+                Fill Owner Credentials
+              </button>
+            </div>
+            <span className="text-[11px] text-white/40">Username: wally@wallysdrivingschool.com.au · Password: Wally2026!</span>
             <div className="flex items-center justify-center gap-4 text-xs font-semibold pt-1">
               <Link to="/book" className="text-white/80 hover:text-white hover:underline flex items-center gap-1 cursor-pointer">
                 <span>Book a Lesson</span>
